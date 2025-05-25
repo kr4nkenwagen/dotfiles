@@ -1,0 +1,12 @@
+[window]
+padding = { x = 5, y = 5}
+opacity = 0.9
+
+[font]
+normal = { family = "Fira Code Nerd Font", style = "normal"}
+bold =   { family = "Fira Code Nerd Font", style = "bold"}
+italic = { family = "Fira Code Nerd Font", style = "italic" }
+size = 14
+
+[general]
+import = ["~/.config/alacritty/themes/themes/tokyo_night.toml"]
