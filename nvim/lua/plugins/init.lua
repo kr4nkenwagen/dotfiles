@@ -12,6 +12,9 @@ return {
       require "configs.lspconfig"
     end,
   },
+  {
+    "HiPhish/rainbow-delimiters.nvim"
+  }
 
   -- test new blink
   -- { import = "nvchad.blink.lazyspec" },

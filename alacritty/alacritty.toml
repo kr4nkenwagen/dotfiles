@@ -10,3 +10,7 @@ size = 14
 
 [general]
 import = ["~/.config/alacritty/themes/themes/tokyo_night.toml"]
+
+[terminal]
+shell = { program = "/bin/fish" }
+osc52 = "CopyPaste"

@@ -23,6 +23,22 @@ require("lazy").setup({
     import = "nvchad.plugins",
   },
 
+  {
+    "Hoffs/omnisharp-extended-lsp.nvim",
+    lazy = false
+  },
+  {
+    "hrsh7th/nvim-cmp",
+    lazy = false
+  },
+  {
+    "hrsh7th/nvim-pasta",
+    lazy = false
+  },
+  {
+    "jceb/vim-orgmode",
+    lazy = false
+  },
   { import = "plugins" },
 }, lazy_config)
 
@@ -36,3 +52,4 @@ require "nvchad.autocmds"
 vim.schedule(function()
   require "mappings"
 end)
+vim.lsp.enable('pyright')
