@@ -239,4 +239,5 @@ bar {
     swaybar_command waybar
 }
 
+exec copyq
 include /etc/sway/config.d/*
