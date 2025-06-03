@@ -14,24 +14,32 @@ set $down j
 set $up k
 set $right l
 # Your preferred terminal emulator
-set $term alacritty 
+set $term ghostty 
 # Your preferred application launcher
-set $menu "rofi -show drun"
-set $browser "firefox"
+set $menu "dmenu_run"
+set $browser qutebrowser
+set $dmenu = "dmenu"
 
 ### Output configuration
 #
 # Default wallpaper (more resolutions are available in /usr/share/backgrounds/sway/)
-output * bg ~/.config/background.jpg fill
+output * bg ~/.config/deathstar.jpg fill
 
 
-default_border none
+default_border pixel 2
 corner_radius 5
 gaps inner 5
 gaps outer 10
 blur enabled
 blur_radius 1
 default_dim_inactive 1
+
+set $base00 #1d202e
+set $base01 #b48ead
+
+## Window Colours
+client.focused   $base00 $base01  $base01
+client.unfocused   $base01  $base00  $base00
 #
 # Example configuration:
 #
@@ -73,6 +81,9 @@ default_dim_inactive 1
     # Start a terminal
     bindsym $mod+Return exec $term
     bindsym $mod+o exec $browser
+    bindsym $mod+d exec $dmenu
+    bindsym $mod+Shift+x exec ./.config/dmenu/sys_state.sh
+    bindsym $mod+Shift+y exec ./.config/dmenu/sys_clip.sh
 
     # Kill focused window
     bindsym $mod+Shift+q kill

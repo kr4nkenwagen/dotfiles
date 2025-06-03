@@ -7,9 +7,11 @@ alias df='duf'
 alias vim='nvim'
 alias cd='z'
 alias fzf='fzf --preview="bat {}"'
+alias :q='exit && exit'
 zoxide init fish | source
 starship init fish | source
 tmux 
+clear
 colorscript random
 set -U fish_greeting ""
 set -g fish_key_bindings fish_vi_key_bindings

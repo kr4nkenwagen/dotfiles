@@ -1,11 +1,11 @@
 [window]
 padding = { x = 5, y = 5}
-opacity = 0.9
+opacity = 0.5
 
 [font]
-normal = { family = "Fira Code Nerd Font", style = "normal"}
-bold =   { family = "Fira Code Nerd Font", style = "bold"}
-italic = { family = "Fira Code Nerd Font", style = "italic" }
+normal = { family = "Space Mono Nerd Font", style = "normal"}
+bold =   { family = "Space Mono Nerd Font", style = "bold"}
+italic = { family = "Space Mono Nerd Font", style = "italic" }
 size = 14
 
 [general]
@@ -14,3 +14,6 @@ import = ["~/.config/alacritty/themes/themes/tokyo_night.toml"]
 [terminal]
 shell = { program = "/bin/fish" }
 osc52 = "CopyPaste"
+
+[scrolling]
+history = 100000
