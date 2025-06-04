@@ -83,6 +83,7 @@ client.unfocused   $base01  $base00  $base00
     bindsym $mod+o exec $browser
     bindsym $mod+d exec $dmenu
     bindsym $mod+Shift+x exec ./.config/dmenu/sys_state.sh
+    bindsym $mod+Shift+m exec ./.config/dmenu/sys_font_size.sh
     bindsym $mod+Shift+y exec ./.config/dmenu/sys_clip.sh
 
     # Kill focused window

@@ -1,9 +1,12 @@
 {
-    "margin": 5,
+    "margin-left": 15,
+    "margin-right": 15,
+    "margin-top": 5,
+    "margin-bottom": -5,
     "position": "top", 
     "height": 20,
     "modules-left": ["sway/workspaces"],
-    "modules-right": ["network", "pulseaudio", "battery", "custom/date", "clock", "temperature", "disk", "memory", "cpu", "tray"],
+    "modules-right": ["network", "pulseaudio", "battery", "temperature", "disk", "memory", "cpu", "tray", "clock"],
     // Modules configuration
 	"sway/workspaces": {
 		"disable-scroll": true,
@@ -34,11 +37,6 @@
              		"10": "0" 
          }
      },
-	"custom/date": {
-    		"format": "󰸗 {}",
-		"interval": 3600,
-		"exec": "/home/loki/bin/waybar-date.sh"
-	},
 	"custom/power": {
 		"format": "󰐥",
 		"on-click": "/home/loki/bin/waybar-power.sh"
@@ -46,7 +44,7 @@
 	"clock": {
 		"format": "{:%H:%M}",
         	"tooltip-format": "<big>{:%Y %B}</big>\n<tt><small>{calendar}</small></tt>",
-        	"format-alt": "{:%Y-%m-%d}"
+        	"format-alt": "{:%Y-%m-%U-%d}"
 	},
 	"battery": {
         	"states": {

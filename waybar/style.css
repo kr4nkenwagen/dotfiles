@@ -1,22 +1,21 @@
 * {
-  border: none;
   border-radius: 5;
-  font-family: Fira Code Nerd Font;
+  font-family: "Space Mono Nerd Font";
   font-weight: 600;
   font-size: 12px;
   min-height: 0;
 }
 
 window#waybar {
-  background: rgba(26,27,38, 0.9);
+  background: rgba(26,27,38, 0.5);
   color: white;
+  border: #1d202e solid 2px;
 }
 
 #workspaces {
   background-color: #1d202e;
   margin: 5px;
   margin-left: 6px;
-  border-radius: 0px;
 }
 #workspaces button {
   padding: 2px 8px;
@@ -26,13 +25,11 @@ window#waybar {
 #workspaces button.focused {
   color: #24283b;
   background-color: #7aa2f7;
-  border-radius: 0px;
 }
 
 #workspaces button:hover {
   background-color: #7dcfff;
   color: #24283b;
-  border-radius: 0px;
 }
 
 #custom-date,
@@ -40,7 +37,6 @@ window#waybar {
 #battery,
 #pulseaudio,
 #network {
-  background-color: #1d202e;
   padding: 2px 10px;
   margin: 5px 0px;
 }
@@ -52,7 +48,7 @@ window#waybar {
 #custom-power {
   color: #24283b;
   background-color: #db4b4b;
-  border-radius: 0px;
+  border-radius: 5px;
   margin-right: 10px;
   margin-top: 5px;
   margin-bottom: 5px;
@@ -62,79 +58,62 @@ window#waybar {
 
 #clock {
   color: #b48ead;
-  border-radius: 0px 0px 0px 0px;
-  margin-right: 6px;
+  margin: 5px;
 }
 
 #battery {
   color: #9ece6a;
+  margin: 5px;
 }
 
 #battery.charging {
   color: #9ece6a;
+  margin: 5px;
 }
 
 #battery.warning:not(.charging) {
   background-color: #f7768e;
   color: #24283b;
-  border-radius: 0px 0px 0px 0px;
+  margin: 5px;
 }
 
 #network {
+  margin: 5px;
   color: #f7768e;
-  border-radius: 0px 0px 0px 0px;
 }
 
 #pulseaudio {
+  margin: 5px;
   color: #e0af68;
 }
 
 #temperature {
-  background-color: #24283b;
-  margin: 5px 0;
+  margin: 5px;
   padding: 0 10px;
-  border-top-left-radius: 0px;
-  border-bottom-left-radius: 0px;
+  border-radius: 5px;
   color: #82e4ff;
 }
 
 #disk {
   color: #b9f27c;
-  margin: 5px 0;
-  padding-right: 10px;
-  background-color: #24283b;
-  border-top-right-radius: 0px;
-  border-bottom-right-radius: 0px;
-  margin-right: 3px;
+  margin: 5px;
+  padding: 0 10px;
 }
 
 #memory {
-  margin-left: 5px;
-  background: #2a3152;
-  margin: 5px 0;
+  margin: 5px;
   padding: 0 10px;
-  margin-left: 3px;
-  border-top-left-radius: 0px;
-  border-bottom-left-radius: 0px;
   color: #ff9e64;
 }
 
 #cpu {
-  margin: 5px 0;
+  margin: 5px;
   padding: 0 10px;
-  background-color: #2a3152;
   color: #ff7a93;
-  border-top-right-radius: 0px;
-  border-bottom-right-radius: 0px;
-  margin-right: 6px;
 }
 
 #tray {
-  background-color: #455085;
   margin: 5px;
-  margin-left: 0px;
-  margin-right: 6px;
-  border-radius: 0px;
   padding: 0 10px;
 }
 
