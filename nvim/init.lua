@@ -22,7 +22,13 @@ require("lazy").setup({
     branch = "v2.5",
     import = "nvchad.plugins",
   },
-
+  {
+    "echasnovski/mini.ai",
+    version = "*" ,
+  },
+  {
+    "HiPhish/rainbow-delimiters.nvim",
+  },
   {
     "Hoffs/omnisharp-extended-lsp.nvim",
     lazy = false
@@ -39,6 +45,16 @@ require("lazy").setup({
     "jceb/vim-orgmode",
     lazy = false
   },
+  {
+    "startup-nvim/startup.nvim",
+    config = function()
+      require("startup").setup(require("configs.startup_nvim"))
+    end
+  },
+  {
+    "nvim-lua/plenary.nvim",
+    lazy = false
+  },
   { import = "plugins" },
 }, lazy_config)
 
@@ -48,6 +64,8 @@ dofile(vim.g.base46_cache .. "statusline")
 
 require "options"
 require "nvchad.autocmds"
+require("startup").setup()
+require("mini.ai").setup()
 
 vim.schedule(function()
   require "mappings"
