@@ -1,4 +1,4 @@
-#kr4nks dotfiles
+# kr4nks dotfiles
 
 these are (somewhat) up to date versions of my current environment.
 
