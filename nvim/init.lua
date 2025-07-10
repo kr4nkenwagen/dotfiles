@@ -16,45 +16,6 @@ local lazy_config = require "configs.lazy"
 
 -- load plugins
 require("lazy").setup({
-  {
-    "NvChad/NvChad",
-    lazy = false,
-    branch = "v2.5",
-    import = "nvchad.plugins",
-  },
-  {
-    "echasnovski/mini.ai",
-    version = "*" ,
-  },
-  {
-    "HiPhish/rainbow-delimiters.nvim",
-  },
-  {
-    "Hoffs/omnisharp-extended-lsp.nvim",
-    lazy = false
-  },
-  {
-    "hrsh7th/nvim-cmp",
-    lazy = false
-  },
-  {
-    "hrsh7th/nvim-pasta",
-    lazy = false
-  },
-  {
-    "jceb/vim-orgmode",
-    lazy = false
-  },
-  {
-    "startup-nvim/startup.nvim",
-    config = function()
-      require("startup").setup(require("configs.startup_nvim"))
-    end
-  },
-  {
-    "nvim-lua/plenary.nvim",
-    lazy = false
-  },
   { import = "plugins" },
 }, lazy_config)
 

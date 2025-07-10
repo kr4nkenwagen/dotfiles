@@ -16,14 +16,16 @@ set $right l
 # Your preferred terminal emulator
 set $term ghostty 
 # Your preferred application launcher
-set $menu "dmenu_run"
+set $menu "rofi -show drun"
 set $browser qutebrowser
 set $dmenu = "dmenu"
 
 ### Output configuration
 #
 # Default wallpaper (more resolutions are available in /usr/share/backgrounds/sway/)
-output * bg ~/.config/deathstar.jpg fill
+output eDP-1 bg ~/.config/deathstar.jpg fill
+output DP-1 bg ~/.config/deathstar.jpg fill mode 2560x1440
+output DP-2 bg ~/.config/deathstar.jpg fill mode 2560x1440
 
 
 default_border pixel 2
@@ -241,4 +243,6 @@ bar {
 }
 
 exec copyq
+exec unclutter --idle 1 --start-hidden --root
+exec spotifyd
 include /etc/sway/config.d/*

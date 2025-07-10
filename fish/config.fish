@@ -15,3 +15,5 @@ clear
 colorscript random
 set -U fish_greeting ""
 set -g fish_key_bindings fish_vi_key_bindings
+set -Ux CARAPACE_BRIDGES 'zsh,fish,inshellisense'
+carapace _carapace | source 
