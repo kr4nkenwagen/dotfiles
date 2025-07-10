@@ -11,7 +11,7 @@ This setup assumes that you have all [Nerd Fonts](https://github.com/ryanoasis/n
 I tried to mostly use Tokyo Night colorschemes but there might be variations.
 ## Workflow
 * [sway](https://github.com/swaywm/sway)
-* [ghostt](https://github.com/ghostty-org/ghostty)
+* [ghostty](https://github.com/ghostty-org/ghostty)
 * [tmux](https://github.com/tmux/tmux)
 * [nvim](https://github.com/neovim/neovim)
 * [fish](https://github.com/fish-shell/fish-shell)
@@ -35,3 +35,4 @@ required tools that are aliased in fish.config(some replace standard gnu utils)
 * [qutebrowser](https://github.com/qutebrowser/qutebrowser) - web browser
 * [rofi](https://github.com/davatorium/rofi) - launcher
 * [dmenu](https://github.com/stilvoid/dmenu) - script frontend
+* [waybar](https://github.com/Alexays/Waybar) - statusbar
