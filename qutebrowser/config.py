@@ -25,32 +25,34 @@ config.set('content.local_content_can_access_file_urls', False, 'file:///home/kr
 
 #User setting
 c.downloads.prevent_mixed_content = False
-c.tabs.show = 'never'
 c.tabs.position = 'left'
+c.downloads.position = 'right'
 c.window.transparent = True
 c.colors.webpage.darkmode.enabled = True
 c.content.blocking.method = 'both'
-c.statusbar.show = 'in-mode'
+c.statusbar.show = 'never'
+c.tabs.show = 'never'
 
 #fonts
-c.fonts.statusbar = '11pt "Space Mono Nerd Font"'
-c.fonts.completion.category = '11pt "Space Mono Nerd Font"'
-c.fonts.completion.entry = '11pt "Space Mono Nerd Font"'
-c.fonts.contextmenu= '11pt "Space Mono Nerd Font"'
-c.fonts.hints = '11pt "Space Mono Nerd Font"'
-c.fonts.downloads= '11pt "Space Mono Nerd Font"'
-c.fonts.keyhint = '11pt "Space Mono Nerd Font"'
-c.fonts.completion.entry = '11pt "Space Mono Nerd Font"'
-c.fonts.messages.error= '11pt "Space Mono Nerd Font"'
-c.fonts.messages.warning = '11pt "Space Mono Nerd Font"'
-c.fonts.messages.info = '11pt "Space Mono Nerd Font"'
-c.fonts.prompts = '11pt "Space Mono Nerd Font"'
-c.fonts.tabs.selected = '11pt "Space Mono Nerd Font"'
-c.fonts.tabs.unselected = '11pt "Space Mono Nerd Font"'
-c.fonts.tooltip = '11pt "Space Mono Nerd Font"'
-c.fonts.completion.entry = '11pt "Space Mono Nerd Font"'
-c.fonts.completion.entry = '11pt "Space Mono Nerd Font"'
-c.fonts.debug_console = '11pt "Space Mono Nerd Font"'
+font = '11pt "Space Mono Nerd Font"' 
+c.fonts.statusbar = font
+c.fonts.completion.category = font
+c.fonts.completion.entry = font
+c.fonts.contextmenu= font
+c.fonts.hints = font
+c.fonts.downloads= font
+c.fonts.keyhint = font
+c.fonts.completion.entry = font
+c.fonts.messages.error= font
+c.fonts.messages.warning = font
+c.fonts.messages.info = font
+c.fonts.prompts = font
+c.fonts.tabs.selected = font
+c.fonts.tabs.unselected = font
+c.fonts.tooltip = font
+c.fonts.completion.entry = font
+c.fonts.completion.entry = font
+c.fonts.debug_console = font
 
 #Binds
 config.bind('<Space>I', 'hint images tab')
@@ -65,10 +67,13 @@ config.bind('<Space>i', 'hint images')
 config.bind('<Space>h', 'hint all hover')
 config.bind('<Space>f', 'hint all tab-fg')
 config.bind('<Space>d', 'hint links download')
-config.bind('<Space>b', 'hint all tab-bg')
+#config.bind('<Space>b', 'hint all tab-bg')
 config.bind('<Space>m', 'hint links spawn mpv {hint-url}')
 config.bind('<Space>x', 'config-cycle statusbar.show always never;; config-cycle tabs.show always never')
 config.bind('<Space>c', 'config-clear;; config-source ~/.config/qutebrowser/config.py')
+config.bind('<Space>ba','bookmark-add')
+config.bind('<Space>bd','bookmark-del {url}')
+config.bind('<Space>bl','bookmark-list')
 config.bind(';', 'cmd-set-text :')
 
 # Colors
@@ -89,6 +94,9 @@ bg_insert_mode = "#8db0ff"      # blue
 bg_warning = "#c7a9ff"          # purple
 # "#be5046"                     # dark red
 
+c.colors.hints.match.fg = fg_matched_text
+c.colors.hints.bg = bg_default
+c.colors.hints.fg = fg_default 
 c.colors.completion.fg = fg_default
 c.colors.completion.odd.bg = bg_lighter
 c.colors.completion.even.bg = bg_default
@@ -116,9 +124,6 @@ c.colors.downloads.start.bg = bg_insert_mode
 c.colors.downloads.stop.fg = bg_default
 c.colors.downloads.stop.bg = bg_passthrough_mode
 c.colors.downloads.error.fg = fg_error
-c.colors.hints.fg = bg_default
-c.colors.hints.bg = bg_hint
-c.colors.hints.match.fg = fg_default
 c.colors.keyhint.fg = fg_default
 c.colors.keyhint.suffix.fg = fg_default
 c.colors.keyhint.bg = bg_default
@@ -178,4 +183,3 @@ c.colors.tabs.selected.odd.fg = fg_default
 c.colors.tabs.selected.odd.bg = bg_selection
 c.colors.tabs.selected.even.fg = fg_default
 c.colors.tabs.selected.even.bg = bg_selection
-c.colors.webpage.bg = bg_default

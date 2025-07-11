@@ -233,16 +233,12 @@ bindsym $mod+r mode "resize"
     bindsym --locked XF86MonBrightnessUp exec brightnessctl set 5%+
     # Special key to take a screenshot with grim
     bindsym Print exec grim
-
-#
-# Status Bar:
-#
-# Read `man 5 sway-bar` for more information about this section.
 bar {
     swaybar_command waybar
 }
 
 exec copyq
 exec unclutter --idle 1 --start-hidden --root
+exec autotiling 
 exec spotifyd
 include /etc/sway/config.d/*
