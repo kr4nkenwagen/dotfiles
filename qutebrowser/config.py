@@ -1,5 +1,13 @@
+from qutebrowser.api import interceptor
 # Change the argument to True to still load settings configured via autoconfig.yml
 config.load_autoconfig(False)
+
+def youtube_filter(info: interceptor.Request):
+    url = info.request_url
+    if url.host() == 'www.youtube.com' and url.path() == '/get_video_info' and '&adformat=' in url.query():
+        info.block()
+
+interceptor.register(youtube_filter)
 
 #Default settings
 config.set('content.cookies.accept', 'all', 'chrome-devtools://*')
@@ -18,26 +26,50 @@ config.set('content.local_content_can_access_file_urls', False, 'file:///home/kr
 #User setting
 c.downloads.prevent_mixed_content = False
 c.tabs.show = 'never'
+c.tabs.position = 'left'
 c.window.transparent = True
 c.colors.webpage.darkmode.enabled = True
 c.content.blocking.method = 'both'
+c.statusbar.show = 'in-mode'
+
+#fonts
+c.fonts.statusbar = '11pt "Space Mono Nerd Font"'
+c.fonts.completion.category = '11pt "Space Mono Nerd Font"'
+c.fonts.completion.entry = '11pt "Space Mono Nerd Font"'
+c.fonts.contextmenu= '11pt "Space Mono Nerd Font"'
+c.fonts.hints = '11pt "Space Mono Nerd Font"'
+c.fonts.downloads= '11pt "Space Mono Nerd Font"'
+c.fonts.keyhint = '11pt "Space Mono Nerd Font"'
+c.fonts.completion.entry = '11pt "Space Mono Nerd Font"'
+c.fonts.messages.error= '11pt "Space Mono Nerd Font"'
+c.fonts.messages.warning = '11pt "Space Mono Nerd Font"'
+c.fonts.messages.info = '11pt "Space Mono Nerd Font"'
+c.fonts.prompts = '11pt "Space Mono Nerd Font"'
+c.fonts.tabs.selected = '11pt "Space Mono Nerd Font"'
+c.fonts.tabs.unselected = '11pt "Space Mono Nerd Font"'
+c.fonts.tooltip = '11pt "Space Mono Nerd Font"'
+c.fonts.completion.entry = '11pt "Space Mono Nerd Font"'
+c.fonts.completion.entry = '11pt "Space Mono Nerd Font"'
+c.fonts.debug_console = '11pt "Space Mono Nerd Font"'
 
 #Binds
+config.bind('<Space>I', 'hint images tab')
+config.bind('<Space>O', 'hint links fill :open -t -r {hint-url}')
+config.bind('<Space>R', 'hint --rapid links window')
+config.bind('<Space>Y', 'hint links yank-primary')
+config.bind('<Space>y', 'hint links yank')
+config.bind('<Space>t', 'hint inputs')
+config.bind('<Space>r', 'hint --rapid links tab-bg')
+config.bind('<Space>o', 'hint links fill :open {hint-url}')
+config.bind('<Space>i', 'hint images')
+config.bind('<Space>h', 'hint all hover')
+config.bind('<Space>f', 'hint all tab-fg')
+config.bind('<Space>d', 'hint links download')
+config.bind('<Space>b', 'hint all tab-bg')
+config.bind('<Space>m', 'hint links spawn mpv {hint-url}')
+config.bind('<Space>x', 'config-cycle statusbar.show always never;; config-cycle tabs.show always never')
+config.bind('<Space>c', 'config-clear;; config-source ~/.config/qutebrowser/config.py')
 config.bind(';', 'cmd-set-text :')
-config.bind("'I", 'hint images tab')
-config.bind("'O", 'hint links fill :open -t -r {hint-url}')
-config.bind("'R", 'hint --rapid links window')
-config.bind("'Y", 'hint links yank-primary')
-config.bind("'y", 'hint links yank')
-config.bind("'t", 'hint inputs')
-config.bind("'r", 'hint --rapid links tab-bg')
-config.bind("'o", 'hint links fill :open {hint-url}')
-config.bind("'i", 'hint images')
-config.bind("'h", 'hint all hover')
-config.bind("'f", 'hint all tab-fg')
-config.bind("'d", 'hint links download')
-config.bind("'b", 'hint all tab-bg')
-
 
 # Colors
 bg_default = "#16161e"
