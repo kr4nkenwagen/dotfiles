@@ -33,7 +33,7 @@ c.statusbar.show = 'never'
 c.tabs.show = 'never'
 
 #fonts
-font = '11pt "Space Mono Nerd Font"' 
+font = '11pt "Arimo Nerd Font"' 
 c.fonts.statusbar = font
 c.fonts.completion.category = font
 c.fonts.completion.entry = font
