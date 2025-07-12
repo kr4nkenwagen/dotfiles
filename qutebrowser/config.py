@@ -26,7 +26,6 @@ config.set('content.local_content_can_access_file_urls', False, 'file:///home/kr
 #User setting
 c.downloads.prevent_mixed_content = False
 c.tabs.position = 'left'
-c.downloads.position = 'right'
 c.window.transparent = True
 c.colors.webpage.darkmode.enabled = True
 c.content.blocking.method = 'both'
