@@ -1,15 +1,16 @@
 * {
-  border-radius: 5;
-  font-family: "Arimo Nerd Font";
+  /*border-radius: 5;*/
+  font-family: "Terminess Nerd Font";
   font-weight: 600;
   font-size: 14px;
   min-height: 0;
 }
 
 window#waybar {
-  background: rgba(26,27,38, 0.5);
+  background: rgba(22,22, 30, 0.5);
   color: white;
   border: #1d202e solid 2px;
+  border-radius: 5px;
 }
 
 #workspaces {
@@ -57,7 +58,7 @@ window#waybar {
 }
 
 #clock {
-  color: #b48ead;
+  color: #bbb9f7;
   margin: 5px;
 }
 

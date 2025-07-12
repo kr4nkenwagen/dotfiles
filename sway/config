@@ -28,13 +28,14 @@ output DP-1 bg ~/.config/deathstar.jpg fill mode 2560x1440
 output DP-2 bg ~/.config/deathstar.jpg fill mode 2560x1440
 
 
-default_border pixel 2
+default_border pixel 2 
 corner_radius 5
+blur enable
+blur_radius 5
+shadows enable
 gaps inner 5
-gaps outer 10
-blur enabled
-blur_radius 1
-default_dim_inactive 1
+gaps outer 15
+
 
 set $base00 #1d202e
 set $base01 #b48ead
@@ -236,6 +237,11 @@ bindsym $mod+r mode "resize"
 bar {
     swaybar_command waybar
 }
+
+exec swaymsg layer_effects "waybar" blur enable;
+exec swaymsg layer_effects "waybar" blur_radius 5;
+exec swaymsg layer_effects "waybar" shadows enable;
+exec swaymsg layer_effects "waybar" corner_radius 5;
 
 exec copyq
 exec unclutter --idle 1 --start-hidden --root

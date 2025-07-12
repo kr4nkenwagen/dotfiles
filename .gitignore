@@ -1,4 +1,6 @@
 discord/*
+neofetch/*
+youtube-tui/* 
 copyq/*
 systemd/*
 qutebrowser/autoconfig.yml

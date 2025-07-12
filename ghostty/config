@@ -19,14 +19,14 @@
 # ==========================
 # # The config file consists of simple key-value pairs,
 # # separated by equals signs.
-font-family = Arimo Nerd Font 
-font-size = 11
+font-family = Terminess Nerd Font 
+font-size = 14 
 window-padding-x = 5
 window-padding-y = 5
 confirm-close-surface = false
 background-blur = true
-background-opacity = 0
-theme = tokyonight-storm 
+background-opacity = 0.5
+theme = tokyonight
 #
 # # Spacing around the equals sign does not matter.
 # # All of these are identical:

@@ -31,6 +31,8 @@ c.colors.webpage.darkmode.enabled = True
 c.content.blocking.method = 'both'
 c.statusbar.show = 'never'
 c.tabs.show = 'never'
+c.content.user_stylesheets = '~/.config/qutebrowser/userstyles/all.css'
+c.content.autoplay = False
 
 #fonts
 font = '11pt "Arimo Nerd Font"' 
@@ -76,12 +78,12 @@ config.bind('<Space>bl','bookmark-list')
 config.bind(';', 'cmd-set-text :')
 
 # Colors
-bg_default = "#16161e"
-bg_lighter = "#0c0e14"
-bg_selection = "#3e4451"
+bg_default = "#1a1b26"
+bg_lighter = "#16161a"
+bg_selection = "#33467c"
 # "#545862"
 fg_disabled = "#565c64"
-fg_default = "#abb2bf"
+fg_default = "#c0caf5"
 # "#b6bdca"
 bg_lightest = "#c0caf5"         # main shade lightest
 fg_error = "#ff899d"            # red
@@ -93,9 +95,10 @@ bg_insert_mode = "#8db0ff"      # blue
 bg_warning = "#c7a9ff"          # purple
 # "#be5046"                     # dark red
 
+c.colors.webpage.bg = bg_default
 c.colors.hints.match.fg = fg_matched_text
-c.colors.hints.bg = bg_default
-c.colors.hints.fg = fg_default 
+c.colors.hints.bg = bg_hint 
+c.colors.hints.fg = bg_selection 
 c.colors.completion.fg = fg_default
 c.colors.completion.odd.bg = bg_lighter
 c.colors.completion.even.bg = bg_default
