@@ -1,3 +1,7 @@
+if not status is-interactive
+  return
+end
+
 alias grep='grep --color=auto'
 alias ls='eza -l -a --group-directories-first --total-size --git --git-repos'
 alias cat='bat'
