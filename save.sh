@@ -1,7 +1,6 @@
 #!/bin/sh
-
 cp ~/.tmux.conf .tmux.conf
-
+time=$(date +"%D %Ts")
 git add *
-git commit - "{date %D %T} - automated changes"
+git commit -m "[$time] automated changes"
 git push
