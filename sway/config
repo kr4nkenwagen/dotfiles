@@ -23,13 +23,16 @@ set $dmenu = "dmenu"
 ### Output configuration
 #
 # Default wallpaper (more resolutions are available in /usr/share/backgrounds/sway/)
-output eDP-1 bg ~/.config/deathstar.jpg fill
-output DP-1 bg ~/.config/deathstar.jpg fill mode 2560x1440
-output DP-2 bg ~/.config/deathstar.jpg fill mode 2560x1440
+#output eDP-1 bg ~/.config/deathstar.jpg fill
+#output DP-1 bg ~/.config/deathstar.jpg fill mode 2560x1440
+#output DP-2 bg ~/.config/deathstar.jpg fill mode 2560x1440
 
+output eDP-1 bg ~/Downloads/wp6151236-astronaut-space-screensaver-anime-wallpapers.jpg fill
+output DP-1 bg ~/Downloads/wp6151236-astronaut-space-screensaver-anime-wallpapers.jpg fill mode 2560x1440
+output DP-2 bg ~/Downloads/wp6151236-astronaut-space-screensaver-anime-wallpapers.jpg fill mode 2560x1440
 
 default_border pixel 2 
-corner_radius 5
+corner_radius 15
 blur enable
 blur_radius 5
 shadows enable

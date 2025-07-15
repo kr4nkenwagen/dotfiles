@@ -32,7 +32,7 @@ c.content.blocking.method = 'both'
 c.statusbar.show = 'never'
 c.tabs.show = 'never'
 c.content.user_stylesheets = '~/.config/qutebrowser/userstyles/all.css'
-c.content.autoplay = False
+#c.content.autoplay = False
 
 #fonts
 font = '11pt "Arimo Nerd Font"' 
