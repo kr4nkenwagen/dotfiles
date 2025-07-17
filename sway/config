@@ -240,11 +240,8 @@ bindsym $mod+r mode "resize"
 bar {
     swaybar_command waybar
 }
-
+exec ~/.config/autostart.sh
 exec swaymsg layer_effects "waybar" blur enable;
-exec swaymsg layer_effects "waybar" blur_radius 5;
-exec swaymsg layer_effects "waybar" shadows enable;
-exec swaymsg layer_effects "waybar" corner_radius 5;
 
 exec copyq
 exec unclutter --idle 1 --start-hidden --root

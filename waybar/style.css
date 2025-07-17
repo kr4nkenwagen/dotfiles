@@ -2,12 +2,12 @@
   /*border-radius: 5;*/
   font-family: "Terminess Nerd Font";
   font-weight: 600;
-  font-size: 14px;
+  font-size: 16px;
   min-height: 0;
 }
 
 window#waybar {
-  background: rgba(22,22, 30, 0.5);
+  background: rgba(22,22, 30, 0.7);
   color: white;
   border: #1d202e solid 2px;
   border-radius: 5px;
@@ -34,13 +34,27 @@ window#waybar {
 }
 
 #custom-date,
-#clock,
 #battery,
-#pulseaudio,
 #network {
+  background-color: #1d202e;
   padding: 2px 10px;
   margin: 5px 0px;
 }
+#pulseaudio {
+  background-color: #1d202e;
+  padding: 2px 10px;
+  margin: 5px 0px;
+  border-radius: 5px 0px 0px 5px;
+}
+
+#clock{
+  background-color: #1d202e;
+  padding: 2px 10px;
+  margin: 5px 0px;
+  border-radius: 0px 5px 5px 0px;
+}
+
+
 
 #custom-date {
   color: #7dcfff;
@@ -60,14 +74,19 @@ window#waybar {
 #clock {
   color: #bbb9f7;
   margin: 5px;
+  margin-left: 0px;
 }
 
 #battery {
+  background-color: #1d202e;
   color: #9ece6a;
   margin: 5px;
+  margin-left: 0px;
+  margin-right: 0px;
 }
 
 #battery.charging {
+  background-color: #1d202e;
   color: #9ece6a;
   margin: 5px;
 }
@@ -79,12 +98,16 @@ window#waybar {
 }
 
 #network {
+  background-color: #1d202e;
   margin: 5px;
+  margin-left: 0px;
+  margin-right: 0px;
   color: #f7768e;
 }
 
 #pulseaudio {
   margin: 5px;
+  margin-right: 0px;
   color: #e0af68;
 }
 
@@ -96,26 +119,40 @@ window#waybar {
 }
 
 #disk {
+  background-color: #1d202e;
   color: #b9f27c;
   margin: 5px;
-  padding: 0 10px;
+  margin-left: 0px;
+  margin-right: 0px;
+  padding: 0 10px;  
 }
 
 #memory {
+  background-color: #1d202e;
   margin: 5px;
+  margin-right: 0px;
+  margin-left: 0px;
   padding: 0 10px;
   color: #ff9e64;
 }
 
 #cpu {
+  background-color: #1d202e;
   margin: 5px;
+  margin-right: 0px;
+  margin-left: 0px;
   padding: 0 10px;
   color: #ff7a93;
+  border-radius: 0px 15px 15px 0px;
 }
 
 #tray {
   margin: 5px;
+  margin-right: 0px;
+  margin-left: 0px;
+  background-color: #1d202e;
   padding: 0 10px;
+  border-radius: 5px 0px 0px 5px;
 }
 
 #tray > * {

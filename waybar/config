@@ -5,8 +5,9 @@
     "margin-bottom": -5,
     "position": "top", 
     "height": 20,
-    "modules-left": ["sway/workspaces"],
-    "modules-right": ["network", "pulseaudio", "battery", "temperature", "disk", "memory", "cpu", "tray", "clock"],
+    "modules-left": ["sway/workspaces", "sway/window"],
+    "modules-right": ["tray", "clock"],
+    "modules-center": [ "pulseaudio", "battery", "network","disk", "memory", "cpu" ], 
     // Modules configuration
 	"sway/workspaces": {
 		"disable-scroll": true,
@@ -37,6 +38,10 @@
              		"10": "0" 
          }
      },
+  "sway/window": {
+    "format": "{title}",
+    "max-length": 50
+  },
 	"custom/power": {
 		"format": "󰐥",
 		"on-click": "/home/loki/bin/waybar-power.sh"
@@ -51,11 +56,11 @@
             		"warning": 30,
             		"critical": 15,
         	},
-        	"format": "{icon} {capacity}% | {time} | {power}W",
-        	"format-charging": "󰂄 {capacity}% | {time} | {power}W",
-        	"format-plugged": "󰂄{capacity}% | {time} | {power}W",
+        	"format": "bat: {capacity}%",
+        	"format-charging": "bat: {capacity}%",
+        	"format-plugged": "bat: {capacity}%",
         	"format-alt": "{time} {icon} | {time} | {power}W",
-        	"format-full": "󱈑 {capacity}% | {time} | {power}W",
+        	"format-full": "bat: {capacity}%",
         	"format-icons": ["󱊡", "󱊢", "󱊣"]
 	},
   "temperature": {
@@ -65,14 +70,14 @@
     "format": "cpu {temperatureC}°C "
   },
 	"network": {
-        	"format-wifi": "{ifname} | {essid} {frequency}GHz {signalStrength}% | {ipaddr}/{cidr} | up: {bandwidthUpBytes} down: {bandwidthDownBytes}",
+        	"format-wifi": "wlan: {signalStrength}%",
         	"format-ethernet": "ETH-IP: {ipaddr}",
         	"format-linked": "{ifname} (No IP)",
         	"format-disconnected": "󰤮 Disconnected",
 	},
 	"pulseaudio": {
-		"format": "{icon}  {desc} {volume}%",
-        	"format-muted": "󰖁  {desc}",
+		"format": "audio: {volume}%",
+        	"format-muted": "audio: M",
         "format-icons": {
             "headphone": "",
             "hands-free": "",
@@ -89,18 +94,21 @@
     }, 
     "disk": {
       "interval": 30,
-      "format": "nvme0n1: {used} / {total}",
+      "format": "disk: {percentage_used}%",
       "path": "/"
     }, 
     "memory": {
         "interval": 30,
-        "format": "mem: {used:0.1f}G / {total:0.1f}G swap: {swapUsed:0.1f} / {swapTotal:0.1f}"
+        "format": "mem: {percentage}%"
     },
     "cpu": {
         "interval": 10,
-        "format": "cpu: max {max_frequency}GHz avg {avg_frequency}GHz min {min_frequency}GHz | {icon0}{icon1}{icon2}{icon3}{icon4}{icon5}{icon6}{icon7} {usage:>2}%",
+        "format": "cpu: {usage:>2}%",
 
 	"format-icons": ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"],
+    },
+    "sway/window": {
+      "format": "{title}"
     }
 }
 
