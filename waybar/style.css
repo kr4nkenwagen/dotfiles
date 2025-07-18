@@ -23,6 +23,10 @@ window#waybar {
   color: #fff;
 }
 
+#window {
+ color: #565c64;
+}
+
 #workspaces button.focused {
   color: #24283b;
   background-color: #7aa2f7;
@@ -143,7 +147,7 @@ window#waybar {
   margin-left: 0px;
   padding: 0 10px;
   color: #ff7a93;
-  border-radius: 0px 15px 15px 0px;
+  border-radius: 0px 5px 5px 0px;
 }
 
 #tray {
