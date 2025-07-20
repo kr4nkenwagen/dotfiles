@@ -1,8 +1,4 @@
 {
-    "margin-left": 15,
-    "margin-right": 15,
-    "margin-top": 5,
-    "margin-bottom": -5,
     "position": "top", 
     "height": 20,
     "modules-left": ["sway/workspaces", "sway/window"],
@@ -39,8 +35,7 @@
          }
      },
   "sway/window": {
-    "format": "{title}",
-    "max-length": 50
+    "format": "{title}"
   },
 	"custom/power": {
 		"format": "󰐥",

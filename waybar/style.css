@@ -7,19 +7,19 @@
 }
 
 window#waybar {
-  background: rgba(22,22, 30, 0.7);
+  background: rgba(22,22, 30, 0.5);
   color: white;
   border: #1d202e solid 2px;
-  border-radius: 5px;
 }
 
 #workspaces {
   background-color: #1d202e;
   margin: 5px;
   margin-left: 6px;
+  border-radius: 5px;
 }
 #workspaces button {
-  padding: 2px 8px;
+  padding: 0px 8px;
   color: #fff;
 }
 
@@ -37,23 +37,22 @@ window#waybar {
   color: #24283b;
 }
 
-#custom-date,
-#battery,
-#network {
+#custom-date {
   background-color: #1d202e;
-  padding: 2px 10px;
+  padding: 0px 10px;
   margin: 5px 0px;
 }
 #pulseaudio {
+  color: #faba4a;
   background-color: #1d202e;
-  padding: 2px 10px;
+  padding: 0px 10px;
   margin: 5px 0px;
   border-radius: 5px 0px 0px 5px;
 }
 
 #clock{
   background-color: #1d202e;
-  padding: 2px 10px;
+  padding: 0px 10px;
   margin: 5px 0px;
   border-radius: 0px 5px 5px 0px;
 }
@@ -72,7 +71,7 @@ window#waybar {
   margin-top: 5px;
   margin-bottom: 5px;
   margin-left: 0px;
-  padding: 3px 10px;
+  padding: 0px 10px;
 }
 
 #clock {
@@ -82,8 +81,9 @@ window#waybar {
 }
 
 #battery {
+  padding: 0px 10px;
   background-color: #1d202e;
-  color: #9ece6a;
+  color: #9fe044;
   margin: 5px;
   margin-left: 0px;
   margin-right: 0px;
@@ -91,7 +91,7 @@ window#waybar {
 
 #battery.charging {
   background-color: #1d202e;
-  color: #9ece6a;
+  color: #9fe044;
   margin: 5px;
 }
 
@@ -102,18 +102,14 @@ window#waybar {
 }
 
 #network {
+  padding: 0px 10px;
   background-color: #1d202e;
   margin: 5px;
   margin-left: 0px;
   margin-right: 0px;
-  color: #f7768e;
+  color: #a4daff;
 }
 
-#pulseaudio {
-  margin: 5px;
-  margin-right: 0px;
-  color: #e0af68;
-}
 
 #temperature {
   margin: 5px;
@@ -124,7 +120,7 @@ window#waybar {
 
 #disk {
   background-color: #1d202e;
-  color: #b9f27c;
+  color: #c7a9ff;
   margin: 5px;
   margin-left: 0px;
   margin-right: 0px;

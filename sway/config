@@ -32,13 +32,12 @@ output DP-1 bg ~/Downloads/wp6151236-astronaut-space-screensaver-anime-wallpaper
 output DP-2 bg ~/Downloads/wp6151236-astronaut-space-screensaver-anime-wallpapers.jpg fill mode 2560x1440
 
 default_border pixel 2 
-corner_radius 15
+corner_radius 5
 blur enable
 blur_radius 5
 shadows enable
 gaps inner 5
-gaps outer 15
-
+gaps outer 5
 
 set $base00 #1d202e
 set $base01 #b48ead
@@ -247,4 +246,5 @@ exec copyq
 exec unclutter --idle 1 --start-hidden --root
 exec autotiling 
 exec spotifyd
+exec redshift
 include /etc/sway/config.d/*
