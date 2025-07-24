@@ -27,9 +27,9 @@ set $dmenu = "dmenu"
 #output DP-1 bg ~/.config/deathstar.jpg fill mode 2560x1440
 #output DP-2 bg ~/.config/deathstar.jpg fill mode 2560x1440
 
-output eDP-1 bg ~/Downloads/wp6151236-astronaut-space-screensaver-anime-wallpapers.jpg fill
-output DP-1 bg ~/Downloads/wp6151236-astronaut-space-screensaver-anime-wallpapers.jpg fill mode 2560x1440
-output DP-2 bg ~/Downloads/wp6151236-astronaut-space-screensaver-anime-wallpapers.jpg fill mode 2560x1440
+output eDP-1 bg ~/.config/wallpaper.png fill
+output DP-1 bg ~/.config/wallpaper.png fill mode 2560x1440
+output DP-2 bg ~/.config/wallpaper.png fill mode 2560x1440
 
 default_border pixel 2 
 corner_radius 5
