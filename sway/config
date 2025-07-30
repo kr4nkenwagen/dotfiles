@@ -39,6 +39,9 @@ shadows enable
 gaps inner 5
 gaps outer 5
 
+for_window [app_id="mpv"] floating enable 
+
+
 set $base00 #1d202e
 set $base01 #b48ead
 
@@ -246,5 +249,5 @@ exec copyq
 exec unclutter --idle 1 --start-hidden --root
 exec autotiling 
 exec spotifyd
-exec redshift
+#exec redshift
 include /etc/sway/config.d/*
