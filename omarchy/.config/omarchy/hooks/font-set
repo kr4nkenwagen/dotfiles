@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# This hook is called with the snake-cased name of the font that has just been set.
+# To put it into use, remove .sample from the name.
+
+# Example: Show the name of the theme that was just set.
+# notify-send "New font" "Your new font is $1"
+instances=$(pgrep -x qutebrowser | wc -l)
+if [ "$instances" -eq 1 ]; then
+  qutebrowser :config-source &
+fi
