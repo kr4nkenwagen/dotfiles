@@ -1,0 +1,13 @@
+font-family = Terminess Nerd Font
+#font-size = 14
+window-padding-x = 0
+window-padding-y = 0
+confirm-close-surface = false
+#background-blur = true
+#background-opacity = 0.5
+title = "󱙝 "
+mouse-hide-while-typing = true
+window-decoration = false
+custom-shader = cursor_smear.glsl
+custom-shader = bloom025.glsl
+config-file = ?"~/.config/omarchy/current/theme/ghostty.conf"
