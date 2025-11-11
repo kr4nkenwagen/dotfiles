@@ -174,7 +174,7 @@ fg_default = colors[5]
 bg_lightest = colors[6]
 fg_error = colors[1]
 # "#d19a66"                     # orange
-bg_hint = colors[3]
+bg_hint = colors[0]
 fg_matched_text = colors[10]
 bg_passthrough_mode = colors[13]
 bg_insert_mode = colors[14]

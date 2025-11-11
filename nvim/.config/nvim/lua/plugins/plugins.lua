@@ -49,6 +49,16 @@ return {
     enabled = true,
   },
   {
+    "mfussenegger/nvim-dap",
+  },
+  {
+    "rcarriga/nvim-dap-ui",
+    dependencies = { "nvim-neotest/nvim-nio" }
+  },
+  {
+    "theHamsta/nvim-dap-virtual-text"
+  },
+  {
     "nvim-treesitter/nvim-treesitter",
     opts = {
       ensure_installed = {
@@ -57,8 +67,14 @@ return {
         "vimdoc",
         "html",
         "css",
+        "c",
+        "ts"
       },
     },
     enabled = true,
   },
+  {
+    "ai-docstring.nvim",
+    dir = "/home/kr4nk/repos/ai-docstring.nvim",
+  }
 }

@@ -12,5 +12,5 @@
 instances=$(pgrep -x qutebrowser | wc -l)
 if [ "$instances" -eq 1 ]; then
   #qutebrowser :config-source &
-  killall -SIGUSR1 qutebrowser
+  qutebrowser :config-source
 fi
