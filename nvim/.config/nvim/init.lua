@@ -21,7 +21,10 @@ dap.adapters.cppgdb = {
 }
 
 require("ai-docstring").setup({
-        key = "<leader>od"
+  key = "<leader>od",
+  ai = {
+    model = "qwen2.5-coder:7b"
+  }
 })
 
 local function get_executable()
@@ -47,7 +50,7 @@ local function get_executable()
         local choice = vim.fn.inputlist(choices)
         return files[choice]
     else
-        return vim.fn.input('Path to executable: ', cwd .. '/', 'file')
+        return "a.out"
     end
 end
 

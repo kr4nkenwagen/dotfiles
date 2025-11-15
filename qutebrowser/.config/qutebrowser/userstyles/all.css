@@ -1,16 +1,16 @@
 :root {
-  --bg_default: #272e33;
-  --bg_lighter: #343f44;
+  --bg_default: #1E1E2E;
+  --bg_lighter: #43465A;
   --bg_selections: #3e4451;
-  --fg_disabled: #9da9a0;
+  --fg_disabled: #A1A8C9;
   --fg_default: #c0caf45;
   --bg_lightest: #c0caf45;
-  --red: #e67e80;
+  --red: #F38BA8;
   --orange: #d19a66;
-  --yellow: #a7c080;
-  --green: #d699b6;
-  --blue: #83c092;
-  --teal: #dbbc7f;
+  --yellow: #A6E3A1;
+  --green: #F5C2E7;
+  --blue: #94E2D5;
+  --teal: #F9E2AF;
   --purple: #c7a9ff;
   --font: "Terminess Nerd Font"
 }

@@ -35,16 +35,18 @@ alias gcm='git commit -m'
 
 alias nvp='nvim ~/.config/nvim/lua/plugins/plugins.lua'
 
-alias
-
+if not pgrep -u (whoami) ssh-agent >/dev/null
+    eval (ssh-agent -c) >/dev/null
+end
+ssh-add ~/.ssh/id_ed25519 ^/dev/null
 zoxide init fish | source
 starship init fish | source
 tmux
-clear
 set -U fish_greeting ""
 set -g fish_key_bindings fish_vi_key_bindings
 set -Ux CARAPACE_BRIDGES 'zsh,fish,inshellisense'
 carapace _carapace | source
 
 source ~/.local/share/omarchy/default/bash/rc
+clear
 omarchy-show-logo

@@ -29,7 +29,8 @@ return {
     enabled = true,
   },
   {
-    "nvim-mini/mini.ai",
+    'nvim-mini/mini.ai', 
+    version = false,
     enabled = true,
   },
   {
@@ -74,7 +75,7 @@ return {
     enabled = true,
   },
   {
-    "ai-docstring.nvim",
+    "kr4nkenwagen/ai-docstring.nvim",
     dir = "/home/kr4nk/repos/ai-docstring.nvim",
   }
 }
