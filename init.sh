@@ -1,6 +1,6 @@
 #!/bin/sh
 
-packages="stow tmux qutebrowser fish ghostty nerd-fonts-git"
+packages="stow tmux qutebrowser fish ghostty ttf-terminus-nerd"
 
 mkdir ~/notes
 mkdir ~/scripts
