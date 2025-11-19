@@ -29,6 +29,9 @@ stow -t ~ nvim
 stow -t ~ omarchy
 stow -t ~ qutebrowser
 stow -t ~ tmux
+
 mkdir ~/.config/tmux/plugins
 cd ~/.config/tmux/plugins
 git clone https://github.com/tmux-plugins/tpm
+
+echo "fish" > ~/.bashrc
