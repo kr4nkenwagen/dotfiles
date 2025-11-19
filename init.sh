@@ -1,6 +1,6 @@
 #!/bin/sh
 
-packages="stow tmux qutebrowser fish ghostty ttf-terminus-nerd"
+packages="stow tmux qutebrowser fish ghostty "
 
 mkdir ~/notes
 mkdir ~/scripts
@@ -14,6 +14,14 @@ yay -Syu --noconfirm
 yay -S $packages --noconfirm
 
 stow .
+stow --adopt -t ~ fish
+stow --adopt -t ~ ghostty
+stow --adopt -t ~ hypr
+stow --adopt -t ~ nvim
+stow --adopt -t ~ omarchy
+stow --adopt -t ~ qutebrowser
+stow --adopt -t ~ tmux
+git reset --hard
 stow -t ~ fish
 stow -t ~ ghostty
 stow -t ~ hypr
@@ -21,7 +29,6 @@ stow -t ~ nvim
 stow -t ~ omarchy
 stow -t ~ qutebrowser
 stow -t ~ tmux
-
 mkdir ~/.config/tmux/plugins
 cd ~/.config/tmux/plugins
 git clone https://github.com/tmux-plugins/tpm
