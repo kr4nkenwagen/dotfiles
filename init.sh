@@ -10,8 +10,8 @@ cd ~/repos
 git clone https://github.com/kr4nkenwagen/dotfiles
 cd dotfiles
 
-yay -Syu
-yay -S $packages
+yay -Syu --noconfirm
+yay -S $packages --noconfirm
 
 stow .
 stow -t ~ fish
