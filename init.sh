@@ -9,6 +9,7 @@ mkdir ~/scripts
 mkdir ~/repos
 
 cd ~/repos
+rm -rdf dotfiles
 git clone https://github.com/kr4nkenwagen/dotfiles
 cd dotfiles
 
