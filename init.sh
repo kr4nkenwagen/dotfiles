@@ -1,6 +1,6 @@
 #!/bin/sh
 
-packages="stow tmux qutebrowser fish ghostty "
+packages="stow tmux qutebrowser fish ghostty ttf-terminus-nerd ttf-space-mono-nerd ttf-bigblueterminal-nerd"
 
 mkdir ~/notes
 mkdir ~/scripts
@@ -35,3 +35,9 @@ cd ~/.config/tmux/plugins
 git clone https://github.com/tmux-plugins/tpm
 
 echo "fish" > ~/.bashrc
+
+omarchy-font-set BigBlueTermPlusNerdFont
+omarchy-theme-set Nerd
+cp nord-balloons.png ~/.config/omarchy/themes/nord/backgrounds/
+omarchy-theme-bg-next
+omarchy-theme-bg-next
