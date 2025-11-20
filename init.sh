@@ -32,16 +32,17 @@ stow -t ~ omarchy
 stow -t ~ qutebrowser
 stow -t ~ tmux
 
-mkdir ~/.config/tmux/plugins
+mkdir -p ~/.config/tmux/plugins
 git clone https://github.com/tmux-plugins/tpm ~/.config/tmux/plugins
 
 echo "fish" > ~/.bashrc
 
 cp ~/repos/dotfiles/omarchy/.config/omarchy/hooks/* ~/.config/omarchy/hooks/
 
+cp ~/repos/dotfiles/nord_wallpapers/* ~/.config/omarchy/themes/nord/backgrounds/
+cp ~/repos/dotfiles/catppuccin_wallpapers/ * ~/.config/omarchy/themes/catppuccin/backgrounds/
 omarchy-font-set BigBlueTermPlusNerdFont
-omarchy-theme-set Nord
-cp ~/repos/dotfiles/nord-balloons.png ~/.config/omarchy/themes/nord/backgrounds/
+omarchy-theme-set catppuccin
 omarchy-theme-bg-next
 omarchy-theme-bg-next
 
