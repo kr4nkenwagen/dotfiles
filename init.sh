@@ -1,5 +1,7 @@
 #!/bin/sh
 
+cd ~
+
 packages="stow tmux qutebrowser fish ghostty ttf-terminus-nerd ttf-space-mono-nerd ttf-bigblueterminal-nerd python-adblock uv python-adblock ollama nodejs"
 
 omarchy-snapshot create

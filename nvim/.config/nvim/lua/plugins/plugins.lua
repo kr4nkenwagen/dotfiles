@@ -71,5 +71,9 @@ return {
   {
     "kr4nkenwagen/ai-docstring.nvim",
     dir = "/home/kr4nk/repos/ai-docstring.nvim",
+  },
+  {
+    "sbatin/platformio.nvim",
+    dependencies = { "numToStr/FTerm.nvim" },
   }
 }
