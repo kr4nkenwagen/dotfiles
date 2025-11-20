@@ -33,8 +33,7 @@ stow -t ~ qutebrowser
 stow -t ~ tmux
 
 mkdir ~/.config/tmux/plugins
-cd ~/.config/tmux/plugins
-git clone https://github.com/tmux-plugins/tpm
+git clone https://github.com/tmux-plugins/tpm ~/.config/tmux/plugins
 
 echo "fish" > ~/.bashrc
 
