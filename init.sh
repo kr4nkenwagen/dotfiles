@@ -1,6 +1,6 @@
 #!/bin/sh
 
-packages="stow tmux qutebrowser fish ghostty ttf-terminus-nerd ttf-space-mono-nerd ttf-bigblueterminal-nerd"
+packages="stow tmux qutebrowser fish ghostty ttf-terminus-nerd ttf-space-mono-nerd ttf-bigblueterminal-nerd python-adblock"
 
 omarchy-snapshot create
 
