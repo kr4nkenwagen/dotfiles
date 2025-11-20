@@ -2,6 +2,8 @@
 
 packages="stow tmux qutebrowser fish ghostty ttf-terminus-nerd ttf-space-mono-nerd ttf-bigblueterminal-nerd"
 
+omarchy-snapshot create
+
 mkdir ~/notes
 mkdir ~/scripts
 mkdir ~/repos
@@ -44,3 +46,4 @@ cp nord-balloons.png ~/.config/omarchy/themes/nord/backgrounds/
 omarchy-theme-bg-next
 omarchy-theme-bg-next
 
+pkill alacritty
