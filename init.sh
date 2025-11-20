@@ -38,11 +38,11 @@ git clone https://github.com/tmux-plugins/tpm
 
 echo "fish" > ~/.bashrc
 
-cp omarchy/.config/omarchy/hooks/* ~/.config/omarchy/hooks/
+cp ~/repos/dotfiles/omarchy/.config/omarchy/hooks/* ~/.config/omarchy/hooks/
 
 omarchy-font-set BigBlueTermPlusNerdFont
 omarchy-theme-set Nord
-cp nord-balloons.png ~/.config/omarchy/themes/nord/backgrounds/
+cp ~/repos/dotfiles/nord-balloons.png ~/.config/omarchy/themes/nord/backgrounds/
 omarchy-theme-bg-next
 omarchy-theme-bg-next
 
