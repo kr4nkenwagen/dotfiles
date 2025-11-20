@@ -41,7 +41,7 @@ echo "fish" > ~/.bashrc
 cp ~/repos/dotfiles/omarchy/.config/omarchy/hooks/* ~/.config/omarchy/hooks/
 
 cp ~/repos/dotfiles/nord_wallpapers/* ~/.config/omarchy/themes/nord/backgrounds/
-cp ~/repos/dotfiles/catppuccin_wallpapers/ * ~/.config/omarchy/themes/catppuccin/backgrounds/
+cp ~/repos/dotfiles/catppuccin_wallpapers/* ~/.config/omarchy/themes/catppuccin/backgrounds/
 omarchy-font-set BigBlueTermPlusNerdFont
 omarchy-theme-set catppuccin
 omarchy-theme-bg-next
