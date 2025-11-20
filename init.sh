@@ -37,7 +37,7 @@ git clone https://github.com/tmux-plugins/tpm
 echo "fish" > ~/.bashrc
 
 omarchy-font-set BigBlueTermPlusNerdFont
-omarchy-theme-set Nerd
+omarchy-theme-set Nord
 cp nord-balloons.png ~/.config/omarchy/themes/nord/backgrounds/
 omarchy-theme-bg-next
 omarchy-theme-bg-next
