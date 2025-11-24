@@ -44,7 +44,7 @@ set -g popup-style "bg=$bg,fg=$fg"
 set -g popup-border-style "fg=$color6"
 
 # Status bar content using theme colors
-set -g status-left "#[fg=$color2,bold]#{session_name} #[fg=$color4]| #[fg=$color3]#{pane_current_path}"
+set -g status-left "#[fg=$color2,bold]#{session_name} #[fg=$color4]| #[fg=$color3]#{pane_current_path} #[fg=$color4]| "
 set -g status-right "| #[fg=$color4]#(uptime -p)"
 EOF
 
