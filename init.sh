@@ -2,7 +2,7 @@
 
 cd ~
 
-packages="stow tmux qutebrowser fish ghostty ttf-terminus-nerd ttf-space-mono-nerd ttf-bigblueterminal-nerd python-adblock uv python-adblock ollama nodejs"
+packages="stow tmux qutebrowser fish ghostty ttf-terminus-nerd ttf-space-mono-nerd ttf-bigblueterminal-nerd python-adblock uv python-adblock ollama nodejs python-pip libffi openssl platformio rtorrent"
 
 omarchy-snapshot create
 
@@ -36,7 +36,7 @@ stow -t ~ qutebrowser
 stow -t ~ tmux
 
 mkdir -p ~/.config/tmux/plugins
-git clone https://github.com/tmux-plugins/tpm ~/.config/tmux/plugins
+git clone https://github.com/tmux-plugins/tpm ~/.config/tmux/plugins/tpm
 
 echo "fish" > ~/.bashrc
 
