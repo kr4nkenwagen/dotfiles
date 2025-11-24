@@ -16,6 +16,8 @@ rm -rdf dotfiles
 git clone https://github.com/kr4nkenwagen/dotfiles
 cd dotfiles
 
+cp scripts/* ~/scripts/
+
 yay -Syu --noconfirm
 yay -S $packages --noconfirm
 
