@@ -2,7 +2,8 @@
 
 cd ~
 
-packages="stow tmux qutebrowser fish ghostty ttf-terminus-nerd ttf-space-mono-nerd ttf-bigblueterminal-nerd python-adblock uv python-adblock ollama nodejs python-pip libffi openssl platformio rtorrent"
+packages="stow tmux qutebrowser fish ghostty ttf-terminus-nerd ttf-space-mono-nerd ttf-bigblueterminal-nerd python-adblock uv python-adblock ollama nodejs python-pip libffi openssl platformio rtorrent adw-gtk-theme mpv steam "
+
 
 omarchy-snapshot create
 
@@ -40,12 +41,14 @@ git clone https://github.com/tmux-plugins/tpm ~/.config/tmux/plugins/tpm
 
 echo "fish" > ~/.bashrc
 
+curl -fsSL https://imbypass.github.io/omarchy-theme-hook/install.sh | bash
+
 cp ~/repos/dotfiles/omarchy/.config/omarchy/hooks/* ~/.config/omarchy/hooks/
 
 cp ~/repos/dotfiles/nord_wallpapers/* ~/.config/omarchy/themes/nord/backgrounds/
 cp ~/repos/dotfiles/catppuccin_wallpapers/* ~/.config/omarchy/themes/catppuccin/backgrounds/
-omarchy-font-set BigBlueTermPlusNerdFont
-omarchy-theme-set catppuccin
+omarchy-font-set "Terminess Nerd Font Mono"
+omarchy-theme-set osaka-jade
 omarchy-theme-bg-next
 omarchy-theme-bg-next
 
