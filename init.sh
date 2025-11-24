@@ -41,7 +41,7 @@ stow -t ~ tmux
 mkdir -p ~/.config/tmux/plugins
 git clone https://github.com/tmux-plugins/tpm ~/.config/tmux/plugins/tpm
 
-echo "fish" > ~/.bashrc
+printf "fish" >> ~/.bashrc
 
 curl -fsSL https://imbypass.github.io/omarchy-theme-hook/install.sh | bash
 
