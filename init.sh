@@ -2,7 +2,7 @@
 
 cd ~
 
-packages="stow tmux qutebrowser fish ghostty ttf-terminus-nerd ttf-space-mono-nerd ttf-bigblueterminal-nerd python-adblock uv python-adblock ollama nodejs python-pip libffi openssl platformio rtorrent adw-gtk-theme mpv steam clipse ranger "
+packages="stow tmux qutebrowser fish ghostty ttf-terminus-nerd ttf-space-mono-nerd ttf-bigblueterminal-nerd python-adblock uv python-adblock ollama nodejs python-pip libffi openssl platformio rtorrent adw-gtk-theme mpv steam clipse ranger aerc"
 
 
 omarchy-snapshot create
