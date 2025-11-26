@@ -9,5 +9,5 @@ title = "󱙝 "
 mouse-hide-while-typing = true
 window-decoration = false
 custom-shader = cursor_smear.glsl
-custom-shader = bloom025.glsl
+#custom-shader = bloom025.glsl
 config-file = ?"~/.config/omarchy/current/theme/ghostty.conf"
