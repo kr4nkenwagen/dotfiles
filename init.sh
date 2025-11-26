@@ -29,7 +29,9 @@ packages="stow \
   gdb \
   tenere \
   mcfly \
-  discordo"
+  discordo \
+  yq \
+  python-libtmux"
 
 
 omarchy-snapshot create
