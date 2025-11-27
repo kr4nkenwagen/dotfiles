@@ -33,6 +33,8 @@ alias gp='git pull'
 alias gph='git pull'
 alias gcm='git commit -m'
 
+alias clear='clear && omarchy-show-logo'
+
 alias nvp='nvim ~/.config/nvim/lua/plugins/plugins.lua'
 
 if not pgrep -u (whoami) ssh-agent >/dev/null
