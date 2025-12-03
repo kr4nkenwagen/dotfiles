@@ -110,6 +110,8 @@ config.set('content.local_content_can_access_remote_urls', True, 'file:///home/k
 config.set('content.local_content_can_access_file_urls', False, 'file:///home/kr4nk/.local/share/qutebrowser/userscripts/*')
 
 #User setting
+c.url.start_pages = ['https://github.com/kr4nkenwagen']
+c.url.default_page = 'https://github.com/kr4nkenwagen'
 c.downloads.prevent_mixed_content = False
 c.tabs.position = 'left'
 c.window.transparent = True
@@ -199,8 +201,8 @@ save_colors(css, userstyle)
 
 c.colors.webpage.bg = bg_default
 c.colors.hints.match.fg = fg_matched_text
-c.colors.hints.bg = bg_hint 
-c.colors.hints.fg = bg_selection 
+c.colors.hints.bg = bg_hint
+c.colors.hints.fg = bg_selection
 c.colors.completion.fg = fg_default
 c.colors.completion.odd.bg = bg_lighter
 c.colors.completion.even.bg = bg_default

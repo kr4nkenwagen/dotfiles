@@ -13,8 +13,13 @@ vim.api.nvim_set_keymap('n', '<Leader>dB', "<cmd>lua require'dap'.set_breakpoint
 vim.api.nvim_set_keymap('n', '<Leader>dr', "<cmd>lua require'dap'.repl.open()<CR>", opts)
 vim.api.nvim_set_keymap('n', '<Leader>dl', "<cmd>lua require'dap'.run_last()<CR>", opts)
 
-vim.api.nvim_set_keymap('n', '<Leader>cD', "<cmd>Neogen<CR>", opts)
-vim.api.nvim_set_keymap('n', '<Leader>oo', "<cmd>lua require('ollama').prompt()<CR>", opts)
-vim.api.nvim_set_keymap('v', '<Leader>oo', "<cmd>lua require('ollama').prompt()<CR>", opts)
 
+
+vim.api.nvim_set_keymap('n', '<Leader>pr', "<cmd>PIO run<CR>", { desc = "PIO run"})
+vim.api.nvim_set_keymap('n', '<Leader>pe', "<cmd>PIO env<CR>", { desc = "PIO env"})
+vim.api.nvim_set_keymap('n', '<Leader>pc', "<cmd>PIO check<CR>", { desc = "PIO check"})
+vim.api.nvim_set_keymap('n', '<Leader>po', "<cmd>PIO compiledb<CR>", { desc = "PIO compiledb"})
+vim.api.nvim_set_keymap('n', '<Leader>pu', "<cmd>PIO upload<CR>", { desc = "PIO upload"})
+vim.api.nvim_set_keymap('n', '<Leader>pm', "<cmd>PIO uploadfs<CR>", { desc = "PIO uploadfs"})
+vim.api.nvim_set_keymap('n', '<Leader>pb', "<cmd>PIO buildfs<CR>", { desc = "PIO buildfs"})
 

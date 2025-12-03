@@ -102,4 +102,10 @@ omarchy-theme-set osaka-jade
 omarchy-theme-bg-next
 omarchy-theme-bg-next
 
+cd ~/repos/
+git clone git@github.com:kr4nkenwagen/cherryscript
+git clone git@github.com:kr4nkenwagen/kr4nkenserver
+git clone git@github.com:kr4nkenwagen/astrokr4nk
+git clone git@github.com:kr4nkenwagen/ai-docstring.nvim
+
 pkill alacritty
