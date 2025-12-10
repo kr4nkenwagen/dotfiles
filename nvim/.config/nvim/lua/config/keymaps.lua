@@ -20,7 +20,8 @@ vim.api.nvim_set_keymap('n', '<Leader>pe', "<cmd>PIO env<CR>", { desc = "PIO env
 vim.api.nvim_set_keymap('n', '<Leader>pc', "<cmd>PIO check<CR>", { desc = "PIO check"})
 vim.api.nvim_set_keymap('n', '<Leader>po', "<cmd>PIO compiledb<CR>", { desc = "PIO compiledb"})
 vim.api.nvim_set_keymap('n', '<Leader>pu', "<cmd>PIO upload<CR>", { desc = "PIO upload"})
-vim.api.nvim_set_keymap('n', '<Leader>pm', "<cmd>PIO uploadfs<CR>", { desc = "PIO uploadfs"})
+vim.api.nvim_set_keymap('n', '<Leader>pp', "<cmd>PIO uploadfs<CR>", { desc = "PIO uploadfs"})
+vim.api.nvim_set_keymap('n', '<Leader>pm', "<cmd>PIO monitor<CR>", { desc = "PIO monitor"})
 vim.api.nvim_set_keymap('n', '<Leader>pb', "<cmd>PIO buildfs<CR>", { desc = "PIO buildfs"})
 
 vim.keymap.set("n", "<leader>a", function() require("harpoon"):list():add() end)
