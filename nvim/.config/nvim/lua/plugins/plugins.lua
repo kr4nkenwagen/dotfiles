@@ -29,7 +29,7 @@ return {
     enabled = true,
   },
   {
-    'nvim-mini/mini.ai', 
+    'nvim-mini/mini.ai',
     version = false,
     enabled = true,
   },
@@ -75,5 +75,13 @@ return {
   {
     "sbatin/platformio.nvim",
     dependencies = { "numToStr/FTerm.nvim" },
+  },
+  {
+    "b72u68/nvim-chtsh"
+  },
+  {
+      "ThePrimeagen/harpoon",
+      branch = "harpoon2",
+      dependencies = { "nvim-lua/plenary.nvim"}
   }
 }

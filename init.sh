@@ -31,7 +31,8 @@ packages="stow \
   mcfly \
   discordo \
   yq \
-  python-libtmux"
+  python-libtmux \
+  ripgrep"
 
 
 omarchy-snapshot create

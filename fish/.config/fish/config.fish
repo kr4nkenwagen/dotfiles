@@ -7,7 +7,7 @@ set -g NOTES "$HOME/notes"
 set -g REPOS "$HOME/repos"
 set -g CONFIG "$HOME/.config"
 
-alias grep='grep --color=auto'
+alias grep='rg'
 alias ls='eza -lh -a --group-directories-first --total-size --icons=auto'
 alias lt='eza -a --tree --level=2 --long --icons --git'
 alias cat='bat'

@@ -23,3 +23,12 @@ vim.api.nvim_set_keymap('n', '<Leader>pu', "<cmd>PIO upload<CR>", { desc = "PIO 
 vim.api.nvim_set_keymap('n', '<Leader>pm', "<cmd>PIO uploadfs<CR>", { desc = "PIO uploadfs"})
 vim.api.nvim_set_keymap('n', '<Leader>pb', "<cmd>PIO buildfs<CR>", { desc = "PIO buildfs"})
 
+vim.keymap.set("n", "<leader>a", function() require("harpoon"):list():add() end)
+vim.keymap.set("n", "<C-e>", function() require("harpoon").ui:toggle_quick_menu(harpoon:list()) end)
+vim.keymap.set("n", "<C-h>", function() require("harpoon"):list():select(1) end)
+vim.keymap.set("n", "<C-t>", function() require("harpoon"):list():select(2) end)
+vim.keymap.set("n", "<C-n>", function() require("harpoon"):list():select(3) end)
+vim.keymap.set("n", "<C-s>", function() require("harpoon"):list():select(4) end)
+vim.keymap.set("n", "<C-S-P>", function() require("harpoon"):list():prev() end)
+vim.keymap.set("n", "<C-S-N>", function() require("harpoon"):list():next() end)
+
