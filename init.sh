@@ -32,7 +32,8 @@ packages="stow \
   discordo \
   yq \
   python-libtmux \
-  ripgrep"
+  ripgrep \
+  youtube-dl"
 
 
 omarchy-snapshot create
