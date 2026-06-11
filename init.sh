@@ -71,6 +71,7 @@ stow --adopt -t ~ omarchy
 stow --adopt -t ~ qutebrowser
 stow --adopt -t ~ tmux
 stow --adopt -t ~ vesktop
+stow --adopt -t ~ aerc
 git reset --hard
 stow -t ~ fish
 stow -t ~ ghostty
@@ -80,6 +81,7 @@ stow -t ~ omarchy
 stow -t ~ qutebrowser
 stow -t ~ tmux
 stow -t ~ vesktop
+stow -t ~ aerc
 
 ########
 # TMUX #

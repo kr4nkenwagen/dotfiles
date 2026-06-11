@@ -11,3 +11,6 @@ window-decoration = false
 custom-shader = cursor_smear.glsl
 #custom-shader = bloom025.glsl
 config-file = ?"~/.config/omarchy/current/theme/ghostty.conf"
+
+# Fix general slowness on hyprland (https://github.com/ghostty-org/ghostty/discussions/3224)
+async-backend = epoll

@@ -19,6 +19,14 @@ require("ai-docstring").setup({
   }
 })
 
+require('lspconfig').clangd.setup({
+  cmd = {
+    "clangd",
+    "--query-driver=/home/kr4nk/.platformio/packages/toolchain-riscv32-esp/bin/riscv32-esp-elf-g*",
+    "--background-index",
+  },
+})
+
 require("lspconfig").pyright.setup{
     settings = {
         python = {

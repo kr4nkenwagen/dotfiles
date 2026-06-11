@@ -37,13 +37,18 @@ alias clear='clear && omarchy-show-logo'
 
 alias nvp='nvim ~/.config/nvim/lua/plugins/plugins.lua'
 
+alias music='jellyfin-tui'
+
 if not pgrep -u (whoami) ssh-agent >/dev/null
     eval (ssh-agent -c) >/dev/null
 end
 ssh-add ~/.ssh/id_ed25519 ^/dev/null
 zoxide init fish | source
 starship init fish | source
-tmux
+
+if not set -q TMUX; and not set -q SSH_CONNECTION
+    tmux
+end
 set -U fish_greeting ""
 set -g fish_key_bindings fish_vi_key_bindings
 set -Ux CARAPACE_BRIDGES 'zsh,fish,inshellisense'
