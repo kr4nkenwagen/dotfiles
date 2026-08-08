@@ -91,3 +91,22 @@ dap.configurations.c = {
 dap.configurations.cpp = dap.configurations.c
 local servers = { "html", "cssls", "omnisharp", "c", "cpp" }
 vim.lsp.enable(servers)
+
+vim.filetype.add({
+  extension = {
+    cherry = "cherry",
+  },
+})
+vim.filetype.add({
+  extension = {
+    cherry = "cherry",
+  },
+})
+
+vim.treesitter.language.register('cherry', { 'cherry' })
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "cherry",
+  callback = function()
+    vim.treesitter.start()
+  end,
+})
