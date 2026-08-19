@@ -48,6 +48,10 @@ def save_colors(css: str, colors: dict):
         valid_color = clean_hex(hex_color, None)
         if valid_color:
             css = re.sub(rf"--{var}:\s*#[0-9A-Fa-f]{{6}};", f"--{var}: {valid_color};", css)
+    font = get_font()
+    if font:
+        css = re.sub(r"--font:\s*[^;]+;", f"--font: {font};", css)
+
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(css)
 
@@ -63,10 +67,7 @@ interceptor.register(youtube_filter)
 # ==========================================
 def find_omarchy_theme_file():
     candidates = [
-        os.path.expanduser("~/.config/omarchy/current/theme/kitty.conf"),
-        os.path.expanduser("~/.config/omarchy/current/colors.conf"),
-        os.path.expanduser("~/.config/omarchy/current/theme/colors.conf"),
-        os.path.expanduser("~/.config/omarchy/current/theme.conf"),
+        os.path.expanduser("~/.local/state/omarchy/current/theme/colors.toml"),
     ]
     for path in candidates:
         if os.path.isfile(path):
@@ -358,4 +359,4 @@ c.colors.tabs.selected.odd.fg = fg_selection
 c.colors.tabs.selected.odd.bg = bg_selection
 c.colors.tabs.selected.even.fg = fg_selection
 c.colors.tabs.selected.even.bg = bg_selection
-#
+#omarchy.draw.apply(c)
