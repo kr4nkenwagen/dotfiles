@@ -14,3 +14,4 @@ if [ "$instances" -eq 1 ]; then
   #qutebrowser :config-source &
   qutebrowser :config-source
 fi
+tmux source-file ~/.config/tmux/tmux.conf

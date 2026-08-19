@@ -3,9 +3,23 @@
 # This hook is called with the snake-cased name of the font that has just been set.
 # To put it into use, remove .sample from the name.
 
-# Example: Show the name of the theme that was just set.
-# notify-send "New font" "Your new font is $1"
 instances=$(pgrep -x qutebrowser | wc -l)
 if [ "$instances" -eq 1 ]; then
   qutebrowser :config-source &
+fi
+
+GHOSTTY_CONF="$HOME/.config/ghostty/config"
+
+
+FONT_NAME=$1
+if [[ -n "$FONT_NAME" ]]; then
+    # Update or append font-family line in ghostty config
+    if grep -q "^\s*font-family\s*=" "$GHOSTTY_CONF"; then
+        sed -i "s/^\s*font-family\s*=.*/font-family = \"$FONT_NAME\"/" "$GHOSTTY_CONF"
+    else
+        echo "font-family = \"$FONT_NAME\"" >> "$GHOSTTY_CONF"
+    fi
+
+    # Send SIGUSR2 signal to tell Ghostty to reload its configuration
+    pkill -SIGUSR2 -x ghostty 2>/dev/null || true
 fi

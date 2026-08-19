@@ -3,50 +3,152 @@
 # Called by theme-set hook
 
 THEME="$1"
-KITTY_CONF="$HOME/.config/omarchy/themes/$THEME/kitty.conf"
+
+
+if [[ -z "$THEME" ]]; then
+    exit 1
+fi
+
+# 1. Locate theme directory
+THEME_DIR=""
+for dir in "$HOME/.config/omarchy/themes/$THEME" \
+           "$HOME/.local/share/omarchy/themes/$THEME" \
+           "$HOME/.config/omarchy/current"; do
+    if [[ -d "$dir" ]]; then
+        THEME_DIR="$dir"
+        break
+    fi
+done
+
+if [[ -z "$THEME_DIR" ]]; then
+    exit 1
+fi
+
+# 2. Find color file (Check preferred names first, then fallback to auto-discovery)
+COLOR_FILE=""
+PREFERRED_FILES=("colors.conf" "colors.sh" "theme.conf" "palette.conf" "alacritty.toml" "foot.ini" "ghostty.config" "kitty.conf")
+
+for file in "${PREFERRED_FILES[@]}"; do
+    if [[ -f "$THEME_DIR/$file" ]]; then
+        COLOR_FILE="$THEME_DIR/$file"
+        break
+    fi
+done
+
+# Fallback: Auto-discover the first file containing 6-digit hex color codes
+if [[ -z "$COLOR_FILE" ]]; then
+    COLOR_FILE=$(find "$THEME_DIR" -type f \( -name "*.conf" -o -name "*.toml" -o -name "*.ini" -o -name "*.sh" -o -name "*.css" -o -name "*.json" \) -exec grep -lE '#[a-fA-F0-9]{6}' {} + | head -n1)
+fi
+
+if [[ -z "$COLOR_FILE" ]]; then
+    dir_contents=$(ls -A1 "$THEME_DIR" | head -n 6 | tr '\n' ' ')
+    exit 1
+fi
+
 TMUX_COLORS="$HOME/.config/tmux/theme-colors.conf"
 
-[[ ! -f "$KITTY_CONF" ]] && exit 0
+# 3. Flexible color extraction
+get_color() {
+    local key="$1"
+    grep -iE "^\s*${key}\b" "$COLOR_FILE" 2>/dev/null | grep -oE '#[a-fA-F0-9]{6}' | head -n1
+}
 
-# Extract colors from kitty.conf
-get_color() { grep "^${1}\s" "$KITTY_CONF" | awk '{print $2}'; }
+bg=$(get_color "background")
+fg=$(get_color "foreground")
+color0=$(get_color "color0") # Surface / Black
+color1=$(get_color "color1") # Red
+color2=$(get_color "color2") # Green
+color3=$(get_color "color3") # Yellow
+color4=$(get_color "color4") # Blue
+color6=$(get_color "color6") # Cyan / Accent
+color8=$(get_color "color8") # Bright black / Gray
 
-bg=$(get_color background)
-fg=$(get_color foreground)
-color0=$(get_color color0) # Darker surface
-color1=$(get_color color1) # Red
-color2=$(get_color color2) # Green
-color3=$(get_color color3) # Yellow
-color4=$(get_color color4) # Blue
-color6=$(get_color color6) # Cyan (primary accent)
-color8=$(get_color color8) # Bright black/gray
+# Warn if core keys weren't found
+fallback_triggered=0
+if [[ -z "$bg" || -z "$fg" || -z "$color6" ]]; then
+    fallback_triggered=1
+fi
 
-# Generate tmux theme
+# Defaults
+bg=${bg:-"#1e1e2e"}
+fg=${fg:-"#cdd6f4"}
+color0=${color0:-"#181825"}
+color1=${color1:-"#f38ba8"}
+color2=${color2:-"#a6e3a1"}
+color3=${color3:-"#f9e2af"}
+color4=${color4:-"#89b4fa"}
+color6=${color6:-"#94e2d5"}
+color8=${color8:-"#585b70"}
+
+
+# 4. Generate tmux theme configuration
 mkdir -p "$(dirname "$TMUX_COLORS")"
 cat >"$TMUX_COLORS" <<EOF
 # Auto-generated from Omarchy theme: $THEME
-# DO NOT EDIT - Changes will be overwritten on theme switch
+# File parsed: $COLOR_FILE
 
-# Status bar
 set -g status-style "bg=$bg,fg=$fg"
-
-# Pane borders
 set -g pane-border-style "fg=$color8"
 set -g pane-active-border-style "fg=$color6"
-
-# Window list formatting - number on accent, name on surface
 set -g window-status-format "#[fg=$fg,bg=$color8] #I #[fg=$fg,bg=$bg] #W "
 set -g window-status-current-format "#[fg=$color0,bg=$color6,bold] #I #[fg=$color6,bg=$bg,bold] #W "
-
-# Messages & popups
 set -g message-style "bg=$color0,fg=$color6"
 set -g popup-style "bg=$bg,fg=$fg"
 set -g popup-border-style "fg=$color6"
-
-# Status bar content using theme colors
 set -g status-left "#[fg=$color2,bold]#{session_name} #[fg=$color4]| #[fg=$color3]#{pane_current_path} #[fg=$color4]| "
 set -g status-right "| #[fg=$color4]#(uptime -p)"
 EOF
 
-# Reload tmux if running
-pgrep tmux >/dev/null && tmux source-file $HOME/.config/tmux/tmux.conf 2>/dev/null || true
+# 5. Reload active tmux instances and trigger TPM plugin reload
+if pgrep -x tmux >/dev/null; then
+    reload_success=0
+
+    # Locate TPM's plugin sourcing script
+    TPM_SOURCE=""
+    for tpm_path in "$HOME/.tmux/plugins/tpm/scripts/source_plugins.sh" \
+                     "$HOME/.config/tmux/plugins/tpm/scripts/source_plugins.sh"; do
+        if [[ -f "$tpm_path" ]]; then
+            TPM_SOURCE="$tpm_path"
+            break
+        fi
+    done
+
+    SOCKET_DIR="${XDG_RUNTIME_DIR:-/tmp}/tmux-${UID}"
+
+    # Helper function to execute reload steps on a specific socket
+    reload_tmux_socket() {
+        local target_args=("$@")
+
+        # 1. Source theme colors directly
+        tmux "${target_args[@]}" source-file "$TMUX_COLORS" 2>/dev/null
+
+        # 2. Reload main tmux config
+        tmux "${target_args[@]}" source-file "$HOME/.config/tmux/tmux.conf" 2>/dev/null || true
+
+        # 3. Trigger TPM plugin reload (matches <prefix> + I behavior)
+        if [[ -n "$TPM_SOURCE" ]]; then
+            tmux "${target_args[@]}" run-shell "$TPM_SOURCE" 2>/dev/null || true
+        fi
+
+        # 4. Force screen re-draw
+        tmux "${target_args[@]}" refresh-client -S 2>/dev/null
+    }
+
+    # Loop through active sockets
+    if [[ -d "$SOCKET_DIR" ]]; then
+        for socket in "$SOCKET_DIR"/*; do
+            if [[ -S "$socket" ]]; then
+                reload_tmux_socket -S "$socket"
+                reload_success=1
+            fi
+        done
+    else
+        reload_tmux_socket
+        reload_success=1
+    fi
+
+    if [[ $reload_success -eq 1 ]]; then
+    else
+    fi
+else
+fi
