@@ -6,7 +6,15 @@ vim.api.nvim_set_keymap('n', '<leader>dc', ':lua require"dap".continue()<CR>', {
 vim.api.nvim_set_keymap('n', '<leader>do', ':lua require"dap".step_over()<CR>', { noremap = true })
 vim.api.nvim_set_keymap('n', '<leader>di', ':lua require"dap".step_into()<CR>', { noremap = true })
 vim.api.nvim_set_keymap('n', '<leader>du', ':lua require"dap".step_out()<CR>', { noremap = true })
-vim.keymap.set("n", "<leader>uu", vim.cmd.UndotreeToggle)
+
+vim.g.undotree_SetFocusWhenToggle = 1  -- Automatically focus Undotree window when opened
+vim.g.undotree_HelpLine = 0             -- Optional: Hides the top help text to save space
+
+vim.keymap.set("n", "<leader>uu", function()
+  vim.cmd.UndotreeToggle()
+  
+  -- If Undotree is active, map 'Enter' inside its buffer to select state and close panel
+end, { desc = "Toggle Undotree" })
 local opts = { noremap = true, silent = true }
 vim.api.nvim_set_keymap('n', '<Leader>db', "<cmd>lua require'dap'.toggle_breakpoint()<CR>", opts)
 vim.api.nvim_set_keymap('n', '<Leader>dB', "<cmd>lua require'dap'.set_breakpoint(vim.fn.input('Breakpoint condition: '))<CR>", opts)
@@ -32,4 +40,8 @@ vim.keymap.set("n", "<C-n>", function() require("harpoon"):list():select(3) end)
 vim.keymap.set("n", "<C-s>", function() require("harpoon"):list():select(4) end)
 vim.keymap.set("n", "<C-S-P>", function() require("harpoon"):list():prev() end)
 vim.keymap.set("n", "<C-S-N>", function() require("harpoon"):list():next() end)
+
+vim.keymap.set("n", "<Leader>td", function()
+  require("trouble").toggle({ mode = "diagnostics", focus = true })
+end, { desc = "Trouble diagnostics" })
 

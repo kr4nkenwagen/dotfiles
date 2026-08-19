@@ -97,13 +97,7 @@ vim.filetype.add({
     cherry = "cherry",
   },
 })
-vim.filetype.add({
-  extension = {
-    cherry = "cherry",
-  },
-})
 
-vim.treesitter.language.register('cherry', { 'cherry' })
 vim.api.nvim_create_autocmd("FileType", {
   pattern = "cherry",
   callback = function()

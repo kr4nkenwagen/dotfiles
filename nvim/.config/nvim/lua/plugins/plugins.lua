@@ -85,6 +85,9 @@ return {
       dependencies = { "nvim-lua/plenary.nvim"}
   },
   {
-    "folke/trouble.nvim"
-  }
+    "folke/trouble.nvim",
+    opts = {
+      auto_close = true
+    },
+  },
 }
