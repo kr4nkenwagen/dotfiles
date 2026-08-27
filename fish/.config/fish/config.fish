@@ -2,6 +2,8 @@ if not status is-interactive
     return
 end
 
+set -gx FZF_DEFAULT_OPTS ''
+
 set -g SCRIPTS "$HOME/scripts"
 set -g NOTES "$HOME/notes"
 set -g REPOS "$HOME/repos"
@@ -33,16 +35,13 @@ alias gp='git pull'
 alias gph='git pull'
 alias gcm='git commit -m'
 
-alias clear='clear && omarchy-show-logo'
+alias clear='clear'
 
 alias nvp='nvim ~/.config/nvim/lua/plugins/plugins.lua'
 
 alias music='jellyfin-tui'
 
-if not pgrep -u (whoami) ssh-agent >/dev/null
-    eval (ssh-agent -c) >/dev/null
-end
-ssh-add ~/.ssh/id_ed25519 ^/dev/null
+keychain --eval --quiet id_ed25519 | source
 zoxide init fish | source
 starship init fish | source
 
@@ -56,4 +55,3 @@ carapace _carapace | source
 
 source ~/.local/share/omarchy/default/bash/rc
 clear
-omarchy-show-logo

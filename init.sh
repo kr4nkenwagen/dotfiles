@@ -1,61 +1,100 @@
 #!/bin/sh
+set -eu
 
-cd ~
+DOTFILES_DIR="$HOME/repos/dotfiles"
+DOTFILES_REPO="https://github.com/kr4nkenwagen/dotfiles"
 
-packages="stow \
-  tmux \
-  qutebrowser \
-  fish \
-  ghostty \
-  ttf-terminus-nerd \
-  ttf-space-mono-nerd \
-  ttf-bigblueterminal-nerd \
-  python-adblock \
-  uv \
-  python-adblock \
-  ollama \
-  nodejs \
-  python-pip \
-  libffi \
-  openssl \
-  platformio \
-  rtorrent \
-  adw-gtk-theme \
-  mpv \
-  steam \
-  clipse \
-  ranger \
-  aerc \
-  gdb \
-  tenere \
-  mcfly \
-  discordo \
-  yq \
-  python-libtmux \
-  ripgrep \
-  youtube-dl"
+info() { printf "\033[1;34m:: %s\033[0m\n" "$1"; }
+ok()   { printf "\033[1;32m:: %s\033[0m\n" "$1"; }
+err()  { printf "\033[1;31m:: %s\033[0m\n" "$1" >&2; }
 
+packages="
+  stow
+  tmux
+  qutebrowser
+  fish
+  ghostty
+  ttf-terminus-nerd
+  ttf-space-mono-nerd
+  ttf-bigblueterminal-nerd
+  python-adblock
+  uv
+  ollama
+  nodejs
+  python-pip
+  libffi
+  openssl
+  platformio
+  rtorrent
+  adw-gtk-theme
+  mpv
+  steam
+  clipse
+  ranger
+  aerc
+  gdb
+  tenere
+  mcfly
+  discordo
+  yq
+  python-libtmux
+  ripgrep
+  youtube-dl
+"
+
+stow_dirs="
+  fish
+  ghostty
+  hypr
+  nvim
+  omarchy
+  qutebrowser
+  tmux
+  vesktop
+  aerc
+"
+
+stow_files="
+  .XCompose
+"
+
+##########
+# SETUP  #
+##########
+info "Creating directories"
+mkdir -p ~/notes ~/scripts ~/repos
 
 omarchy-snapshot create
 
-mkdir ~/notes
-mkdir ~/scripts
-mkdir ~/repos
-
-cd ~/repos
-rm -rdf dotfiles
-git clone https://github.com/kr4nkenwagen/dotfiles
-cd dotfiles
+##########
+# DOTFILES#
+##########
+info "Cloning dotfiles"
+if [ -d "$DOTFILES_DIR" ]; then
+  err "Dotfiles directory already exists at $DOTFILES_DIR — skipping clone"
+else
+  git clone "$DOTFILES_REPO" "$DOTFILES_DIR"
+fi
+cd "$DOTFILES_DIR"
 
 cp scripts/* ~/scripts/
 
+##########
+# PACKAGES#
+##########
+info "Installing packages"
 yay -Syu --noconfirm
 yay -S $packages --noconfirm
 
 ###########
 # CHRONOS #
 ###########
-git clone https://github.com/samuelstranges/chronos
+info "Building chronos"
+if [ -d chronos ]; then
+  err "chronos directory exists — skipping clone"
+else
+  git clone https://github.com/samuelstranges/chronos
+fi
 cd chronos
 go build .
 mkdir -p ~/.config/chronos/calendars/
@@ -63,53 +102,63 @@ mkdir -p ~/.config/chronos/calendars/
 ########
 # STOW #
 ########
-stow --adopt -t ~ fish
-stow --adopt -t ~ ghostty
-stow --adopt -t ~ hypr
-stow --adopt -t ~ nvim
-stow --adopt -t ~ omarchy
-stow --adopt -t ~ qutebrowser
-stow --adopt -t ~ tmux
-stow --adopt -t ~ vesktop
-stow --adopt -t ~ aerc
+info "Stowing dotfiles"
+cd "$DOTFILES_DIR"
+
+for dir in $stow_dirs; do
+  stow --adopt -t ~ "$dir"
+done
+for file in $stow_files; do
+  stow --adopt -t ~ -S "$file"
+done
+
 git reset --hard
-stow -t ~ fish
-stow -t ~ ghostty
-stow -t ~ hypr
-stow -t ~ nvim
-stow -t ~ omarchy
-stow -t ~ qutebrowser
-stow -t ~ tmux
-stow -t ~ vesktop
-stow -t ~ aerc
+
+for dir in $stow_dirs; do
+  stow -t ~ "$dir"
+done
+for file in $stow_files; do
+  stow -t ~ -S "$file"
+done
 
 ########
 # TMUX #
 ########
+info "Setting up tmux"
 mkdir -p ~/.config/tmux/plugins
-git clone https://github.com/tmux-plugins/tpm ~/.config/tmux/plugins/tpm
+if [ ! -d ~/.config/tmux/plugins/tpm ]; then
+  git clone https://github.com/tmux-plugins/tpm ~/.config/tmux/plugins/tpm
+fi
 
-printf "fish" >> ~/.bashrc
-
+grep -qxF 'fish' ~/.bashrc || printf "fish\n" >> ~/.bashrc
 
 ##########
 # THEMES #
 ##########
+info "Setting up themes"
 curl -fsSL https://imbypass.github.io/omarchy-theme-hook/install.sh | bash
 
 cp ~/repos/dotfiles/omarchy/.config/omarchy/hooks/* ~/.config/omarchy/hooks/
-
 cp ~/repos/dotfiles/nord_wallpapers/* ~/.config/omarchy/themes/nord/backgrounds/
 cp ~/repos/dotfiles/catppuccin_wallpapers/* ~/.config/omarchy/themes/catppuccin/backgrounds/
+
 omarchy-font-set "Terminess Nerd Font Mono"
 omarchy-theme-set osaka-jade
 omarchy-theme-bg-next
 omarchy-theme-bg-next
 
-cd ~/repos/
-git clone git@github.com:kr4nkenwagen/cherryscript
-git clone git@github.com:kr4nkenwagen/kr4nkenserver
-git clone git@github.com:kr4nkenwagen/astrokr4nk
-git clone git@github.com:kr4nkenwagen/ai-docstring.nvim
+##########
+# REPOS  #
+##########
+info "Cloning personal repos"
+cd ~/repos
+for repo in cherryscript kr4nkenserver astrokr4nk ai-docstring.nvim; do
+  if [ ! -d "$repo" ]; then
+    git clone "git@github.com:kr4nkenwagen/$repo"
+  else
+    err "$repo already exists — skipping"
+  fi
+done
 
-pkill alacritty
+ok "Done — restarting alacritty"
+pkill alacritty || true
