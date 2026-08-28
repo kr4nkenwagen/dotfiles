@@ -1,9 +1,13 @@
 #!/bin/sh
+<<<<<<< HEAD
 set -eu
 
 DOTFILES_DIR="$HOME/repos/dotfiles"
 DOTFILES_REPO="https://github.com/kr4nkenwagen/dotfiles"
 debloat.sh
+=======
+./debloat.sh
+>>>>>>> 7f8d68d (fix)
 cd ~
 
 info() { printf "\033[1;34m:: %s\033[0m\n" "$1"; }
