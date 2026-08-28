@@ -3,6 +3,8 @@ set -eu
 
 DOTFILES_DIR="$HOME/repos/dotfiles"
 DOTFILES_REPO="https://github.com/kr4nkenwagen/dotfiles"
+debloat.sh
+cd ~
 
 info() { printf "\033[1;34m:: %s\033[0m\n" "$1"; }
 ok()   { printf "\033[1;32m:: %s\033[0m\n" "$1"; }
