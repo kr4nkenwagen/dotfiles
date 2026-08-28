@@ -13,7 +13,7 @@ fi
 THEME_DIR=""
 for dir in "$HOME/.config/omarchy/themes/$THEME" \
            "$HOME/.local/share/omarchy/themes/$THEME" \
-           "$HOME/.config/omarchy/current"; do
+           "$HOME/.local/state/omarchy/current/theme"; do
     if [[ -d "$dir" ]]; then
         THEME_DIR="$dir"
         break
@@ -26,7 +26,7 @@ fi
 
 # 2. Find color file (Check preferred names first, then fallback to auto-discovery)
 COLOR_FILE=""
-PREFERRED_FILES=("colors.conf" "colors.sh" "theme.conf" "palette.conf" "alacritty.toml" "foot.ini" "ghostty.config" "kitty.conf")
+PREFERRED_FILES=("colors.toml" "colors.conf" "colors.sh" "theme.conf" "palette.conf" "alacritty.toml" "foot.ini" "ghostty.conf" "kitty.conf")
 
 for file in "${PREFERRED_FILES[@]}"; do
     if [[ -f "$THEME_DIR/$file" ]]; then
@@ -100,6 +100,24 @@ set -g status-right "| #[fg=$color4]#(uptime -p)"
 EOF
 
 # 5. Reload active tmux instances and trigger TPM plugin reload
+reload_tmux_socket() {
+    local target_args=("$@")
+
+    # 1. Source theme colors directly
+    tmux "${target_args[@]}" source-file "$TMUX_COLORS" 2>/dev/null
+
+    # 2. Reload main tmux config
+    tmux "${target_args[@]}" source-file "$HOME/.config/tmux/tmux.conf" 2>/dev/null || true
+
+    # 3. Trigger TPM plugin reload (matches <prefix> + I behavior)
+    if [[ -n "$TPM_SOURCE" ]]; then
+        tmux "${target_args[@]}" run-shell "$TPM_SOURCE" 2>/dev/null || true
+    fi
+
+    # 4. Force screen re-draw
+    tmux "${target_args[@]}" refresh-client -S 2>/dev/null
+}
+
 if pgrep -x tmux >/dev/null; then
     reload_success=0
 
@@ -115,25 +133,6 @@ if pgrep -x tmux >/dev/null; then
 
     SOCKET_DIR="${XDG_RUNTIME_DIR:-/tmp}/tmux-${UID}"
 
-    # Helper function to execute reload steps on a specific socket
-    reload_tmux_socket() {
-        local target_args=("$@")
-
-        # 1. Source theme colors directly
-        tmux "${target_args[@]}" source-file "$TMUX_COLORS" 2>/dev/null
-
-        # 2. Reload main tmux config
-        tmux "${target_args[@]}" source-file "$HOME/.config/tmux/tmux.conf" 2>/dev/null || true
-
-        # 3. Trigger TPM plugin reload (matches <prefix> + I behavior)
-        if [[ -n "$TPM_SOURCE" ]]; then
-            tmux "${target_args[@]}" run-shell "$TPM_SOURCE" 2>/dev/null || true
-        fi
-
-        # 4. Force screen re-draw
-        tmux "${target_args[@]}" refresh-client -S 2>/dev/null
-    }
-
     # Loop through active sockets
     if [[ -d "$SOCKET_DIR" ]]; then
         for socket in "$SOCKET_DIR"/*; do
@@ -146,9 +145,4 @@ if pgrep -x tmux >/dev/null; then
         reload_tmux_socket
         reload_success=1
     fi
-
-    if [[ $reload_success -eq 1 ]]; then
-    else
-    fi
-else
 fi

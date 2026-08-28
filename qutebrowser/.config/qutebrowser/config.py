@@ -1,4 +1,3 @@
-import omarchy.draw
 import os
 import re
 from qutebrowser.api import interceptor
@@ -68,12 +67,14 @@ interceptor.register(youtube_filter)
 def find_omarchy_theme_file():
     candidates = [
         os.path.expanduser("~/.local/state/omarchy/current/theme/colors.toml"),
+        os.path.expanduser("~/.local/state/omarchy/current/theme/kitty.conf"),
+        os.path.expanduser("~/.local/state/omarchy/current/theme/alacritty.toml"),
     ]
     for path in candidates:
         if os.path.isfile(path):
             return path
     
-    base_dir = os.path.expanduser("~/.config/omarchy/current")
+    base_dir = os.path.expanduser("~/.local/state/omarchy/current/theme")
     if os.path.exists(base_dir):
         for root, _, files in os.walk(base_dir):
             for file in files:
