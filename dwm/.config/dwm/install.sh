@@ -16,31 +16,9 @@ fi
 cd "$DWM_DIR"
 git checkout "$DWM_VERSION" 2>/dev/null || echo "Using default branch"
 
-echo "==> Applying patches..."
-
-# vanitygaps
-if ! grep -q 'gappiv' config.def.h 2>/dev/null; then
-  echo "    Applying vanitygaps..."
-  curl -sL "https://dl.suckless.org/dwm/patches/vanitygaps/dwm-vanitygaps-${DWM_VERSION}.patch" | patch -p1 || true
-else
-  echo "    vanitygaps already applied"
-fi
-
-# roundcorners
-if ! grep -q 'roundcorners' config.def.h 2>/dev/null; then
-  echo "    Applying roundcorners..."
-  curl -sL "https://dl.suckless.org/dwm/patches/roundcorners/dwm-roundcorners-${DWM_VERSION}.patch" | patch -p1 || true
-else
-  echo "    roundcorners already applied"
-fi
-
-# diminactive
-if ! grep -q 'diminact' config.def.h 2>/dev/null; then
-  echo "    Applying diminactive..."
-  curl -sL "https://dl.suckless.org/dwm/patches/diminactive/dwm-diminactive-${DWM_VERSION}.patch" | patch -p1 || true
-else
-  echo "    diminactive already applied"
-fi
+echo "==> Resetting to clean state..."
+git checkout -- .
+rm -f config.h
 
 echo "==> Copying config..."
 cp "$DWM_CONFIG" .
