@@ -18,3 +18,5 @@ QtProject.conf
 *_scrot.png
 user-dirs.*
 wl-clipboard
+/aerc/.config/aerc/accounts.conf
+/.XCompose

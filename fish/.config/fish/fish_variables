@@ -1,6 +1,7 @@
 # This file contains fish universal variable definitions.
 # VERSION: 3.0
 SETUVAR --export CARAPACE_BRIDGES:zsh\x2cfish\x2cinshellisense
+SETUVAR --export FZF_DEFAULT_OPTS:\x20\x2d\x2dcolor\x3dbg\x2b\x3a\x23\x2cbg\x3a\x23\x2cspinner\x3a\x23\x2chl\x3a\x23\x20\x2d\x2dcolor\x3dfg\x3a\x23\x2cheader\x3a\x23\x2cinfo\x3a\x23\x2cpointer\x3a\x23\x20\x2d\x2dcolor\x3dmarker\x3a\x23\x2cfg\x2b\x3a\x23\x2cprompt\x3a\x23\x2chl\x2b\x3a\x23
 SETUVAR --export --path PICO_SDK_PATH:/home/kr4nk/rp2040/pico\x2dsdk
 SETUVAR REPOS:\x7e/repos
 SETUVAR --export SWAYSOCK:/run/user/1000/sway\x2dipc\x2e1000\x2e1276\x2esock
@@ -10,4 +11,30 @@ SETUVAR __fish_initialized:4300
 SETUVAR _fisher_plugins:vitallium/tokyonight\x2dfish
 SETUVAR _fisher_upgraded_to_4_4:\x1d
 SETUVAR _fisher_vitallium_2F_tokyonight_2D_fish_files:\x7e/\x2econfig/fish/themes/TokyoNight\x20Day\x2etheme\x1e\x7e/\x2econfig/fish/themes/TokyoNight\x20Moon\x2etheme\x1e\x7e/\x2econfig/fish/themes/TokyoNight\x20Night\x2etheme\x1e\x7e/\x2econfig/fish/themes/TokyoNight\x20Storm\x2etheme
+SETUVAR background:\x23
+SETUVAR color0:\x23
+SETUVAR color1:\x23
+SETUVAR color10:\x23
+SETUVAR color11:\x23
+SETUVAR color12:\x23
+SETUVAR color13:\x23
+SETUVAR color14:\x23
+SETUVAR color15:\x23
+SETUVAR color2:\x23
+SETUVAR color3:\x23
+SETUVAR color4:\x23
+SETUVAR color5:\x23
+SETUVAR color6:\x23
+SETUVAR color7:\x23
+SETUVAR color8:\x23
+SETUVAR color9:\x23
+SETUVAR cursor:\x23
+SETUVAR fish_color_command:green
+SETUVAR fish_color_history_current:\x2d\x2dbold
+SETUVAR fish_color_normal:normal
+SETUVAR fish_color_param:cyan
 SETUVAR fish_greeting:
+SETUVAR fish_pager_color_completion:\x1d
+SETUVAR fish_pager_color_description:yellow
+SETUVAR fish_pager_color_progress:brwhite\x1e\x2d\x2dbackground\x3dcyan
+SETUVAR foreground:\x23

@@ -1,21 +1,18 @@
 :root {
-  --bg_default: #111c18;
-  --bg_lighter: #23372B;
+  --bg_default: #1a1b26;
+  --bg_lighter: #181825;
   --bg_selections: #3e4451;
-  --fg_disabled: #9eebb3;
+  --fg_disabled: #6c7086;
   --fg_default: #c0caf45;
   --bg_lightest: #c0caf45;
-  --red: #FF5345;
+  --red: #f38ba8;
   --orange: #d19a66;
-  --yellow: #63b07a;
-  --green: #75bbb3;
-  --blue: #8CD3CB;
-  --teal: #E5C736;
+  --yellow: #a6e3a1;
+  --green: #f5c2e7;
+  --blue: #89b4fa;
+  --teal: #f9e2af;
   --purple: #c7a9ff;
-  --font: "Terminess Nerd Font"
-}
-* {
-  border-color: var(--purple) !important;
+  --font: FiraCode Nerd Font;
 }
 a {
   color: var(--blue) !important;

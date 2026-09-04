@@ -6,3 +6,12 @@
 --
 -- Or remove existing autocmds by their group name (which is prefixed with `lazyvim_` for the defaults)
 -- e.g. vim.api.nvim_del_augroup_by_name("lazyvim_wrap_spell")
+
+-- Cherry language: `.cherry` files are detected as the cherry filetype so
+-- tree-sitter highlighting and the `cherry format` conform formatter activate.
+vim.api.nvim_create_autocmd({ "BufRead", "BufNewFile" }, {
+  pattern = "*.cherry",
+  callback = function()
+    vim.bo.filetype = "cherry"
+  end,
+})
