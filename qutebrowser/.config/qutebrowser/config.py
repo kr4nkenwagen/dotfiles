@@ -1,3 +1,4 @@
+import omarchy.draw
 import os
 import re
 from qutebrowser.api import interceptor
@@ -67,14 +68,12 @@ interceptor.register(youtube_filter)
 def find_omarchy_theme_file():
     candidates = [
         os.path.expanduser("~/.local/state/omarchy/current/theme/colors.toml"),
-        os.path.expanduser("~/.local/state/omarchy/current/theme/kitty.conf"),
-        os.path.expanduser("~/.local/state/omarchy/current/theme/alacritty.toml"),
     ]
     for path in candidates:
         if os.path.isfile(path):
             return path
     
-    base_dir = os.path.expanduser("~/.local/state/omarchy/current/theme")
+    base_dir = os.path.expanduser("~/.config/omarchy/current")
     if os.path.exists(base_dir):
         for root, _, files in os.walk(base_dir):
             for file in files:
@@ -181,7 +180,7 @@ c.url.start_pages = ['https://github.com/kr4nkenwagen']
 c.url.default_page = 'https://github.com/kr4nkenwagen'
 c.downloads.prevent_mixed_content = False
 c.tabs.position = 'left'
-c.window.transparent = True
+c.window.transparent = False
 c.colors.webpage.darkmode.enabled = True
 c.content.blocking.method = 'both'
 c.statusbar.show = 'in-mode'
@@ -316,7 +315,7 @@ c.colors.prompts.selected.bg = bg_selection
 
 # Statusbar
 c.colors.statusbar.normal.fg = fg_default
-c.colors.statusbar.normal.bg = bg_transparent
+c.colors.statusbar.normal.bg = bg_default
 c.colors.statusbar.insert.fg = bg_default
 c.colors.statusbar.insert.bg = bg_insert_mode
 c.colors.statusbar.passthrough.fg = bg_default
@@ -340,7 +339,7 @@ c.colors.statusbar.url.success.https.fg = fg_matched_text
 c.colors.statusbar.url.warn.fg = bg_warning
 
 # Tabs
-c.colors.tabs.bar.bg = bg_transparent
+c.colors.tabs.bar.bg = bg_default
 c.colors.tabs.indicator.start = bg_insert_mode
 c.colors.tabs.indicator.stop = bg_passthrough_mode
 c.colors.tabs.indicator.error = fg_error
