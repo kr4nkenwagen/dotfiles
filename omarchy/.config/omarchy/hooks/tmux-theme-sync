@@ -91,12 +91,11 @@ set -g status-style "bg=$bg,fg=$fg"
 set -g pane-border-style "fg=$color8"
 set -g pane-active-border-style "fg=$color6"
 set -g window-status-format "#[fg=$fg,bg=$color8] #I #[fg=$fg,bg=$bg] #W "
-set -g window-status-current-format "#[fg=$color0,bg=$color6,bold] #I #[fg=$color6,bg=$bg,bold] #W "
+set -g window-status-current-format "#[fg=$color0,bg=$color4] #I #[fg=$color4,bg=$bg] #W "
 set -g message-style "bg=$color0,fg=$color6"
 set -g popup-style "bg=$bg,fg=$fg"
 set -g popup-border-style "fg=$color6"
-set -g status-left "#[fg=$color2,bold]#{session_name} #[fg=$color4]| #[fg=$color3]#{pane_current_path} #[fg=$color4]| "
-set -g status-right "| #[fg=$color4]#(uptime -p)"
+set -g status-right "#[fg=$color6] %H:%M "
 EOF
 
 # 5. Reload active tmux instances and trigger TPM plugin reload

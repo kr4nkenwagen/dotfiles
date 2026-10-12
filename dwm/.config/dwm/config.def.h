@@ -27,7 +27,7 @@ static const Rule rules[] = {
      *	WM_NAME(STRING) = title
      */
     /* class      instance    tags mask     isfloating   monitor */
-    {"ghostty", NULL, 0, 0, -1},  {"qutebrowser", NULL, 0, 0, -1},
+    {"qutebrowser", NULL, 0, 0, -1},
     {"obsidian", NULL, 0, 0, -1}, {"1password", NULL, 0, 0, -1},
     {"Spotify", NULL, 0, 0, -1},
 };
@@ -36,7 +36,7 @@ static const Rule rules[] = {
 static const float mfact = 0.55; /* factor of master area size [0.05..0.95] */
 static const int nmaster = 1;    /* number of clients in master area */
 static const int resizehints =
-    1; /* 1 means respect size hints in tiled resizals */
+    0; /* 1 means respect size hints in tiled resizals */
 static const int lockfullscreen = 1; /* force focus to fullscreen client */
 
 static const Layout layouts[] = {
@@ -69,7 +69,6 @@ static const Key keys[] = {
     {MODKEY, XK_k, focusstack, {.i = -1}},
     {MODKEY, XK_h, setmfact, {.f = -0.05}},
     {MODKEY, XK_l, setmfact, {.f = +0.05}},
-    {MODKEY, XK_Return, zoom, {0}},
     {MODKEY, XK_Tab, view, {0}},
     {MODKEY | ShiftMask, XK_c, killclient, {0}},
     {MODKEY, XK_t, setlayout, {.v = &layouts[0]}},
