@@ -260,11 +260,17 @@ fi
 
 info "Fetching dotfiles"
 if [ -d "$DOTFILES_DIR/.git" ]; then
-  warn "Dotfiles already at $DOTFILES_DIR, skipping clone"
+  cd "$DOTFILES_DIR"
+  if [ -z "$(git status --porcelain)" ]; then
+    info "Updating existing clone at $DOTFILES_DIR"
+    git pull --ff-only || warn "could not fast-forward $DOTFILES_DIR, using it as is"
+  else
+    warn "Dotfiles at $DOTFILES_DIR have local changes, not pulling"
+  fi
 else
   git clone "$DOTFILES_REPO" "$DOTFILES_DIR"
+  cd "$DOTFILES_DIR"
 fi
-cd "$DOTFILES_DIR"
 
 info "Installing packages"
 install_packages
@@ -283,6 +289,19 @@ if [ ! -d "$SRC_DIR/chronos/.git" ]; then
 fi
 (cd "$SRC_DIR/chronos" && go build -o "$HOME/.local/bin/chronos" .) || warn "chronos build failed"
 mkdir -p ~/.config/chronos/calendars
+
+# Unstow packages that belong to other profiles. An older init.sh stowed the
+# Omarchy hypr config everywhere, which breaks Hyprland on a non-Omarchy machine.
+all_stow_dirs=(fish nvim tmux aerc qutebrowser ghostty hypr omarchy vesktop ubuntu)
+unstow=()
+for d in "${all_stow_dirs[@]}"; do
+  [ -d "$d" ] || continue
+  [[ " ${stow_dirs[*]} " == *" $d "* ]] || unstow+=("$d")
+done
+if [ ${#unstow[@]} -gt 0 ]; then
+  info "Unstowing other profiles' packages: ${unstow[*]}"
+  stow -D -t ~ "${unstow[@]}" || warn "unstow failed, continuing"
+fi
 
 info "Stowing dotfiles: ${stow_dirs[*]}"
 # --adopt pulls existing files into the repo so stow can link over them;
