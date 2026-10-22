@@ -276,7 +276,7 @@ info "Installing packages"
 install_packages
 
 info "Installing scripts"
-cp -p scripts/* ~/scripts/
+install -m755 scripts/* ~/scripts/
 
 if [ "$OS" = omarchy ]; then
   info "Removing Omarchy bloat"
