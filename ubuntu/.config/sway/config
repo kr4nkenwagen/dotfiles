@@ -7,7 +7,7 @@ set $mod Mod4
 set $term ghostty
 set $browser firefox
 set $menu fuzzel
-set $wallpaper ~/repos/dotfiles/nord-balloons.png
+set $wallpaper ~/repos/dotfiles/wallpapers/neon-city.png
 set $lock swaylock -f -i $wallpaper -s fill
 set $tui xdg-terminal-exec --app-id=TUI.float -e
 
