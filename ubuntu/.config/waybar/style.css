@@ -1,4 +1,5 @@
-/* Tokyo Night (night) */
+@import "colors.css";
+
 * {
   font-family: "Terminess Nerd Font Mono", monospace;
   font-size: 13px;
@@ -6,24 +7,24 @@
 }
 
 window#waybar {
-  background: rgba(26, 27, 38, 0.85);
-  color: #c0caf5;
+  background: alpha(@bg, 0.85);
+  color: @fg;
 }
 
 #workspaces button {
   padding: 0 6px;
-  color: #565f89;
+  color: @gray;
   background: transparent;
   border: none;
   border-radius: 0;
 }
 
-#workspaces button.active {
-  color: #7aa2f7;
+#workspaces button.focused {
+  color: @blue;
 }
 
 #workspaces button.urgent {
-  color: #f7768e;
+  color: @red;
 }
 
 #clock,
@@ -37,26 +38,26 @@ window#waybar {
 
 #wireplumber.muted,
 #network.disconnected {
-  color: #565f89;
+  color: @gray;
 }
 
 #battery.charging {
-  color: #9ece6a;
+  color: @green;
 }
 
 #battery.warning:not(.charging) {
-  color: #e0af68;
+  color: @yellow;
 }
 
 #battery.critical:not(.charging) {
-  color: #f7768e;
+  color: @red;
 }
 
 tooltip {
-  background: #1a1b26;
-  border: 1px solid #7aa2f7;
+  background: @bg;
+  border: 1px solid @blue;
 }
 
 tooltip label {
-  color: #c0caf5;
+  color: @fg;
 }

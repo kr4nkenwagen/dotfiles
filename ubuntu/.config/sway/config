@@ -57,7 +57,8 @@ input type:pointer {
 
 # Autostart
 exec dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP=sway
-exec waybar
+# exec_always so a reload restarts the bar and picks up config changes.
+exec_always sh -c 'pkill -x waybar; sleep 0.3; exec waybar'
 exec mako
 exec lxpolkit
 exec nm-applet
