@@ -25,7 +25,6 @@ command -q dust; and alias du='dust'
 command -q fd; and alias find='fd'
 command -q duf; and alias df='duf'
 command -q nvim; and alias vim='nvim'
-command -q zoxide; and alias cd='z'
 command -q fzf; and alias ff='fzf --preview="bat  --style=numbers --color=always {}"'
 
 alias notes="cd $NOTES"
@@ -52,8 +51,10 @@ alias music='jellyfin-tui'
 if command -q keychain
     keychain --eval --quiet id_ed25519 | source
 end
+# --cmd cd makes cd itself use zoxide (and adds cdi). Aliasing cd to z instead
+# recurses forever on older zoxide (0.9.2 on Ubuntu 24.04), whose jump calls cd.
 if command -q zoxide
-    zoxide init fish | source
+    zoxide init --cmd cd fish | source
 end
 if command -q starship
     starship init fish | source
