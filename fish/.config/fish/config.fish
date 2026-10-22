@@ -2,6 +2,13 @@ if not status is-interactive
     return
 end
 
+# Where init.sh puts things that are not in the distro's package manager.
+for p in ~/.local/bin ~/go/bin ~/.cargo/bin /usr/local/go/bin
+    if test -d $p; and not contains $p $PATH
+        set -gx PATH $p $PATH
+    end
+end
+
 set -gx FZF_DEFAULT_OPTS ''
 
 set -g SCRIPTS "$HOME/scripts"
@@ -41,9 +48,15 @@ alias nvp='nvim ~/.config/nvim/lua/plugins/plugins.lua'
 
 alias music='jellyfin-tui'
 
-keychain --eval --quiet id_ed25519 | source
-zoxide init fish | source
-starship init fish | source
+if command -q keychain
+    keychain --eval --quiet id_ed25519 | source
+end
+if command -q zoxide
+    zoxide init fish | source
+end
+if command -q starship
+    starship init fish | source
+end
 
 if not set -q TMUX; and not set -q SSH_CONNECTION
     tmux
@@ -51,7 +64,12 @@ end
 set -U fish_greeting ""
 set -g fish_key_bindings fish_vi_key_bindings
 set -Ux CARAPACE_BRIDGES 'zsh,fish,inshellisense'
-carapace _carapace | source
+if command -q carapace
+    carapace _carapace | source
+end
 
-source ~/.local/share/omarchy/default/bash/rc
+# Omarchy only
+if test -f ~/.local/share/omarchy/default/bash/rc
+    source ~/.local/share/omarchy/default/bash/rc
+end
 clear

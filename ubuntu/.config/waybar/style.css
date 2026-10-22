@@ -1,0 +1,62 @@
+/* Tokyo Night (night) */
+* {
+  font-family: "Terminess Nerd Font Mono", monospace;
+  font-size: 13px;
+  min-height: 0;
+}
+
+window#waybar {
+  background: rgba(26, 27, 38, 0.85);
+  color: #c0caf5;
+}
+
+#workspaces button {
+  padding: 0 6px;
+  color: #565f89;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+#workspaces button.active {
+  color: #7aa2f7;
+}
+
+#workspaces button.urgent {
+  color: #f7768e;
+}
+
+#clock,
+#tray,
+#wireplumber,
+#network,
+#bluetooth,
+#battery {
+  padding: 0 8px;
+}
+
+#wireplumber.muted,
+#network.disconnected {
+  color: #565f89;
+}
+
+#battery.charging {
+  color: #9ece6a;
+}
+
+#battery.warning:not(.charging) {
+  color: #e0af68;
+}
+
+#battery.critical:not(.charging) {
+  color: #f7768e;
+}
+
+tooltip {
+  background: #1a1b26;
+  border: 1px solid #7aa2f7;
+}
+
+tooltip label {
+  color: #c0caf5;
+}

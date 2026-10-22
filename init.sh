@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
 # Bootstrap a machine from this dotfiles repo. Detects Omarchy, Arch or Ubuntu. Safe to re-run.
+#
+# Fresh machine:
+#   curl -fsSL https://raw.githubusercontent.com/kr4nkenwagen/dotfiles/main/init.sh | bash
+# Already cloned:
+#   ./init.sh
+#
+# Ubuntu is the work-laptop profile: dev tools, shell, Hyprland, ghostty, nvim.
+# Tokyo Night everywhere, no games, chat, media or personal repos. Hyprland needs Ubuntu 26.04+.
 set -euo pipefail
 
 DOTFILES_DIR="${DOTFILES_DIR:-$HOME/repos/dotfiles}"
 DOTFILES_REPO="${DOTFILES_REPO:-https://github.com/kr4nkenwagen/dotfiles}"
 SRC_DIR="$HOME/.local/src"
+
+# Tools installed below land in these; make them visible for the rest of this run.
+export PATH="$HOME/.local/bin:$HOME/go/bin:/usr/local/go/bin:$PATH"
+export DEBIAN_FRONTEND=noninteractive
 
 info() { printf '\033[1;34m:: %s\033[0m\n' "$1"; }
 ok()   { printf '\033[1;32m:: %s\033[0m\n' "$1"; }
@@ -39,6 +51,12 @@ OS="$(detect_os)"
 info "Detected: $OS"
 [ "$(id -u)" -ne 0 ] || die "Run as your normal user, not root."
 
+case "$(uname -m)" in
+  x86_64)  DEB_ARCH=amd64; GO_ARCH=amd64; NVIM_ARCH=x86_64; RUST_TARGET=x86_64-unknown-linux-gnu ;;
+  aarch64) DEB_ARCH=arm64; GO_ARCH=arm64; NVIM_ARCH=arm64;  RUST_TARGET=aarch64-unknown-linux-gnu ;;
+  *) die "Unsupported CPU architecture: $(uname -m)" ;;
+esac
+
 ###########
 # PACKAGES #
 ###########
@@ -51,18 +69,27 @@ arch_packages=(
   discordo yq python-libtmux ripgrep youtube-dl go git neovim
 )
 
-# Ubuntu: only what exists in apt. The rest is handled in ubuntu_extras.
+# Ubuntu dev tools and shell. Go, Neovim, fonts and a few binaries apt lacks
+# are handled in ubuntu_extras. Packages missing on a release are skipped with a warning.
 ubuntu_packages=(
-  stow tmux qutebrowser fish python3-pip python3-libtmux nodejs libffi-dev
-  libssl-dev rtorrent mpv ranger aerc gdb yq ripgrep golang-go git curl
-  build-essential neovim fonts-terminus
+  stow tmux fish git curl wget unzip jq yq ripgrep fzf fd-find bat eza zoxide duf keychain
+  nodejs npm python3-pip python3-venv python3-libtmux
+  build-essential pkg-config libffi-dev libssl-dev gdb
+  fontconfig wl-clipboard btop lazygit ranger
 )
 
-stow_dirs=(fish nvim qutebrowser tmux aerc)
+# Ubuntu Hyprland desktop (26.04+). Pairs with the ubuntu stow package (waybar/fuzzel/mako, Tokyo Night).
+ubuntu_desktop_packages=(
+  hyprland hyprlock hypridle hyprsunset xdg-desktop-portal-hyprland xdg-desktop-portal-gtk
+  hyprpolkitagent waybar mako-notifier fuzzel swaybg swayosd xdg-terminal-exec
+  brightnessctl playerctl pavucontrol grim slurp network-manager-gnome blueman ghostty
+)
+
+stow_dirs=(fish nvim tmux)
 case "$OS" in
-  omarchy) stow_dirs+=(ghostty hypr omarchy vesktop) ;;
-  arch)    stow_dirs+=(ghostty) ;;
-  ubuntu)  stow_dirs+=(ghostty) ;;
+  omarchy) stow_dirs+=(qutebrowser aerc ghostty hypr omarchy vesktop) ;;
+  arch)    stow_dirs+=(qutebrowser aerc ghostty) ;;
+  ubuntu)  stow_dirs+=(ghostty ubuntu) ;;
 esac
 
 personal_repos=(CherryScript2 kr4nkengine pass astrokr4nk ai-docstring.nvim)
@@ -78,18 +105,124 @@ ensure_yay() {
   rm -rf "$tmp"
 }
 
+apt_has() { apt-cache show "$1" >/dev/null 2>&1; }
+
+# Install only the packages apt actually knows about on this release.
+apt_install_available() {
+  local pkgs=() missing=() p
+  for p in "$@"; do
+    if apt_has "$p"; then pkgs+=("$p"); else missing+=("$p"); fi
+  done
+  [ ${#missing[@]} -eq 0 ] || warn "Not in apt on this release, skipping: ${missing[*]}"
+  [ ${#pkgs[@]} -eq 0 ] || sudo apt-get install -y "${pkgs[@]}"
+}
+
+# chronos needs Go 1.23, clipse needs 1.24; apt's golang-go is older on LTS releases.
+ubuntu_go() {
+  if have go; then
+    local v maj min
+    v="$(go version | sed -E 's/.*go([0-9]+)\.([0-9]+).*/\1 \2/')"
+    read -r maj min <<<"$v"
+    if [ "$maj" -gt 1 ] || [ "$min" -ge 24 ]; then return; fi
+  fi
+  local want tmp
+  want="$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -1)" || { warn "could not look up Go version"; return; }
+  info "Installing $want to /usr/local/go"
+  tmp="$(mktemp)"
+  curl -fsSL "https://go.dev/dl/${want}.linux-${GO_ARCH}.tar.gz" -o "$tmp" || { warn "Go download failed"; rm -f "$tmp"; return; }
+  sudo rm -rf /usr/local/go
+  sudo tar -C /usr/local -xzf "$tmp"
+  rm -f "$tmp"
+}
+
+# LazyVim needs Neovim 0.11+; apt ships older. Use the official release tarball.
+ubuntu_neovim() {
+  if have nvim; then
+    local min
+    min="$(nvim --version | head -1 | sed -E 's/.*v[0-9]+\.([0-9]+).*/\1/')"
+    [ "${min:-0}" -ge 11 ] && return
+  fi
+  info "Installing Neovim (latest release) to /opt/nvim"
+  local tmp
+  tmp="$(mktemp -d)"
+  if curl -fsSL "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-${NVIM_ARCH}.tar.gz" -o "$tmp/nvim.tar.gz"; then
+    sudo rm -rf /opt/nvim
+    sudo mkdir -p /opt/nvim
+    sudo tar -C /opt/nvim --strip-components=1 -xzf "$tmp/nvim.tar.gz"
+    ln -sfn /opt/nvim/bin/nvim ~/.local/bin/nvim
+  else
+    warn "Neovim download failed"
+  fi
+  rm -rf "$tmp"
+}
+
+# Nerd Fonts used by ghostty/tmux/hyprlock configs. Not packaged for Ubuntu.
+ubuntu_fonts() {
+  local dir="$HOME/.local/share/fonts/nerd-fonts" font
+  for font in Terminus SpaceMono BigBlueTerminal FiraCode; do
+    [ -d "$dir/$font" ] && continue
+    info "Installing $font Nerd Font"
+    mkdir -p "$dir/$font"
+    curl -fsSL "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/${font}.tar.xz" \
+      | tar -xJ -C "$dir/$font" || { warn "$font download failed"; rm -rf "$dir/$font"; }
+  done
+  fc-cache -f >/dev/null
+}
+
+# URL of the first asset in a repo's latest GitHub release matching a regex.
+gh_latest_asset() {
+  curl -fsSL "https://api.github.com/repos/$1/releases/latest" \
+    | grep -o "https://[^\"]*$2" | head -1
+}
+
+ubuntu_carapace() {
+  local url tmp
+  url="$(gh_latest_asset carapace-sh/carapace-bin "carapace-bin_[^\"]*_linux_${DEB_ARCH}\.deb")" || true
+  [ -n "$url" ] || { warn "could not find carapace .deb"; return; }
+  tmp="$(mktemp --suffix=.deb)"
+  curl -fsSL "$url" -o "$tmp" && sudo apt-get install -y "$tmp" || warn "carapace install failed"
+  rm -f "$tmp"
+}
+
+# dust (du replacement used by the fish aliases) is not in apt; take the release binary.
+ubuntu_dust() {
+  local url tmp
+  url="$(gh_latest_asset bootandy/dust "dust-v[^\"]*-${RUST_TARGET}\.tar\.gz")" || true
+  [ -n "$url" ] || { warn "could not find dust release"; return; }
+  tmp="$(mktemp -d)"
+  curl -fsSL "$url" | tar -xz --strip-components=1 -C "$tmp" && install -m755 "$tmp/dust" ~/.local/bin/dust \
+    || warn "dust install failed"
+  rm -rf "$tmp"
+}
+
 ubuntu_extras() {
   info "Installing extras not in apt"
-  sudo apt-get install -y cargo || true
+
+  # Ubuntu renames these; the fish aliases expect bat/fd.
+  have bat || { have batcat && ln -sfn "$(command -v batcat)" ~/.local/bin/bat; }
+  have fd  || { have fdfind && ln -sfn "$(command -v fdfind)" ~/.local/bin/fd; }
+
+  ubuntu_go
+  ubuntu_neovim
+  ubuntu_fonts
+
+  have starship || curl -sS https://starship.rs/install.sh | sh -s -- -y -b "$HOME/.local/bin" || warn "starship install failed"
   have uv || curl -LsSf https://astral.sh/uv/install.sh | sh || warn "uv install failed"
-  # Community-maintained .deb builds (linked from ghostty.org); review the script before trusting it.
+  have carapace || ubuntu_carapace
+  have dust || ubuntu_dust
+  have clipse || go install github.com/savedra1/clipse@latest || warn "clipse install failed"
+}
+
+ubuntu_desktop() {
+  if ! apt_has hyprland; then
+    warn "Hyprland is not packaged for this Ubuntu release (needs 26.04+); skipping desktop"
+    return
+  fi
+  info "Installing Hyprland desktop"
+  apt_install_available "${ubuntu_desktop_packages[@]}"
+  # Community-maintained .deb builds (linked from ghostty.org) for releases without ghostty in apt.
   have ghostty || /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/mkasberg/ghostty-ubuntu/HEAD/install.sh)" \
     || warn "ghostty install failed; see https://github.com/mkasberg/ghostty-ubuntu"
-  have ollama || curl -fsSL https://ollama.com/install.sh | sh || warn "ollama install failed"
-  have mcfly || cargo install mcfly || warn "mcfly install failed"
-  for tool in clipse; do
-    have "$tool" || go install "github.com/savedra1/clipse@latest" || warn "$tool install failed"
-  done
 }
 
 install_packages() {
@@ -101,8 +234,9 @@ install_packages() {
       ;;
     ubuntu)
       sudo apt-get update
-      sudo apt-get install -y "${ubuntu_packages[@]}"
+      apt_install_available "${ubuntu_packages[@]}"
       ubuntu_extras
+      ubuntu_desktop
       ;;
   esac
 }
@@ -173,6 +307,11 @@ if have fish && ! grep -qxF 'fish' ~/.bashrc 2>/dev/null; then
   printf 'fish\n' >> ~/.bashrc
 fi
 
+if [ "$OS" = ubuntu ] && have fish; then
+  info "Setting fish theme"
+  fish -c 'fish_config theme save "TokyoNight Night"' || warn "fish theme not set"
+fi
+
 if [ "$OS" = omarchy ]; then
   info "Setting up Omarchy themes"
   mkdir -p ~/.config/omarchy/hooks
@@ -190,14 +329,20 @@ if [ "$OS" = omarchy ]; then
   omarchy-theme-bg-next
 fi
 
-info "Cloning personal repos"
-for repo in "${personal_repos[@]}"; do
-  if [ -d ~/repos/$repo ]; then
-    warn "$repo already exists, skipping"
-  else
-    git clone "git@github.com:kr4nkenwagen/$repo" ~/repos/"$repo" \
-      || warn "could not clone $repo (is your SSH key set up?)"
-  fi
-done
+if [ "$OS" = ubuntu ]; then
+  info "Skipping personal repos on the work profile"
+else
+  info "Cloning personal repos"
+  for repo in "${personal_repos[@]}"; do
+    if [ -d ~/repos/$repo ]; then
+      warn "$repo already exists, skipping"
+    else
+      git clone "git@github.com:kr4nkenwagen/$repo" ~/repos/"$repo" \
+        || warn "could not clone $repo (is your SSH key set up?)"
+    fi
+  done
+fi
 
 ok "Done ($OS). Log out and back in to pick up all changes."
+[ "$OS" = ubuntu ] && info "Pick the Hyprland session on the login screen."
+exit 0
