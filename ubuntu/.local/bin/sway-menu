@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# sway-menu: Omarchy-style system menu on fuzzel (dmenu mode) for the Ubuntu/Sway profile.
+#   sway-menu        open the menu (bound to Super+Alt+Space)
+#   sway-menu lock   lock the screen (used by the sway config and swayidle)
+#   sway-menu idle   start swayidle (used by the sway config)
+# Entries are "icon  Label"; the label (icon stripped) selects the action, so icons are free to change.
+set -u
+
+DOTFILES="${DOTFILES_DIR:-$HOME/repos/dotfiles}"
+SWAY_CONFIG="$HOME/.config/sway/config"
+STATE="$HOME/.local/state/sway"          # included by the sway config: *.conf
+SHOTS="$HOME/Pictures/Screenshots"
+RECS="$HOME/Videos/Recordings"
+DEFAULT_WALLPAPER="$DOTFILES/wallpapers/neon-city.png"
+
+menu() {  # menu PROMPT ENTRY... -> prints the chosen label without its icon; empty on escape
+  local prompt="$1"; shift
+  printf '%s\n' "$@" | fuzzel --dmenu --prompt "$prompt ❯ " --lines "$#" --width 40 \
+    | sed -E 's/^[^[:alnum:]]*[[:space:]]+//'
+}
+confirm() { [ "$(menu "$1" "󰄬  Yes" "󰅖  No")" = Yes ]; }
+notify() { command -v notify-send >/dev/null && notify-send "$@"; }
+tui() { xdg-terminal-exec --app-id=TUI.float -e "$@"; }
+tui_wait() { tui sh -c "$1; printf '\n[done] press enter to close'; read -r _"; }
+wallpaper() {
+  local f; f=$(sed -n 's/^output \* bg "\(.*\)" fill$/\1/p' "$STATE/background.conf" 2>/dev/null)
+  [ -f "${f:-}" ] && printf '%s' "$f" || printf '%s' "$DEFAULT_WALLPAPER"
+}
+lock() { swaylock -f -i "$(wallpaper)" -s fill; }
+idle() {
+  exec swayidle -w \
+    timeout 300 "$0 lock" \
+    timeout 330 'swaymsg "output * power off"' resume 'swaymsg "output * power on"' \
+    before-sleep "$0 lock"
+}
+
+# ---------- Capture ----------
+shot() {  # shot [grim args...]: save + copy
+  mkdir -p "$SHOTS"; local f="$SHOTS/$(date +%Y-%m-%d_%H-%M-%S).png"
+  grim "$@" "$f" && wl-copy < "$f" && notify "Screenshot" "Saved and copied: ${f##*/}"
+}
+window_geometry() {
+  swaymsg -t get_tree | jq -r '.. | select(.pid? and .visible?) | .rect | "\(.x),\(.y) \(.width)x\(.height)"' | slurp
+}
+record_toggle() {
+  if pgrep -x wf-recorder >/dev/null; then
+    pkill -INT -x wf-recorder; notify "Screen recording" "Stopped. Saved in ${RECS/#$HOME/~}"
+  else
+    mkdir -p "$RECS"; local f="$RECS/$(date +%Y-%m-%d_%H-%M-%S).mp4" g=""
+    if [ "${1:-}" = region ]; then g=$(slurp) || return; fi
+    if [ -n "$g" ]; then wf-recorder -g "$g" -f "$f" >/dev/null 2>&1 & else wf-recorder -f "$f" >/dev/null 2>&1 & fi
+    disown; notify "Screen recording" "Started. Open the menu again to stop."
+  fi
+}
+color_picker() {
+  local p hex; p=$(slurp -p) || return
+  hex=$(grim -g "$p" -t ppm - | tail -c 3 | od -An -tx1 | tr -d ' \n')
+  printf '#%s' "$hex" | wl-copy; notify "Color picked" "#$hex copied"
+}
+capture_menu() {
+  case "$(menu Capture "󰹑  Screenshot region" "󱣴  Screenshot window" "󰍹  Screenshot screen" "󰻃  Record region" "󰻂  Record screen" "󰈋  Color picker" "󰁍  Back")" in
+    "Screenshot region") local g; g=$(slurp) || return; shot -g "$g" ;;
+    "Screenshot window") local g; g=$(window_geometry) || return; shot -g "$g" ;;
+    "Screenshot screen") shot ;;
+    "Record region") record_toggle region ;;
+    "Record screen") record_toggle ;;
+    "Color picker") color_picker ;;
+    Back) main_menu ;;
+  esac
+}
+
+# ---------- Toggle ----------
+toggle_menu() {
+  local night idle bar dnd
+  pgrep -x wlsunset >/dev/null && night="on" || night="off"
+  pgrep -x swayidle >/dev/null && idle="on" || idle="off"
+  pgrep -x waybar   >/dev/null && bar="on"  || bar="off"
+  makoctl mode 2>/dev/null | grep -qx do-not-disturb && dnd="on" || dnd="off"
+  case "$(menu Toggle "󰖔  Night light ($night)" "󰌾  Idle lock ($idle)" "󰍜  Bar ($bar)" "󰂛  Do not disturb ($dnd)" "󰁍  Back")" in
+    "Night light"*) if [ $night = on ]; then pkill -x wlsunset; else wlsunset -t 4000 >/dev/null 2>&1 & disown; fi ;;
+    "Idle lock"*)   if [ $idle = on ]; then pkill -x swayidle; notify "Idle lock" "Off"; else "$0" idle >/dev/null 2>&1 & disown; notify "Idle lock" "On"; fi ;;
+    "Bar"*)         if [ $bar = on ]; then pkill -x waybar; else waybar >/dev/null 2>&1 & disown; fi ;;
+    "Do not disturb"*) if [ $dnd = on ]; then makoctl mode -r do-not-disturb; else makoctl mode -a do-not-disturb; fi ;;
+    Back) main_menu ;;
+  esac
+}
+
+# ---------- Style ----------
+style_menu() {
+  case "$(menu Style "󰸉  Background" "󰁍  Back")" in
+    Background)
+      local names=() f pick
+      for f in "$DOTFILES"/wallpapers/*; do names+=("󰋩  ${f##*/}"); done
+      pick=$(menu Background "${names[@]}" "󰁍  Back") || return
+      [ "$pick" = Back ] && { style_menu; return; }
+      [ -n "$pick" ] || return
+      f="$DOTFILES/wallpapers/$pick"
+      mkdir -p "$STATE"; printf 'output * bg "%s" fill\n' "$f" > "$STATE/background.conf"
+      swaymsg output '*' bg "$f" fill >/dev/null ;;
+    Back) main_menu ;;
+  esac
+}
+
+# ---------- Setup ----------
+setup_menu() {
+  case "$(menu Setup "󰕾  Audio" "󰤨  Wifi" "󰂯  Bluetooth" "󰁹  Power profile" "󰍹  Monitors" "󰌌  Keyboard layout" "󰒓  Edit sway config" "󰁍  Back")" in
+    Audio) pavucontrol & disown ;;
+    Wifi) tui nmtui ;;
+    Bluetooth) blueman-manager & disown ;;
+    "Power profile")
+      local cur p; cur=$(powerprofilesctl get 2>/dev/null)
+      p=$(menu "Power profile (now: $cur)" "󰓅  performance" "󰾅  balanced" "󰾆  power-saver" "󰁍  Back")
+      case "$p" in performance|balanced|power-saver) powerprofilesctl set "$p" && notify "Power profile" "$p" ;; Back) setup_menu ;; esac ;;
+    Monitors) wdisplays & disown ;;
+    "Keyboard layout")
+      local l; l=$(menu "Keyboard layout" "󰌌  us" "󰌌  se" "󰁍  Back")
+      case "$l" in us|se) swaymsg input type:keyboard xkb_layout "$l" >/dev/null && notify "Keyboard" "Layout: $l" ;; Back) setup_menu ;; esac ;;
+    "Edit sway config") tui nvim "$SWAY_CONFIG" ;;
+    Back) main_menu ;;
+  esac
+}
+
+# ---------- Install / Update / Learn / About / System ----------
+install_menu() {
+  case "$(menu Install "󰏖  Install package" "󰆴  Remove package" "󰁍  Back")" in
+    "Install package") tui_wait 'printf "Package(s) to install: "; read -r p; [ -n "$p" ] && sudo apt install $p' ;;
+    "Remove package")  tui_wait 'printf "Package(s) to remove: "; read -r p; [ -n "$p" ] && sudo apt remove $p' ;;
+    Back) main_menu ;;
+  esac
+}
+update_menu() {
+  case "$(menu Update "󰚰  System (apt)" "󰊢  Dotfiles (git pull + init.sh)" "󰁍  Back")" in
+    "System (apt)") tui_wait 'sudo apt update && sudo apt full-upgrade' ;;
+    "Dotfiles"*)    tui_wait "cd '$DOTFILES' && git pull --ff-only && bash init.sh" ;;
+    Back) main_menu ;;
+  esac
+}
+learn_menu() {
+  case "$(menu Learn "󰌌  Keybindings" "󰖟  Sway wiki" "󰊢  Dotfiles repo" "󰁍  Back")" in
+    Keybindings)
+      grep -E '^\s*bindsym' "$SWAY_CONFIG" \
+        | sed -E 's/^\s*bindsym\s+(--[a-z-]+\s+)*//; s/\$mod/Super/g; s/Mod1/Alt/g; s/\s+exec\s+/  →  /; s/^([^ ]+)\s+/\1  →  /' \
+        | fuzzel --dmenu --prompt "Keybindings ❯ " --lines 25 --width 80 >/dev/null ;;
+    "Sway wiki") xdg-open https://github.com/swaywm/sway/wiki ;;
+    "Dotfiles repo") xdg-open https://github.com/kr4nkenwagen/dotfiles ;;
+    Back) main_menu ;;
+  esac
+}
+about() { tui_wait 'command -v fastfetch >/dev/null && fastfetch || { uname -a; lsb_release -a; sway --version; }'; }
+system_menu() {
+  case "$(menu System "󰌾  Lock" "󰤄  Suspend" "󰑓  Reload sway" "󰍃  Logout" "󰜉  Reboot" "󰐥  Shutdown" "󰁍  Back")" in
+    Lock) lock ;;
+    Suspend) systemctl suspend ;;
+    "Reload sway") swaymsg reload >/dev/null ;;
+    Logout)   confirm "Log out?"  && swaymsg exit ;;
+    Reboot)   confirm "Reboot?"   && systemctl reboot ;;
+    Shutdown) confirm "Shut down?" && systemctl poweroff ;;
+    Back) main_menu ;;
+  esac
+}
+
+main_menu() {
+  case "$(menu Menu "󰀻  Apps" "󰧑  Learn" "󰄀  Capture" "󰔎  Toggle" "󰸌  Style" "󰒓  Setup" "󰏖  Install" "󰚰  Update" "󰋽  About" "󰐥  System")" in
+    Apps) fuzzel ;;
+    Learn) learn_menu ;;
+    Capture) capture_menu ;;
+    Toggle) toggle_menu ;;
+    Style) style_menu ;;
+    Setup) setup_menu ;;
+    Install) install_menu ;;
+    Update) update_menu ;;
+    About) about ;;
+    System) system_menu ;;
+  esac
+}
+
+case "${1:-}" in
+  lock) lock ;;
+  idle) idle ;;
+  "") main_menu ;;
+  *) echo "usage: sway-menu [lock|idle]" >&2; exit 2 ;;
+esac

@@ -8,7 +8,8 @@ set $term ghostty
 set $browser qutebrowser
 set $menu fuzzel
 set $wallpaper ~/repos/dotfiles/wallpapers/neon-city.png
-set $lock swaylock -f -i $wallpaper -s fill
+set $menu_sys ~/.local/bin/sway-menu
+set $lock $menu_sys lock
 set $tui xdg-terminal-exec --app-id=TUI.float -e
 
 font pango:Terminess Nerd Font Mono 11
@@ -64,15 +65,13 @@ exec lxpolkit
 exec nm-applet
 exec blueman-applet
 exec clipse -listen
-exec swayidle -w \
-    timeout 300 '$lock' \
-    timeout 330 'swaymsg "output * power off"' resume 'swaymsg "output * power on"' \
-    before-sleep '$lock'
+exec $menu_sys idle
 
 # Applications
 bindsym $mod+Return exec $term
 bindsym $mod+Mod1+Return exec xdg-terminal-exec
 bindsym $mod+space exec $menu
+bindsym $mod+Mod1+space exec $menu_sys
 bindsym $mod+Shift+b exec $browser
 bindsym $mod+Shift+n exec $term -e nvim
 bindsym $mod+Shift+t exec $tui btop
@@ -159,3 +158,5 @@ for_window [app_id="org.pulseaudio.pavucontrol"] floating enable, resize set 50 
 for_window [app_id="org.qutebrowser.qutebrowser"] opacity 0.5
 
 include /etc/sway/config.d/*
+# Written by sway-menu (background choice); loaded last so it overrides the default above.
+include ~/.local/state/sway/*.conf

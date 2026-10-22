@@ -209,7 +209,10 @@ c.fonts.messages.info = font
 c.fonts.prompts = font
 c.fonts.tabs.selected = font
 c.fonts.tabs.unselected = font
-c.fonts.tooltip = font
+try:
+    c.fonts.tooltip = font
+except Exception:  # option added after qutebrowser 2.5 (Ubuntu 24.04 ships 2.5.4)
+    pass
 c.fonts.debug_console = font
 
 # Binds
