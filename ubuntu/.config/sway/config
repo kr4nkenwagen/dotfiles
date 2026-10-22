@@ -5,7 +5,7 @@
 
 set $mod Mod4
 set $term ghostty
-set $browser firefox
+set $browser qutebrowser
 set $menu fuzzel
 set $wallpaper ~/repos/dotfiles/wallpapers/neon-city.png
 set $lock swaylock -f -i $wallpaper -s fill
@@ -155,5 +155,6 @@ bindsym --locked XF86AudioPrev exec playerctl previous
 # Window rules
 for_window [app_id="TUI.float"] floating enable, resize set 60 ppt 70 ppt, move position center
 for_window [app_id="org.pulseaudio.pavucontrol"] floating enable, resize set 50 ppt 60 ppt, move position center
+for_window [app_id="org.qutebrowser.qutebrowser"] opacity 0.5
 
 include /etc/sway/config.d/*

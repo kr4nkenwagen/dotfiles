@@ -6,7 +6,7 @@
 # Already cloned:
 #   ./init.sh
 #
-# Ubuntu is the work-laptop profile: dev tools, shell, Sway desktop, ghostty, nvim.
+# Ubuntu is the work-laptop profile: dev tools, shell, Sway desktop, ghostty, nvim, qutebrowser.
 # Tokyo Night everywhere, no games, chat, media or personal repos. Sway is used
 # instead of Hyprland because Ubuntu LTS (24.04) has no Hyprland in apt.
 set -euo pipefail
@@ -74,6 +74,7 @@ arch_packages=(
 # are handled in ubuntu_extras. Packages missing on a release are skipped with a warning.
 ubuntu_packages=(
   stow tmux fish git curl wget unzip jq yq ripgrep fzf fd-find bat eza zoxide duf keychain
+  qutebrowser python3-adblock
   nodejs npm python3-pip python3-venv python3-libtmux
   build-essential pkg-config libffi-dev libssl-dev gdb
   fontconfig wl-clipboard btop lazygit ranger
@@ -90,7 +91,7 @@ stow_dirs=(fish nvim tmux)
 case "$OS" in
   omarchy) stow_dirs+=(qutebrowser aerc ghostty hypr omarchy vesktop) ;;
   arch)    stow_dirs+=(qutebrowser aerc ghostty) ;;
-  ubuntu)  stow_dirs+=(ghostty ubuntu) ;;
+  ubuntu)  stow_dirs+=(ghostty qutebrowser ubuntu) ;;
 esac
 
 personal_repos=(CherryScript2 kr4nkengine pass astrokr4nk ai-docstring.nvim)

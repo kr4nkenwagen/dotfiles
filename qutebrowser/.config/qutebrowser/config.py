@@ -1,4 +1,7 @@
-import omarchy.draw
+try:
+    import omarchy.draw  # Omarchy-only helper (~/.config/qutebrowser/omarchy/), absent elsewhere
+except ImportError:
+    omarchy = None
 import os
 import re
 from qutebrowser.api import interceptor
@@ -68,6 +71,7 @@ interceptor.register(youtube_filter)
 def find_omarchy_theme_file():
     candidates = [
         os.path.expanduser("~/.local/state/omarchy/current/theme/colors.toml"),
+        os.path.expanduser("~/.config/qutebrowser/colors.toml"),  # non-Omarchy machines
     ]
     for path in candidates:
         if os.path.isfile(path):
