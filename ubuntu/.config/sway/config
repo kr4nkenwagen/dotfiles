@@ -1,0 +1,159 @@
+# Sway config for the Ubuntu work-laptop profile. Mirrors the Omarchy Hyprland
+# bindings as closely as Sway allows. Tokyo Night (night).
+# Needs: sway swaylock swayidle swaybg waybar mako fuzzel lxpolkit xdg-terminal-exec
+#        brightnessctl playerctl pavucontrol grim slurp wl-clipboard clipse
+
+set $mod Mod4
+set $term ghostty
+set $browser firefox
+set $menu fuzzel
+set $wallpaper ~/repos/dotfiles/nord-balloons.png
+set $lock swaylock -f -i $wallpaper -s fill
+set $tui xdg-terminal-exec --app-id=TUI.float -e
+
+font pango:Terminess Nerd Font Mono 11
+
+# Tokyo Night
+set $bg     #1a1b26
+set $fg     #c0caf5
+set $blue   #7aa2f7
+set $gray   #414868
+set $red    #f7768e
+#                       border  background text    indicator child_border
+client.focused          $blue   $blue      $bg     $blue     $blue
+client.focused_inactive $gray   $gray      $fg     $gray     $gray
+client.unfocused        $gray   $bg        $fg     $gray     $gray
+client.urgent           $red    $red       $bg     $red      $red
+
+default_border pixel 2
+default_floating_border pixel 2
+gaps inner 5
+gaps outer 10
+focus_follows_mouse yes
+floating_modifier $mod normal
+
+output * bg $wallpaper fill
+# Retina-class 2x display, matches hypr/monitors.conf. Comment out for 1080p/1440p.
+# output * scale 2
+
+# Input, matches hypr/input.conf
+input type:keyboard {
+    xkb_layout us
+    xkb_options compose:caps
+    xkb_numlock enabled
+    repeat_rate 40
+    repeat_delay 600
+}
+input type:touchpad {
+    natural_scroll enabled
+    scroll_factor 0.4
+    accel_profile adaptive
+    pointer_accel -0.2
+}
+input type:pointer {
+    accel_profile adaptive
+    pointer_accel -0.2
+}
+
+# Autostart
+exec dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP=sway
+exec waybar
+exec mako
+exec lxpolkit
+exec nm-applet
+exec blueman-applet
+exec clipse -listen
+exec swayidle -w \
+    timeout 300 '$lock' \
+    timeout 330 'swaymsg "output * power off"' resume 'swaymsg "output * power on"' \
+    before-sleep '$lock'
+
+# Applications
+bindsym $mod+Return exec $term
+bindsym $mod+Mod1+Return exec xdg-terminal-exec
+bindsym $mod+space exec $menu
+bindsym $mod+Shift+b exec $browser
+bindsym $mod+Shift+n exec $term -e nvim
+bindsym $mod+Shift+t exec $tui btop
+bindsym $mod+Shift+e exec $tui ranger
+bindsym $mod+Shift+v exec $tui clipse
+bindsym $mod+Shift+c exec $tui chronos
+bindsym $mod+Shift+g exec $tui sh -c 'cd "$(~/scripts/get_last_tmux_pwd.sh)" && exec lazygit'
+bindsym $mod+Shift+f exec pavucontrol
+
+# Windows
+bindsym $mod+x kill
+bindsym $mod+f fullscreen toggle
+bindsym $mod+t floating toggle
+bindsym $mod+o layout toggle split
+
+bindsym $mod+h focus left
+bindsym $mod+j focus down
+bindsym $mod+k focus up
+bindsym $mod+l focus right
+bindsym $mod+Left focus left
+bindsym $mod+Down focus down
+bindsym $mod+Up focus up
+bindsym $mod+Right focus right
+
+bindsym $mod+Shift+h move left
+bindsym $mod+Shift+j move down
+bindsym $mod+Shift+k move up
+bindsym $mod+Shift+l move right
+
+bindsym $mod+minus resize shrink width 100px
+bindsym $mod+equal resize grow width 100px
+bindsym $mod+Shift+minus resize shrink height 100px
+bindsym $mod+Shift+equal resize grow height 100px
+
+# Workspaces
+bindsym $mod+1 workspace number 1
+bindsym $mod+2 workspace number 2
+bindsym $mod+3 workspace number 3
+bindsym $mod+4 workspace number 4
+bindsym $mod+5 workspace number 5
+bindsym $mod+6 workspace number 6
+bindsym $mod+7 workspace number 7
+bindsym $mod+8 workspace number 8
+bindsym $mod+9 workspace number 9
+bindsym $mod+0 workspace number 10
+bindsym $mod+Shift+1 move container to workspace number 1
+bindsym $mod+Shift+2 move container to workspace number 2
+bindsym $mod+Shift+3 move container to workspace number 3
+bindsym $mod+Shift+4 move container to workspace number 4
+bindsym $mod+Shift+5 move container to workspace number 5
+bindsym $mod+Shift+6 move container to workspace number 6
+bindsym $mod+Shift+7 move container to workspace number 7
+bindsym $mod+Shift+8 move container to workspace number 8
+bindsym $mod+Shift+9 move container to workspace number 9
+bindsym $mod+Shift+0 move container to workspace number 10
+bindsym $mod+Tab workspace next_on_output
+bindsym $mod+Shift+Tab workspace prev_on_output
+bindsym $mod+s scratchpad show
+bindsym $mod+Shift+s move scratchpad
+
+# Session
+bindsym $mod+Escape exec $lock
+bindsym $mod+Shift+Escape exit
+bindsym $mod+Ctrl+r reload
+
+# Screenshots (copied to clipboard)
+bindsym Print exec grim -g "$(slurp)" - | wl-copy
+bindsym Shift+Print exec grim - | wl-copy
+
+# Media and brightness
+bindsym --locked XF86AudioRaiseVolume exec wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+
+bindsym --locked XF86AudioLowerVolume exec wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-
+bindsym --locked XF86AudioMute exec wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
+bindsym --locked XF86AudioMicMute exec wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle
+bindsym --locked XF86MonBrightnessUp exec brightnessctl set 5%+
+bindsym --locked XF86MonBrightnessDown exec brightnessctl set 5%-
+bindsym --locked XF86AudioPlay exec playerctl play-pause
+bindsym --locked XF86AudioNext exec playerctl next
+bindsym --locked XF86AudioPrev exec playerctl previous
+
+# Window rules
+for_window [app_id="TUI.float"] floating enable, resize set 60 ppt 70 ppt, move position center
+for_window [app_id="org.pulseaudio.pavucontrol"] floating enable, resize set 50 ppt 60 ppt, move position center
+
+include /etc/sway/config.d/*

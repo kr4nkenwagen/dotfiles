@@ -4,14 +4,13 @@
   "position": "top",
   "height": 26,
   "spacing": 4,
-  "modules-left": ["hyprland/workspaces"],
+  "modules-left": ["sway/workspaces"],
   "modules-center": ["clock"],
   "modules-right": ["tray", "wireplumber", "network", "bluetooth", "battery"],
 
-  "hyprland/workspaces": {
-    "format": "{id}",
-    "on-click": "activate",
-    "sort-by-number": true
+  "sway/workspaces": {
+    "format": "{name}",
+    "disable-scroll": true
   },
   "clock": {
     "format": "{:%A %H:%M}",
