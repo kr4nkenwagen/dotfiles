@@ -298,21 +298,31 @@ for d in "${all_stow_dirs[@]}"; do
   [ -d "$d" ] || continue
   [[ " ${stow_dirs[*]} " == *" $d "* ]] || unstow+=("$d")
 done
+# One package per stow call throughout: stow 2.4.1 mis-plans when several
+# packages in one invocation share a directory (ghostty and ubuntu both own
+# .config/ghostty), failing with conflicts or "unstow_contents() called with
+# invalid target".
 if [ ${#unstow[@]} -gt 0 ]; then
   info "Unstowing other profiles' packages: ${unstow[*]}"
-  stow -D -t ~ "${unstow[@]}" || warn "unstow failed, continuing"
+  for d in "${unstow[@]}"; do
+    stow -D -t ~ "$d" || warn "could not unstow $d"
+  done
 fi
 
 info "Stowing dotfiles: ${stow_dirs[*]}"
 # --adopt pulls existing files into the repo so stow can link over them;
 # only safe when the repo is clean, since the restore below discards changes.
 if [ -z "$(git status --porcelain)" ]; then
-  stow --adopt -t ~ "${stow_dirs[@]}"
+  for d in "${stow_dirs[@]}"; do
+    stow --adopt -t ~ "$d"
+  done
   git checkout -- .
 else
   warn "Repo has uncommitted changes, stowing without --adopt"
 fi
-stow -R -t ~ "${stow_dirs[@]}"
+for d in "${stow_dirs[@]}"; do
+  stow -R -t ~ "$d"
+done
 ln -sfn "$DOTFILES_DIR/.XCompose" ~/.XCompose
 
 info "Setting up tmux"
