@@ -16,16 +16,17 @@ set -g NOTES "$HOME/notes"
 set -g REPOS "$HOME/repos"
 set -g CONFIG "$HOME/.config"
 
-alias grep='rg'
-alias ls='eza -lh -a --group-directories-first --total-size --icons=auto'
-alias lt='eza -a --tree --level=2 --long --icons --git'
-alias cat='bat'
-alias du='dust'
-alias find='fd'
-alias df='duf'
-alias vim='nvim'
-alias cd='z'
-alias ff='fzf --preview="bat  --style=numbers --color=always {}"'
+# Only shadow the coreutils when the replacement is actually installed.
+command -q rg; and alias grep='rg'
+command -q eza; and alias ls='eza -lh -a --group-directories-first --total-size --icons=auto'
+command -q eza; and alias lt='eza -a --tree --level=2 --long --icons --git'
+command -q bat; and alias cat='bat'
+command -q dust; and alias du='dust'
+command -q fd; and alias find='fd'
+command -q duf; and alias df='duf'
+command -q nvim; and alias vim='nvim'
+command -q zoxide; and alias cd='z'
+command -q fzf; and alias ff='fzf --preview="bat  --style=numbers --color=always {}"'
 
 alias notes="cd $NOTES"
 alias scripts="cd $SCRIPTS"
