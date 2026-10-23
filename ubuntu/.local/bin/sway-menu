@@ -134,9 +134,9 @@ leaves_setup() { local p="${1:-}" cur; cur=$(powerprofilesctl get 2>/dev/null ||
 
 # ---------- Wi-Fi (nmcli + fuzzel; impala-like picker without iwd) ----------
 wifi_bars() { local n=${1:-0}; if [ "$n" -ge 75 ]; then printf '▂▄▆█'; elif [ "$n" -ge 50 ]; then printf '▂▄▆_'; elif [ "$n" -ge 25 ]; then printf '▂▄__'; else printf '▂___'; fi; }
-wifi_list() {  # prints "inuse<TAB>ssid<TAB>signal<TAB>security", strongest first, one line per SSID
+wifi_list() {  # prints "*|-<TAB>ssid<TAB>signal<TAB>security" (never an empty first field: read would drop it), strongest first
   nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY dev wifi list --rescan "${1:-no}" 2>/dev/null \
-    | sed 's/\\:/\x01/g' | awk -F: '$2 != "" && !seen[$2]++ { gsub(/\x01/, ":", $2); printf "%s\t%s\t%s\t%s\n", $1, $2, $3, $4 }' \
+    | sed 's/\\:/\x01/g' | awk -F: '$2 != "" && !seen[$2]++ { gsub(/\x01/, ":", $2); printf "%s\t%s\t%s\t%s\n", ($1 == "*" ? "*" : "-"), $2, $3, $4 }' \
     | sort -t$'\t' -k3,3nr
 }
 wifi_prompt() { fuzzel --dmenu --prompt "$1 ❯ " --lines 0 --width 40 ${2:+--password} < /dev/null; }
