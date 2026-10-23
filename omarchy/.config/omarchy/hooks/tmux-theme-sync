@@ -87,11 +87,17 @@ cat >"$TMUX_COLORS" <<EOF
 # Auto-generated from Omarchy theme: $THEME
 # File parsed: $COLOR_FILE
 
-set -g status-style "bg=$bg,fg=$fg"
+# Pane and status backgrounds stay "default" so the terminal's own background
+# (and its background-opacity) shows through. Omarchy's theme-set-tmux sets an
+# explicit bg on window-style, which would make every cell opaque; this file is
+# sourced after it by the theme-set hook and wins.
+set -g window-style "fg=$fg,bg=default"
+set -g window-active-style "fg=$fg,bg=default"
+set -g status-style "bg=default,fg=$fg"
 set -g pane-border-style "fg=$color8"
 set -g pane-active-border-style "fg=$color6"
-set -g window-status-format "#[fg=$fg,bg=$color8] #I #[fg=$fg,bg=$bg] #W "
-set -g window-status-current-format "#[fg=$color0,bg=$color4] #I #[fg=$color4,bg=$bg] #W "
+set -g window-status-format "#[fg=$fg,bg=$color8] #I #[fg=$fg,bg=default] #W "
+set -g window-status-current-format "#[fg=$color0,bg=$color4] #I #[fg=$color4,bg=default] #W "
 set -g message-style "bg=$color0,fg=$color6"
 set -g popup-style "bg=$bg,fg=$fg"
 set -g popup-border-style "fg=$color6"
