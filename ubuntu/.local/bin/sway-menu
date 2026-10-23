@@ -21,11 +21,11 @@ DEFAULT_WALLPAPER="$DOTFILES/wallpapers/neon-city.png"
 L=(); A=()
 reset() { L=(); A=(); }
 add() { L+=("$1"); A+=("$2"); }                  # add "icon  Label" 'action'
-show() {                                          # show PROMPT: run the chosen entry's action
-  local prompt="$1" n=${#L[@]} i
+show() {                                          # show PROMPT [ROWS]: run the chosen entry's action
+  local prompt="$1" n=${#L[@]} rows="${2:-25}" i
   [ "$n" -gt 0 ] || return 0
   i=$(printf '%s\n' "${L[@]}" | fuzzel --dmenu --index --prompt "$prompt ❯ " \
-        --lines "$(( n < 25 ? n : 25 ))" --width 60)
+        --lines "$(( n < rows ? n : rows ))" --width 60)
   [[ "${i:-}" =~ ^[0-9]+$ ]] && [ "$i" -lt "$n" ] || return 0
   eval "${A[$i]}"
 }
@@ -36,7 +36,10 @@ pick() {                                          # pick PROMPT ENTRY... -> prin
 }
 confirm() { [ "$(pick "$1" "󰄬  Yes" "󰅖  No")" = Yes ]; }
 notify() { command -v notify-send >/dev/null && notify-send "$@"; }
-tui() { xdg-terminal-exec --app-id=TUI.float -e "$@"; }
+tui() {  # floating terminal (matches the TUI.float window rule in the sway config)
+  if command -v ghostty >/dev/null; then ghostty --class=TUI.float -e "$@" >/dev/null 2>&1 & disown
+  else xdg-terminal-exec "$@" >/dev/null 2>&1 & disown; fi
+}
 tui_wait() { tui sh -c "$1; printf '\n[done] press enter to close'; read -r _"; }
 bg() { "$@" >/dev/null 2>&1 & disown; }
 
@@ -207,9 +210,12 @@ main_menu() {
   add "󰀻  Apps" 'bg fuzzel'
   for s in "${sections[@]}"; do add "$(section_icon "$s")  $(section_title "$s")" "submenu $s"; done
   add "󰋽  About" about
+  local top=${#L[@]}
+  # Leaves and apps come after the sections. Showing only $top rows keeps them out of
+  # sight until you type; fuzzel still filters across all of them.
   for s in "${sections[@]}"; do "leaves_$s" "$(section_title "$s") › "; done
   apps_add
-  show Menu
+  show Menu "$top"
 }
 
 case "${1:-}" in

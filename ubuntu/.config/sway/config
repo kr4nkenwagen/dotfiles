@@ -10,7 +10,7 @@ set $menu fuzzel
 set $wallpaper ~/repos/dotfiles/wallpapers/neon-city.png
 set $menu_sys ~/.local/bin/sway-menu
 set $lock $menu_sys lock
-set $tui xdg-terminal-exec --app-id=TUI.float -e
+set $tui $term --class=TUI.float -e
 
 font pango:Terminess Nerd Font Mono 11
 
