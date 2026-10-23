@@ -5,6 +5,7 @@
 #   sway-menu idle   start swayidle (used by the sway config)
 #   sway-menu pkg-install | pkg-remove   fzf over apt packages (run in the floating terminal)
 #   sway-menu wallpaper                   fzf wallpaper picker with image preview
+#   sway-menu wifi                        nmcli Wi-Fi picker (fuzzel)
 #   sway-menu vpn-connect NAME | vpn-pick FortiClient VPN (run in the floating terminal)
 # The top level lists the sections, every action of every section ("Section › Action"),
 # and every installed app, so typing searches all of it. Picking a section opens its submenu.
@@ -119,7 +120,8 @@ set_power() { powerprofilesctl set "$1" && notify "Power profile" "$1"; }
 leaves_setup() { local p="${1:-}" cur; cur=$(powerprofilesctl get 2>/dev/null || echo "?")
   add "󰕾  ${p}Audio (wiremix)" "tui sh -c 'command -v wiremix >/dev/null && exec wiremix || exec pavucontrol'"
   add "󰕾  ${p}Audio (GUI)" 'bg pavucontrol'
-  add "󰤨  ${p}Wifi" "tui sh -c 'systemctl is-active -q iwd && command -v impala >/dev/null && exec impala || exec nmtui'"
+  add "󰤨  ${p}Wifi" "wifi_menu"
+  add "󰤨  ${p}Wifi (nmtui)" 'tui nmtui'
   add "󰂯  ${p}Bluetooth (bluetui)" 'tui bluetui'
   add "󰂯  ${p}Bluetooth (GUI)" 'bg blueman-manager'
   add "󰓅  ${p}Power profile: performance (now: $cur)" 'set_power performance'
@@ -129,6 +131,39 @@ leaves_setup() { local p="${1:-}" cur; cur=$(powerprofilesctl get 2>/dev/null ||
   add "󰌌  ${p}Keyboard layout: us" 'set_layout us'
   add "󰌌  ${p}Keyboard layout: se" 'set_layout se'
   add "󰒓  ${p}Edit sway config" "tui nvim $(printf %q "$SWAY_CONFIG")"; }
+
+# ---------- Wi-Fi (nmcli + fuzzel; impala-like picker without iwd) ----------
+wifi_bars() { local n=${1:-0}; if [ "$n" -ge 75 ]; then printf '▂▄▆█'; elif [ "$n" -ge 50 ]; then printf '▂▄▆_'; elif [ "$n" -ge 25 ]; then printf '▂▄__'; else printf '▂___'; fi; }
+wifi_list() {  # prints "inuse<TAB>ssid<TAB>signal<TAB>security", strongest first, one line per SSID
+  nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY dev wifi list --rescan "${1:-no}" 2>/dev/null \
+    | sed 's/\\:/\x01/g' | awk -F: '$2 != "" && !seen[$2]++ { gsub(/\x01/, ":", $2); printf "%s\t%s\t%s\t%s\n", $1, $2, $3, $4 }' \
+    | sort -t$'\t' -k3,3nr
+}
+wifi_prompt() { fuzzel --dmenu --prompt "$1 ❯ " --lines 0 --width 40 ${2:+--password} < /dev/null; }
+wifi_connect() {  # wifi_connect SSID SECURITY [hidden]
+  local ssid="$1" sec="$2" hidden="${3:-}" pw="" out
+  if nmcli -g NAME con show 2>/dev/null | grep -qxF -- "$ssid"; then
+    out=$(nmcli con up id "$ssid" 2>&1) && { notify "Wi-Fi" "Connected to $ssid"; return; }
+    notify "Wi-Fi" "Saved connection failed, trying with a new password"
+  fi
+  if [ -n "$sec" ] && [ "$sec" != "--" ]; then pw=$(wifi_prompt "Password for $ssid" hide) || return; [ -n "$pw" ] || return; fi
+  if out=$(nmcli dev wifi connect "$ssid" ${pw:+password "$pw"} ${hidden:+hidden yes} 2>&1); then notify "Wi-Fi" "Connected to $ssid"
+  else notify -u critical "Wi-Fi" "$(printf '%s' "$out" | tail -2)"; fi
+}
+wifi_menu() {  # wifi_menu [rescan]
+  local inuse ssid sig sec entries=() ssids=() secs=() i
+  while IFS=$'\t' read -r inuse ssid sig sec; do
+    entries+=("$([ "$inuse" = '*' ] && printf '󰤨' || printf '󰤟')  ${ssid}  $(wifi_bars "$sig") ${sig}%  ${sec:---}$([ "$inuse" = '*' ] && printf '  (connected)')")
+    ssids+=("$ssid"); secs+=("$sec")
+  done < <(wifi_list "${1:-no}")
+  local n=${#entries[@]}
+  i=$(printf '%s\n' "${entries[@]}" "󰑓  Rescan" "󰤫  Hidden network…" "󰤭  Disconnect" | fuzzel --dmenu --index --prompt "Wi-Fi ❯ " --lines "$(( n + 3 < 20 ? n + 3 : 20 ))" --width 60)
+  [[ "${i:-}" =~ ^[0-9]+$ ]] || return 0
+  if [ "$i" -lt "$n" ]; then wifi_connect "${ssids[$i]}" "${secs[$i]}"
+  elif [ "$i" -eq "$n" ]; then wifi_menu yes
+  elif [ "$i" -eq $((n + 1)) ]; then local h; h=$(wifi_prompt "Hidden SSID") || return; [ -n "$h" ] && wifi_connect "$h" WPA hidden
+  else nmcli dev disconnect "$(nmcli -t -f DEVICE,TYPE dev | awk -F: '$2=="wifi"{print $1; exit}')" >/dev/null 2>&1; notify "Wi-Fi" "Disconnected"; fi
+}
 
 # ---------- VPN (FortiClient CLI: forticlient vpn list|connect|disconnect|status) ----------
 vpn_profiles() {  # one profile name per line, from the NAME column of forticlient's table output
@@ -361,8 +396,9 @@ case "${1:-}" in
   pkg-install) pkg_install ;;
   pkg-remove) pkg_remove ;;
   wallpaper) wallpaper_picker ;;
+  wifi) wifi_menu ;;
   vpn-connect) vpn_connect "${2:?profile name}" ;;
   vpn-pick) vpn_pick ;;
   "") main_menu ;;
-  *) echo "usage: sway-menu [lock|idle|pkg-install|pkg-remove|wallpaper|vpn-connect NAME|vpn-pick]" >&2; exit 2 ;;
+  *) echo "usage: sway-menu [lock|idle|pkg-install|pkg-remove|wallpaper|wifi|vpn-connect NAME|vpn-pick]" >&2; exit 2 ;;
 esac

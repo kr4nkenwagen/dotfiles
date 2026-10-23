@@ -80,8 +80,8 @@ bindsym $mod+Shift+v exec $tui clipse
 bindsym $mod+Shift+g exec $tui sh -c 'cd "$(~/scripts/get_last_tmux_pwd.sh)" && exec lazygit'
 bindsym $mod+Shift+f exec $tui sh -c 'command -v wiremix >/dev/null && exec wiremix || exec pavucontrol'
 bindsym $mod+Shift+q exec $tui bluetui
-# impala needs iwd (see UBUNTU_WIFI_IWD in init.sh); otherwise NetworkManager's nmtui
-bindsym $mod+Shift+w exec $tui sh -c 'systemctl is-active -q iwd && command -v impala >/dev/null && exec impala || exec nmtui'
+# impala needs iwd (see UBUNTU_WIFI_IWD in init.sh); otherwise the nmcli picker in sway-menu
+bindsym $mod+Shift+w exec sh -c 'systemctl is-active -q iwd && command -v impala >/dev/null && exec ghostty --class=TUI.float -e impala || exec ~/.local/bin/sway-menu wifi'
 
 # Windows
 bindsym $mod+x kill
