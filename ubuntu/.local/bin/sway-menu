@@ -3,10 +3,12 @@
 #   sway-menu        open the menu (bound to Super+Alt+Space)
 #   sway-menu lock   lock the screen (used by the sway config and swayidle)
 #   sway-menu idle   start swayidle (used by the sway config)
+#   sway-menu pkg-install | pkg-remove   fzf over apt packages (run in the floating terminal)
 # The top level lists the sections, every action of every section ("Section › Action"),
 # and every installed app, so typing searches all of it. Picking a section opens its submenu.
 set -u
 
+SELF=$(readlink -f "$0")
 DOTFILES="${DOTFILES_DIR:-$HOME/repos/dotfiles}"
 SWAY_CONFIG="$HOME/.config/sway/config"
 STATE="$HOME/.local/state/sway"          # included by the sway config: *.conf
@@ -111,9 +113,30 @@ leaves_setup() { local p="${1:-}" cur; cur=$(powerprofilesctl get 2>/dev/null ||
   add "󰒓  ${p}Edit sway config" "tui nvim $(printf %q "$SWAY_CONFIG")"; }
 
 # ---------- Install / Update / Learn / About / System ----------
+# fzf over apt, like omarchy-pkg-install/-remove. Runs inside the floating terminal.
+pkg_install() {
+  local pkgs
+  pkgs=$(apt-cache search --names-only . | sort \
+    | fzf --multi --prompt 'Install ❯ ' --header 'tab: select several · enter: install · esc: cancel' \
+          --preview 'apt-cache show {1} 2>/dev/null | grep -v -E "^(SHA|MD5|Filename|Size|Tag|Section|Priority)" | head -40' \
+          --preview-window right:55%:wrap | cut -d' ' -f1) || exit 0
+  [ -n "$pkgs" ] || exit 0
+  # shellcheck disable=SC2086
+  sudo apt install $pkgs; printf '\n[done] press enter to close'; read -r _
+}
+pkg_remove() {
+  local pkgs
+  pkgs=$(dpkg-query -W -f '${binary:Package} - ${Version}\n' | sort \
+    | fzf --multi --prompt 'Remove ❯ ' --header 'tab: select several · enter: remove · esc: cancel' \
+          --preview 'apt-cache show {1} 2>/dev/null | grep -v -E "^(SHA|MD5|Filename|Size|Tag|Section|Priority)" | head -40' \
+          --preview-window right:55%:wrap | cut -d' ' -f1) || exit 0
+  [ -n "$pkgs" ] || exit 0
+  # shellcheck disable=SC2086
+  sudo apt remove $pkgs; printf '\n[done] press enter to close'; read -r _
+}
 leaves_install() { local p="${1:-}"
-  add "󰏖  ${p}Install package" "tui_wait 'printf \"Package(s) to install: \"; read -r p; [ -n \"\$p\" ] && sudo apt install \$p'"
-  add "󰆴  ${p}Remove package"  "tui_wait 'printf \"Package(s) to remove: \"; read -r p; [ -n \"\$p\" ] && sudo apt remove \$p'"; }
+  add "󰏖  ${p}Install package" "tui $(printf %q "$SELF") pkg-install"
+  add "󰆴  ${p}Remove package"  "tui $(printf %q "$SELF") pkg-remove"; }
 leaves_update() { local p="${1:-}"
   add "󰚰  ${p}Update system (apt)" "tui_wait 'sudo apt update && sudo apt full-upgrade'"
   add "󰊢  ${p}Update dotfiles (git pull + init.sh)" "tui_wait \"cd $(printf %q "$DOTFILES") && git pull --ff-only && bash init.sh\""; }
@@ -180,6 +203,8 @@ main_menu() {
 case "${1:-}" in
   lock) lock ;;
   idle) idle ;;
+  pkg-install) pkg_install ;;
+  pkg-remove) pkg_remove ;;
   "") main_menu ;;
-  *) echo "usage: sway-menu [lock|idle]" >&2; exit 2 ;;
+  *) echo "usage: sway-menu [lock|idle|pkg-install|pkg-remove]" >&2; exit 2 ;;
 esac
