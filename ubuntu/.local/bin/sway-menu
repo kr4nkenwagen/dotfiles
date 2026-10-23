@@ -129,11 +129,12 @@ leaves_setup() { local p="${1:-}" cur; cur=$(powerprofilesctl get 2>/dev/null ||
   add "󰒓  ${p}Edit sway config" "tui nvim $(printf %q "$SWAY_CONFIG")"; }
 
 # ---------- VPN (FortiClient CLI: forticlient vpn list|connect|disconnect|status) ----------
-vpn_profiles() {  # one profile name per line; tolerant of "Name: x" or bare-name list formats
-  local out; out=$(forticlient vpn list 2>/dev/null) || return 0
-  local names; names=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*[Nn]ame[[:space:]]*:[[:space:]]*//p')
-  [ -n "$names" ] || names=$(printf '%s\n' "$out" | sed 's/^[[:space:]]*//' | grep -v -E '^$|^-+$|^=+$|^(Name|Type|Server|Profile)')
-  printf '%s\n' "$names"
+vpn_profiles() {  # one profile name per line, from the NAME column of forticlient's table output
+  forticlient vpn list 2>/dev/null | awk -F'|' '
+    /^\|/ {
+      if (!col) { for (i = 1; i <= NF; i++) { h = $i; gsub(/^ +| +$/, "", h); if (h == "NAME") col = i }; next }
+      n = $col; gsub(/^ +| +$/, "", n); if (n != "") print n
+    }'
 }
 vpn_state() {
   local st; st=$(forticlient vpn status 2>/dev/null)
