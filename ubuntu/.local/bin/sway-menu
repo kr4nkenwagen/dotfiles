@@ -164,8 +164,9 @@ vpn_pick() {  # fzf over profiles, in the floating terminal
 }
 
 # ---------- Bookmarks (Chrome folder "$BOOKMARK_FOLDER", from profile files and managed policy) ----------
-# Default: every Chrome bookmark (profiles + managed policy). Set SWAY_MENU_BOOKMARK_FOLDER=Name to show one folder only.
-BOOKMARK_FOLDER="${SWAY_MENU_BOOKMARK_FOLDER:-}"
+# Chrome bookmarks folder to list (profiles + managed policy). Empty = every bookmark.
+# Override with SWAY_MENU_BOOKMARK_FOLDER in the session environment (not fish: sway launches this directly).
+BOOKMARK_FOLDER="${SWAY_MENU_BOOKMARK_FOLDER-Fortnox}"
 bookmarks_list() {  # prints "path<TAB>title<TAB>url", path like "Sub › Deeper" (may be empty)
   python3 - "$BOOKMARK_FOLDER" "$HOME" <<'PY'
 import glob, json, os, sys
