@@ -18,6 +18,7 @@ STATE="$HOME/.local/state/sway"          # included by the sway config: *.conf
 SHOTS="$HOME/Pictures/Screenshots"
 RECS="$HOME/Videos/Recordings"
 DEFAULT_WALLPAPER="$DOTFILES/wallpapers/neon-city.png"
+WALLPAPER_DIRS=("$DOTFILES/wallpapers" "$HOME/repos/cool-wallpapers/tokyonight")  # cloned by init.sh
 
 # ---------- tiny menu framework: parallel arrays of labels and actions ----------
 L=(); A=()
@@ -104,15 +105,18 @@ set_background() { local f="$1"; mkdir -p "$STATE"
 wallpaper_picker() {
   local fmt=symbols f
   [ -n "${GHOSTTY_RESOURCES_DIR:-}" ] || [ -n "${KITTY_WINDOW_ID:-}" ] && fmt=kitty
-  f=$(find "$DOTFILES/wallpapers" -maxdepth 1 -type f -printf '%f\n' | sort \
-    | fzf --prompt 'Background ❯ ' --header 'enter: set · esc: cancel' \
-          --preview "chafa -f $fmt -s \${FZF_PREVIEW_COLUMNS}x\${FZF_PREVIEW_LINES} $(printf %q "$DOTFILES/wallpapers")/{}" \
+  # Full paths from every wallpaper dir; fzf shows just the file name (last / field).
+  f=$(find "${WALLPAPER_DIRS[@]}" -maxdepth 1 -type f 2>/dev/null | sort \
+    | fzf --prompt 'Background ❯ ' --header 'enter: set · esc: cancel' --delimiter / --with-nth -1 \
+          --preview "chafa -f $fmt -s \${FZF_PREVIEW_COLUMNS}x\${FZF_PREVIEW_LINES} {}" \
           --preview-window 'right:75%:noborder') || exit 0
-  [ -n "$f" ] && set_background "$DOTFILES/wallpapers/$f"
+  [ -n "$f" ] && set_background "$f"
 }
-leaves_style() { local p="${1:-}" f
+leaves_style() { local p="${1:-}" d f
   add "󰸉  ${p}Background picker (preview)" "tui $(printf %q "$SELF") wallpaper"
-  for f in "$DOTFILES"/wallpapers/*; do [ -f "$f" ] && add "󰋩  ${p}Background: ${f##*/}" "set_background $(printf %q "$f")"; done; }
+  for d in "${WALLPAPER_DIRS[@]}"; do
+    for f in "$d"/*; do [ -f "$f" ] && add "󰋩  ${p}Background: ${f##*/}" "set_background $(printf %q "$f")"; done
+  done; }
 
 # ---------- Setup ----------
 set_layout() { swaymsg input type:keyboard xkb_layout "$1" >/dev/null && notify "Keyboard" "Layout: $1"; }
@@ -286,11 +290,8 @@ for f in glob.glob(f"{home}/.config/google-chrome*/Policy/*Cloud Policy") + glob
     for arr in json_arrays(data): policy_items(arr)
 PY
 }
-open_url() {  # as a web-app window (no tabs/address bar), like omarchy-launch-webapp
-  local b; for b in google-chrome google-chrome-stable chromium chromium-browser; do
-    command -v "$b" >/dev/null && { bg "$b" --new-window --app="$1"; return; }
-  done
-  bg xdg-open "$1"
+open_url() {  # bookmarks come from Chrome, but open in qutebrowser (the session's browser)
+  if command -v qutebrowser >/dev/null; then bg qutebrowser "$1"; else bg xdg-open "$1"; fi
 }
 leaves_bookmarks() { local p="${1:-}" path title url n=0
   while IFS=$'\t' read -r url title path; do

@@ -421,8 +421,20 @@ if [ "$OS" = ubuntu ] && have fish; then
   fish -c 'fish_config theme save "TokyoNight Night"' || warn "fish theme not set"
 fi
 
+# Tokyo Night wallpapers (third-party, ~120 MB, so referenced rather than vendored):
+# Omarchy lists them for the tokyo-night theme, sway-menu's picker lists them on Ubuntu.
+info "Fetching wallpapers"
+if [ -d ~/repos/cool-wallpapers ]; then
+  warn "cool-wallpapers already exists, skipping"
+else
+  git clone --depth 1 https://github.com/atraxsrc/cool-wallpapers.git ~/repos/cool-wallpapers \
+    || warn "could not clone cool-wallpapers"
+fi
+
 if [ "$OS" = omarchy ]; then
   info "Setting up Omarchy themes"
+  mkdir -p ~/.config/omarchy/backgrounds
+  ln -sfn ~/repos/cool-wallpapers/tokyonight ~/.config/omarchy/backgrounds/tokyo-night
   mkdir -p ~/.config/omarchy/hooks
   if ! ls ~/.config/omarchy/hooks | grep -qi theme; then
     curl -fsSL https://imbypass.github.io/omarchy-theme-hook/install.sh | bash

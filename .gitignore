@@ -20,3 +20,5 @@ user-dirs.*
 wl-clipboard
 /aerc/.config/aerc/accounts.conf
 /.XCompose
+__pycache__/
+qutebrowser/.config/qutebrowser/greasemonkey/requires/
