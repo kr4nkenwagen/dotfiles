@@ -216,12 +216,27 @@ ubuntu_extras() {
   have clipse || go install github.com/savedra1/clipse@latest || warn "clipse install failed"
 }
 
+# Tokyo Night window colour for Chrome via a managed policy, the same mechanism
+# Omarchy uses for Chromium/Chrome (omarchy-theme-set-browser-policy).
+ubuntu_browser_theme() {
+  local dir=/etc/opt/chrome/policies/managed tmp
+  tmp="$(mktemp)"
+  printf '{"BrowserThemeColor": "#1a1b26", "BrowserColorScheme": "dark"}\n' > "$tmp"
+  sudo install -d -m 0755 -o root -g root /etc/opt/chrome /etc/opt/chrome/policies "$dir" \
+    && sudo install -m 0644 -o root -g root "$tmp" "$dir/color.json" || warn "could not write Chrome theme policy"
+  rm -f "$tmp"
+  if pgrep -x chrome >/dev/null; then
+    (google-chrome --refresh-platform-policy --no-startup-window >/dev/null 2>&1 || true)
+  fi
+}
+
 ubuntu_desktop() {
   info "Installing Sway desktop"
   apt_install_available "${ubuntu_desktop_packages[@]}"
   # Community-maintained .deb builds (linked from ghostty.org) for releases without ghostty in apt.
   have ghostty || /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/mkasberg/ghostty-ubuntu/HEAD/install.sh)" \
     || warn "ghostty install failed; see https://github.com/mkasberg/ghostty-ubuntu"
+  ubuntu_browser_theme
 }
 
 install_packages() {
