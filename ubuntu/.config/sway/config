@@ -77,9 +77,11 @@ bindsym $mod+Shift+n exec $term -e nvim
 bindsym $mod+Shift+t exec $tui btop
 bindsym $mod+Shift+e exec $tui ranger
 bindsym $mod+Shift+v exec $tui clipse
-bindsym $mod+Shift+c exec $tui chronos
 bindsym $mod+Shift+g exec $tui sh -c 'cd "$(~/scripts/get_last_tmux_pwd.sh)" && exec lazygit'
-bindsym $mod+Shift+f exec pavucontrol
+bindsym $mod+Shift+f exec $tui sh -c 'command -v wiremix >/dev/null && exec wiremix || exec pavucontrol'
+bindsym $mod+Shift+q exec $tui bluetui
+# impala needs iwd (see UBUNTU_WIFI_IWD in init.sh); otherwise NetworkManager's nmtui
+bindsym $mod+Shift+w exec $tui sh -c 'systemctl is-active -q iwd && command -v impala >/dev/null && exec impala || exec nmtui'
 
 # Windows
 bindsym $mod+x kill

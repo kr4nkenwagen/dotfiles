@@ -117,9 +117,11 @@ leaves_style() { local p="${1:-}" f
 set_layout() { swaymsg input type:keyboard xkb_layout "$1" >/dev/null && notify "Keyboard" "Layout: $1"; }
 set_power() { powerprofilesctl set "$1" && notify "Power profile" "$1"; }
 leaves_setup() { local p="${1:-}" cur; cur=$(powerprofilesctl get 2>/dev/null || echo "?")
-  add "󰕾  ${p}Audio" 'bg pavucontrol'
-  add "󰤨  ${p}Wifi" 'tui nmtui'
-  add "󰂯  ${p}Bluetooth" 'bg blueman-manager'
+  add "󰕾  ${p}Audio (wiremix)" "tui sh -c 'command -v wiremix >/dev/null && exec wiremix || exec pavucontrol'"
+  add "󰕾  ${p}Audio (GUI)" 'bg pavucontrol'
+  add "󰤨  ${p}Wifi" "tui sh -c 'systemctl is-active -q iwd && command -v impala >/dev/null && exec impala || exec nmtui'"
+  add "󰂯  ${p}Bluetooth (bluetui)" 'tui bluetui'
+  add "󰂯  ${p}Bluetooth (GUI)" 'bg blueman-manager'
   add "󰓅  ${p}Power profile: performance (now: $cur)" 'set_power performance'
   add "󰾅  ${p}Power profile: balanced (now: $cur)" 'set_power balanced'
   add "󰾆  ${p}Power profile: power-saver (now: $cur)" 'set_power power-saver'

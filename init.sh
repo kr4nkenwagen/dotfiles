@@ -16,7 +16,7 @@ DOTFILES_REPO="${DOTFILES_REPO:-https://github.com/kr4nkenwagen/dotfiles}"
 SRC_DIR="$HOME/.local/src"
 
 # Tools installed below land in these; make them visible for the rest of this run.
-export PATH="$HOME/.local/bin:$HOME/go/bin:/usr/local/go/bin:$PATH"
+export PATH="$HOME/.local/bin:$HOME/go/bin:$HOME/.cargo/bin:/usr/local/go/bin:$PATH"
 export DEBIAN_FRONTEND=noninteractive
 
 info() { printf '\033[1;34m:: %s\033[0m\n' "$1"; }
@@ -198,6 +198,43 @@ ubuntu_dust() {
   rm -rf "$tmp"
 }
 
+# Install a single-binary GitHub release asset into ~/.local/bin.
+gh_bin() {  # gh_bin NAME REPO ASSET_REGEX
+  local url; url="$(gh_latest_asset "$2" "$3")" || true
+  [ -n "$url" ] || { warn "no release asset for $1"; return 1; }
+  curl -fsSL "$url" -o ~/.local/bin/"$1" && chmod +x ~/.local/bin/"$1"
+}
+gh_tar_bin() {  # gh_tar_bin NAME REPO ASSET_REGEX: tarball containing the binary NAME
+  local url tmp; url="$(gh_latest_asset "$2" "$3")" || true
+  [ -n "$url" ] || { warn "no release asset for $1"; return 1; }
+  tmp="$(mktemp -d)"
+  curl -fsSL "$url" | tar -xz -C "$tmp" && find "$tmp" -type f -name "$1" -exec install -m755 {} ~/.local/bin/"$1" \;
+  rm -rf "$tmp"
+}
+
+# TUIs bound in the sway config (same keys as Omarchy): bluetui, impala, wiremix, lazygit.
+ubuntu_tuis() {
+  local arch; arch="$(uname -m)"
+  have bluetui || gh_bin bluetui pythops/bluetui "bluetui-${arch}-linux-musl" || warn "bluetui install failed"
+  have impala  || gh_bin impala pythops/impala "impala-${arch}-unknown-linux-musl" || warn "impala install failed"
+  if ! have lazygit; then
+    local lg="x86_64"; [ "$arch" = aarch64 ] && lg="arm64"
+    gh_tar_bin lazygit jesseduffield/lazygit "lazygit_[^\"]*_linux_${lg}\.tar\.gz" || warn "lazygit install failed"
+  fi
+  if ! have wiremix; then
+    info "Building wiremix (cargo)"
+    apt_install_available libpipewire-0.3-dev clang pkg-config
+    have cargo || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal || warn "rustup install failed"
+    PATH="$HOME/.cargo/bin:$PATH" cargo install --locked wiremix || warn "wiremix build failed"
+  fi
+  # impala talks to iwd. Opt in to switching NetworkManager's Wi-Fi backend with UBUNTU_WIFI_IWD=1.
+  if [ "${UBUNTU_WIFI_IWD:-0}" = 1 ]; then
+    apt_install_available iwd
+    printf '[device]\nwifi.backend=iwd\n' | sudo tee /etc/NetworkManager/conf.d/wifi-backend-iwd.conf >/dev/null
+    sudo systemctl enable --now iwd && sudo systemctl restart NetworkManager || warn "iwd switch failed"
+  fi
+}
+
 ubuntu_extras() {
   info "Installing extras not in apt"
 
@@ -214,6 +251,7 @@ ubuntu_extras() {
   have carapace || ubuntu_carapace
   have dust || ubuntu_dust
   have clipse || go install github.com/savedra1/clipse@latest || warn "clipse install failed"
+  ubuntu_tuis
 }
 
 # Tokyo Night window colour for Chrome via a managed policy, the same mechanism
@@ -318,12 +356,14 @@ if [ "$OS" = omarchy ]; then
   bash "$DOTFILES_DIR/debloat.sh"
 fi
 
-info "Building chronos"
-if [ ! -d "$SRC_DIR/chronos/.git" ]; then
-  git clone https://github.com/samuelstranges/chronos "$SRC_DIR/chronos"
+if [ "$OS" != ubuntu ]; then
+  info "Building chronos"
+  if [ ! -d "$SRC_DIR/chronos/.git" ]; then
+    git clone https://github.com/samuelstranges/chronos "$SRC_DIR/chronos"
+  fi
+  (cd "$SRC_DIR/chronos" && go build -o "$HOME/.local/bin/chronos" .) || warn "chronos build failed"
+  mkdir -p ~/.config/chronos/calendars
 fi
-(cd "$SRC_DIR/chronos" && go build -o "$HOME/.local/bin/chronos" .) || warn "chronos build failed"
-mkdir -p ~/.config/chronos/calendars
 
 # Drop dangling links into this repo left by packages that no longer ship a file.
 find ~ ~/.config -maxdepth 1 -xtype l -lname "*${DOTFILES_DIR##*/}*" -print -delete 2>/dev/null | sed 's/^/:: removed stale link /' || true
