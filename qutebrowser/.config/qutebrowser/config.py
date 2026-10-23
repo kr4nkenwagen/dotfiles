@@ -54,6 +54,8 @@ def save_colors(css: str, colors: dict):
     font = get_font()
     if font:
         css = re.sub(r"--font:\s*[^;]+;", f"--font: {font};", css)
+    if colors.get("bg_translucent"):
+        css = re.sub(r"--bg_translucent:\s*[^;]+;", f"--bg_translucent: {colors['bg_translucent']};", css)
 
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(css)
@@ -144,6 +146,38 @@ def get_font_size():
         return 11
     except Exception:
         return 11
+
+def get_bg_opacity():
+    """Background alpha: ~/.config/qutebrowser/opacity (a number 0..1) if present,
+    else ghostty's background-opacity so the browser is as see-through as the
+    terminal. ghostty files are read in include order; the last value wins.
+    1.0 (opaque) when nothing sets it."""
+    override = Path("~/.config/qutebrowser/opacity").expanduser()
+    try:
+        return max(0.0, min(1.0, float(override.read_text(encoding="utf-8").strip())))
+    except Exception:
+        pass
+    xdg_config = os.environ.get("XDG_CONFIG_HOME")
+    conf_dir = Path(xdg_config) / "ghostty" if xdg_config else Path("~/.config/ghostty").expanduser()
+    files = [
+        conf_dir / "config",
+        Path("~/.local/state/omarchy/current/theme/ghostty.conf").expanduser(),
+        conf_dir / "local.conf",
+    ]
+    pattern = re.compile(r"^\s*background-opacity\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*(?:#.*)?$", re.MULTILINE)
+    opacity = 1.0
+    for f in files:
+        try:
+            matches = pattern.findall(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if matches:
+            opacity = float(matches[-1])
+    return max(0.0, min(1.0, opacity))
+
+def with_alpha(hex6, alpha):
+    """#RRGGBB -> #AARRGGBB (Qt stylesheet colour with alpha)."""
+    return f"#{int(round(alpha * 255)):02x}{hex6[1:7]}"
 # Validate and apply fallbacks (Prioritizes explicit foreground colors)
 bg_default = clean_hex(background_color, "#1e1e2e")
 fg_default = clean_hex(foreground_color or colors[7] or colors[15], "#cdd6f4")
@@ -160,7 +194,13 @@ bg_passthrough_mode = clean_hex(colors[13] or colors[5], "#f5c2e7")
 bg_insert_mode = clean_hex(colors[14] or colors[4], "#89b4fa")
 bg_warning = clean_hex(colors[11] or colors[3], "#f9e2af")
 
-bg_transparent = bg_default[:7] + "00"
+# Background alpha mirrors the terminal: backgrounds see-through, foreground solid.
+bg_alpha = get_bg_opacity()
+translucent = bg_alpha < 1.0
+bg_panel = with_alpha(bg_default, bg_alpha)
+bg_panel_lighter = with_alpha(bg_lighter, bg_alpha)
+_r, _g, _b = (int(bg_default[i:i + 2], 16) for i in (1, 3, 5))
+bg_translucent = f"rgba({_r}, {_g}, {_b}, {bg_alpha:g})"
 
 # Default qutebrowser settings
 config.set('content.cookies.accept', 'all', 'chrome-devtools://*')
@@ -184,7 +224,91 @@ c.url.start_pages = ['https://github.com/kr4nkenwagen']
 c.url.default_page = 'https://github.com/kr4nkenwagen'
 c.downloads.prevent_mixed_content = False
 c.tabs.position = 'left'
-c.window.transparent = False
+c.window.transparent = translucent
+
+# When the page background has alpha, QtWebEngine sets WA_AlwaysStackOnTop on the
+# QQuickWidget that shows the page (WebEngineQuickWidget::SetClearColor), which
+# draws it over every sibling widget: completion, keyhint, prompts and messages
+# end up behind the page (https://github.com/qutebrowser/qutebrowser/issues/5948).
+# Clearing the attribute keeps the overlays in front; the page stays translucent
+# because the window itself is transparent. (qt.force_software_rendering = qt-quick
+# also fixes it, but turns off the GPU in Chromium: no WebGL, software video.)
+# qutebrowser drops modules that config.py imports, so the patch is applied from
+# an import hook when the webview module is really loaded.
+if translucent:
+    try:
+        import importlib.abc
+        import importlib.util
+        import sys
+
+        def _patch_webview(module):
+            try:
+                from qutebrowser.qt.core import Qt, QEvent, QObject, QTimer
+                from qutebrowser.qt.widgets import QWidget
+            except ImportError:  # qutebrowser 2.x (Ubuntu 24.04): no qutebrowser.qt wrappers
+                from PyQt5.QtCore import Qt, QEvent, QObject, QTimer
+                from PyQt5.QtWidgets import QWidget
+            stack_on_top = Qt.WidgetAttribute.WA_AlwaysStackOnTop
+
+            class StackFix(QObject):
+                def eventFilter(self, obj, event):
+                    t = event.type()
+                    if t == QEvent.Type.ChildAdded:
+                        child = event.child()
+                        if child.isWidgetType():
+                            child.installEventFilter(self)
+                            QTimer.singleShot(0, lambda ch=child: self.fix(ch))
+                    elif t in (QEvent.Type.Show, QEvent.Type.Resize, QEvent.Type.Paint) and obj.isWidgetType():
+                        self.fix(obj)
+                    return False
+
+                @staticmethod
+                def fix(widget):
+                    try:
+                        if widget.testAttribute(stack_on_top):
+                            widget.setAttribute(stack_on_top, False)
+                    except RuntimeError:  # underlying C++ widget already deleted
+                        pass
+
+            orig_init = module.WebEngineView.__init__
+
+            def patched_init(self, *args, **kwargs):
+                orig_init(self, *args, **kwargs)
+                self._stackfix = StackFix(self)
+                self.installEventFilter(self._stackfix)
+                for child in self.findChildren(QWidget):
+                    child.installEventFilter(self._stackfix)
+                    StackFix.fix(child)
+
+            module.WebEngineView.__init__ = patched_init
+
+        class _WebviewPatchFinder(importlib.abc.MetaPathFinder):
+            NAME = 'qutebrowser.browser.webengine.webview'
+
+            def find_spec(self, name, path, target=None):
+                if name != self.NAME:
+                    return None
+                sys.meta_path.remove(self)
+                try:
+                    spec = importlib.util.find_spec(name)
+                finally:
+                    sys.meta_path.insert(0, self)
+                if spec is None or spec.loader is None:
+                    return spec
+                orig_exec = spec.loader.exec_module
+
+                def exec_module(module):
+                    orig_exec(module)
+                    _patch_webview(module)
+                spec.loader.exec_module = exec_module
+                return spec
+
+        if _WebviewPatchFinder.NAME in sys.modules:
+            _patch_webview(sys.modules[_WebviewPatchFinder.NAME])
+        else:
+            sys.meta_path.insert(0, _WebviewPatchFinder())
+    except Exception as e:
+        print(f"qutebrowser config: overlay stacking fix not applied: {e!r}")
 c.colors.webpage.darkmode.enabled = True
 c.content.blocking.method = 'both'
 c.statusbar.show = 'in-mode'
@@ -252,6 +376,7 @@ if userstyle:
     userstyle["blue"] = bg_insert_mode
     userstyle["teal"] = bg_warning
     userstyle["font"] = get_font()
+    userstyle["bg_translucent"] = bg_translucent
     save_colors(css, userstyle)
 
 # ==========================================
@@ -260,12 +385,12 @@ if userstyle:
 
 # Completion Menu (Dropdown list when typing commands/URLs)
 c.colors.completion.fg = fg_default
-c.colors.completion.odd.bg = bg_lighter
-c.colors.completion.even.bg = bg_default
+c.colors.completion.odd.bg = bg_panel_lighter
+c.colors.completion.even.bg = bg_panel
 
 # Completion Headers / Categories ("History", "Bookmarks", etc.)
 c.colors.completion.category.fg = fg_matched_text
-c.colors.completion.category.bg = bg_default
+c.colors.completion.category.bg = bg_panel
 c.colors.completion.category.border.top = bg_default
 c.colors.completion.category.border.bottom = bg_default
 
@@ -289,13 +414,13 @@ c.colors.contextmenu.disabled.bg = bg_lighter
 c.colors.contextmenu.disabled.fg = fg_disabled
 
 # Webpages & Hints
-c.colors.webpage.bg = bg_default
+c.colors.webpage.bg = 'transparent' if translucent else bg_default  # translucent fill is html's bg in all.css
 c.colors.hints.match.fg = fg_matched_text
 c.colors.hints.bg = bg_hint
 c.colors.hints.fg = fg_default
 
 # Downloads
-c.colors.downloads.bar.bg = bg_default
+c.colors.downloads.bar.bg = bg_panel
 c.colors.downloads.start.fg = bg_default
 c.colors.downloads.start.bg = bg_insert_mode
 c.colors.downloads.stop.fg = bg_default
@@ -305,7 +430,7 @@ c.colors.downloads.error.fg = fg_error
 # Key hints & Messages
 c.colors.keyhint.fg = fg_default
 c.colors.keyhint.suffix.fg = fg_default
-c.colors.keyhint.bg = bg_default
+c.colors.keyhint.bg = bg_panel
 c.colors.messages.error.fg = bg_default
 c.colors.messages.error.bg = fg_error
 c.colors.messages.error.border = fg_error
@@ -325,7 +450,7 @@ c.colors.prompts.selected.bg = bg_selection
 
 # Statusbar
 c.colors.statusbar.normal.fg = fg_default
-c.colors.statusbar.normal.bg = bg_default
+c.colors.statusbar.normal.bg = bg_panel
 c.colors.statusbar.insert.fg = bg_default
 c.colors.statusbar.insert.bg = bg_insert_mode
 c.colors.statusbar.passthrough.fg = bg_default
@@ -333,9 +458,9 @@ c.colors.statusbar.passthrough.bg = bg_passthrough_mode
 c.colors.statusbar.private.fg = bg_default
 c.colors.statusbar.private.bg = bg_lighter
 c.colors.statusbar.command.fg = fg_default
-c.colors.statusbar.command.bg = bg_default
+c.colors.statusbar.command.bg = bg_panel
 c.colors.statusbar.command.private.fg = fg_default
-c.colors.statusbar.command.private.bg = bg_default
+c.colors.statusbar.command.private.bg = bg_panel
 c.colors.statusbar.caret.fg = bg_default
 c.colors.statusbar.caret.bg = bg_warning
 c.colors.statusbar.caret.selection.fg = bg_default
@@ -349,14 +474,14 @@ c.colors.statusbar.url.success.https.fg = fg_matched_text
 c.colors.statusbar.url.warn.fg = bg_warning
 
 # Tabs
-c.colors.tabs.bar.bg = bg_default
+c.colors.tabs.bar.bg = bg_panel
 c.colors.tabs.indicator.start = bg_insert_mode
 c.colors.tabs.indicator.stop = bg_passthrough_mode
 c.colors.tabs.indicator.error = fg_error
 c.colors.tabs.odd.fg = fg_default
-c.colors.tabs.odd.bg = bg_lighter
+c.colors.tabs.odd.bg = bg_panel_lighter
 c.colors.tabs.even.fg = fg_default
-c.colors.tabs.even.bg = bg_default
+c.colors.tabs.even.bg = bg_panel
 c.colors.tabs.pinned.even.bg = bg_passthrough_mode
 c.colors.tabs.pinned.even.fg = bg_lightest
 c.colors.tabs.pinned.odd.bg = fg_matched_text

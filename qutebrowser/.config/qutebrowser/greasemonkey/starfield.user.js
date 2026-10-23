@@ -11,12 +11,12 @@
   "use strict";
 
   // Same shader as the Ghostty one, minus the terminal texture/mask.
-  // Outputs stars over an opaque background colour (uBg).
+  // Outputs only star light with alpha (premultiplied); the page's own
+  // (possibly translucent) root background shows through between stars.
   const FRAG = `
 precision highp float;
 uniform vec3 iResolution;
 uniform float iTime;
-uniform vec3 uBg;
 
 const float SPEED = 0.02;      // drift speed
 const float BRIGHTNESS = 0.8;  // overall star brightness
@@ -65,7 +65,7 @@ void main() {
     }
 
     float a = clamp(stars * BRIGHTNESS, 0.0, 1.0);
-    gl_FragColor = vec4(mix(uBg, vec3(0.85, 0.9, 1.0), a), 1.0);
+    gl_FragColor = vec4(vec3(0.85, 0.9, 1.0) * a, a);
 }
 `;
 
@@ -76,7 +76,7 @@ void main() { gl_Position = vec4(pos, 0.0, 1.0); }
 
   const canvas = document.createElement("canvas");
   canvas.id = "qb-starfield";
-  const gl = canvas.getContext("webgl", { alpha: false, antialias: false });
+  const gl = canvas.getContext("webgl", { alpha: true, premultipliedAlpha: true, antialias: false });
   if (!gl) return;
 
   function compile(type, src) {
@@ -109,22 +109,6 @@ void main() { gl_Position = vec4(pos, 0.0, 1.0); }
 
   const uRes = gl.getUniformLocation(prog, "iResolution");
   const uTime = gl.getUniformLocation(prog, "iTime");
-  const uBg = gl.getUniformLocation(prog, "uBg");
-
-  // Page background colour comes from qutebrowser's userstyle (--bg_default,
-  // written by config.py from the Omarchy theme), so it matches every site.
-  function applyBg() {
-    let hex = "";
-    try {
-      // computedStyleMap: some sites (YouTube) proxy getComputedStyle, breaking getPropertyValue
-      hex = String(document.documentElement.computedStyleMap().get("--bg_default")).trim();
-    } catch (e) {
-      try { hex = window.getComputedStyle(document.documentElement).getPropertyValue("--bg_default").trim(); } catch (e2) {}
-    }
-    if (!/^#[0-9a-f]{6}/i.test(hex)) hex = "#1a1b26";
-    const n = parseInt(hex.slice(1, 7), 16);
-    gl.uniform3f(uBg, ((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
-  }
 
   const style = document.createElement("style");
   style.textContent = `
@@ -134,11 +118,16 @@ void main() { gl_Position = vec4(pos, 0.0, 1.0); }
       z-index: -2147483647 !important; pointer-events: none !important;
       display: block !important; margin: 0 !important; padding: 0 !important;
     }
-    html, body { background-color: transparent !important; background-image: none !important; }
+    html { background-image: none !important; }
+    body { background-color: transparent !important; background-image: none !important; }
     ytd-app, ytd-masthead, #masthead-container, ytd-masthead #container, ytd-masthead #background { background: transparent !important; }
   `;
   document.documentElement.appendChild(style);
   document.documentElement.appendChild(canvas);
+  // Root background carries the terminal-like alpha (--bg_translucent from
+  // all.css). Inline !important outranks site rules on html that the injected
+  // user stylesheet alone does not beat (YouTube).
+  document.documentElement.style.setProperty("background-color", "var(--bg_translucent, transparent)", "important");
 
   function resize() {
     const dpr = window.devicePixelRatio || 1;
@@ -149,7 +138,6 @@ void main() { gl_Position = vec4(pos, 0.0, 1.0); }
   }
   window.addEventListener("resize", resize);
   resize();
-  applyBg();
 
   // Many sites (YouTube, Gemini, claude.ai) paint opaque backgrounds on
   // inner wrappers that hide the canvas. Find big painted elements stacked
@@ -171,7 +159,8 @@ void main() { gl_Position = vec4(pos, 0.0, 1.0); }
     for (const x of [0.2, 0.5, 0.8]) pts.push([x * vw, 6], [x * vw, 28], [x * vw, vh - 6]);
     for (const [px, py] of pts) {
       for (const el of document.elementsFromPoint(px, py)) {
-        if (el === canvas || el.dataset.qbStarfield || SKIP.has(el.tagName.toUpperCase())) continue;
+        // The root keeps its (translucent) background from all.css; only site wrappers are cleared.
+        if (el === canvas || el === document.documentElement || el.dataset.qbStarfield || SKIP.has(el.tagName.toUpperCase())) continue;
         const r = el.getBoundingClientRect();
         const wide = r.width >= vw * 0.7 && r.height >= vh * 0.5;
         const sidePanel = r.width >= 120 && r.height >= vh * 0.8; // sidebars, drawers
@@ -204,7 +193,7 @@ void main() { gl_Position = vec4(pos, 0.0, 1.0); }
   const start = performance.now();
   function frame(now) {
     gl.uniform1f(uTime, ((now - start) / 1000) % 32000); // wrap: see PERIOD in shader
-    gl.clearColor(0, 0, 0, 1);
+    gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     requestAnimationFrame(frame);

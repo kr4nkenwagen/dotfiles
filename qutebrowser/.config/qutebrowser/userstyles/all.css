@@ -13,6 +13,7 @@
   --teal: #f9e2af;
   --purple: #c7a9ff;
   --font: FiraCode Nerd Font;
+  --bg_translucent: rgba(26, 27, 38, 0.5);
 }
 a {
   color: var(--blue) !important;
@@ -23,12 +24,14 @@ a:visited {
   font-family: var(--font)!important;
 }
 body {
-  background-color: var(--bg_default) !important;
+  background-color: transparent !important;
   color: var(--fg_default) !important;
   font-family: var(--font)!important;
 }
+/* Root background carries the terminal-like alpha (written by config.py from
+   ghostty's background-opacity); everything painted on top stays solid. */
 html {
-  background-color: var(--bg_default) !important;
+  background-color: var(--bg_translucent) !important;
   font-family: var(--font)!important;
 }
 input,
