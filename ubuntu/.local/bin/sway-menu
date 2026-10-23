@@ -167,7 +167,7 @@ vpn_pick() {  # fzf over profiles, in the floating terminal
 # Chrome bookmarks folder to list (profiles + managed policy). Empty = every bookmark.
 # Override with SWAY_MENU_BOOKMARK_FOLDER in the session environment (not fish: sway launches this directly).
 BOOKMARK_FOLDER="${SWAY_MENU_BOOKMARK_FOLDER-Fortnox}"
-bookmarks_list() {  # prints "path<TAB>title<TAB>url", path like "Sub › Deeper" (may be empty)
+bookmarks_list() {  # prints "url<TAB>title<TAB>path"; url first because a leading empty field would be eaten by read
   python3 - "$BOOKMARK_FOLDER" "$HOME" <<'PY'
 import glob, json, os, sys
 want, home = sys.argv[1].lower(), sys.argv[2]
@@ -175,7 +175,7 @@ ALL = (want == "")
 seen = set()
 def emit(path, title, url):
     if url and (url not in seen):
-        seen.add(url); print(f"{path}\t{title}\t{url}")
+        seen.add(url); print(f"{url}\t{title}\t{path}")
 def walk_profile(node, path, inside):
     t = node.get("type")
     if t == "url" and inside:
@@ -249,7 +249,7 @@ PY
 }
 open_url() { if command -v google-chrome >/dev/null; then bg google-chrome "$1"; elif command -v google-chrome-stable >/dev/null; then bg google-chrome-stable "$1"; else bg xdg-open "$1"; fi; }
 leaves_bookmarks() { local p="${1:-}" path title url n=0
-  while IFS=$'\t' read -r path title url; do
+  while IFS=$'\t' read -r url title path; do
     [ -n "$url" ] || continue; n=$((n+1))
     add "󰃀  ${p}${path:+$path › }$title" "open_url $(printf %q "$url")"
   done < <(bookmarks_list)
