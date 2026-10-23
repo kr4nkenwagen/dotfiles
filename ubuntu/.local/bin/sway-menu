@@ -4,6 +4,7 @@
 #   sway-menu lock   lock the screen (used by the sway config and swayidle)
 #   sway-menu idle   start swayidle (used by the sway config)
 #   sway-menu pkg-install | pkg-remove   fzf over apt packages (run in the floating terminal)
+#   sway-menu wallpaper                   fzf wallpaper picker with image preview
 # The top level lists the sections, every action of every section ("Section › Action"),
 # and every installed app, so typing searches all of it. Picking a section opens its submenu.
 set -u
@@ -94,7 +95,18 @@ leaves_toggle() { local p="${1:-}"
 set_background() { local f="$1"; mkdir -p "$STATE"
   printf 'output * bg "%s" fill\n' "$f" > "$STATE/background.conf"
   swaymsg output '*' bg "$f" fill >/dev/null; }
+# fzf with an image preview (chafa; Kitty graphics in ghostty, text art elsewhere). Runs in the floating terminal.
+wallpaper_picker() {
+  local fmt=symbols f
+  [ -n "${GHOSTTY_RESOURCES_DIR:-}" ] || [ -n "${KITTY_WINDOW_ID:-}" ] && fmt=kitty
+  f=$(find "$DOTFILES/wallpapers" -maxdepth 1 -type f -printf '%f\n' | sort \
+    | fzf --prompt 'Background ❯ ' --header 'enter: set · esc: cancel' \
+          --preview "chafa -f $fmt -s \${FZF_PREVIEW_COLUMNS}x\${FZF_PREVIEW_LINES} $(printf %q "$DOTFILES/wallpapers")/{}" \
+          --preview-window 'right:75%:noborder') || exit 0
+  [ -n "$f" ] && set_background "$DOTFILES/wallpapers/$f"
+}
 leaves_style() { local p="${1:-}" f
+  add "󰸉  ${p}Background picker (preview)" "tui $(printf %q "$SELF") wallpaper"
   for f in "$DOTFILES"/wallpapers/*; do [ -f "$f" ] && add "󰋩  ${p}Background: ${f##*/}" "set_background $(printf %q "$f")"; done; }
 
 # ---------- Setup ----------
@@ -205,6 +217,7 @@ case "${1:-}" in
   idle) idle ;;
   pkg-install) pkg_install ;;
   pkg-remove) pkg_remove ;;
+  wallpaper) wallpaper_picker ;;
   "") main_menu ;;
-  *) echo "usage: sway-menu [lock|idle|pkg-install|pkg-remove]" >&2; exit 2 ;;
+  *) echo "usage: sway-menu [lock|idle|pkg-install|pkg-remove|wallpaper]" >&2; exit 2 ;;
 esac
