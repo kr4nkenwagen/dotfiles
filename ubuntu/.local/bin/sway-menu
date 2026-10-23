@@ -247,7 +247,12 @@ for f in glob.glob(f"{home}/.config/google-chrome*/Policy/*Cloud Policy") + glob
     for arr in json_arrays(data): policy_items(arr)
 PY
 }
-open_url() { if command -v google-chrome >/dev/null; then bg google-chrome "$1"; elif command -v google-chrome-stable >/dev/null; then bg google-chrome-stable "$1"; else bg xdg-open "$1"; fi; }
+open_url() {  # as a web-app window (no tabs/address bar), like omarchy-launch-webapp
+  local b; for b in google-chrome google-chrome-stable chromium chromium-browser; do
+    command -v "$b" >/dev/null && { bg "$b" --new-window --app="$1"; return; }
+  done
+  bg xdg-open "$1"
+}
 leaves_bookmarks() { local p="${1:-}" path title url n=0
   while IFS=$'\t' read -r url title path; do
     [ -n "$url" ] || continue; n=$((n+1))
