@@ -228,6 +228,27 @@ ubuntu_browser_theme() {
   if pgrep -x chrome >/dev/null; then
     (google-chrome --refresh-platform-policy --no-startup-window >/dev/null 2>&1 || true)
   fi
+  ubuntu_chrome_force_dark
+}
+
+# Force dark mode for web content (chrome://flags/#enable-force-dark), the
+# counterpart of qutebrowser's colors.webpage.darkmode. Flags live in Local State.
+ubuntu_chrome_force_dark() {
+  local state="$HOME/.config/google-chrome/Local State"
+  [ -f "$state" ] || return 0
+  if pgrep -x chrome >/dev/null; then
+    warn "Chrome is running; force-dark flag not written (enable it at chrome://flags/#enable-force-dark)"
+    return 0
+  fi
+  python3 - "$state" <<'PY' || warn "could not update Chrome Local State"
+import json, sys
+p = sys.argv[1]
+with open(p, encoding="utf-8") as f: d = json.load(f)
+labs = d.setdefault("browser", {}).setdefault("enabled_labs_experiments", [])
+labs = [x for x in labs if not x.startswith("enable-force-dark")] + ["enable-force-dark@1"]
+d["browser"]["enabled_labs_experiments"] = labs
+with open(p, "w", encoding="utf-8") as f: json.dump(d, f)
+PY
 }
 
 ubuntu_desktop() {
