@@ -333,10 +333,11 @@ c.fonts.messages.info = font
 c.fonts.prompts = font
 c.fonts.tabs.selected = font
 c.fonts.tabs.unselected = font
-try:
+# Option added after qutebrowser 2.5 (Ubuntu 24.04 ships 2.5.4). The config API
+# records unknown-option errors instead of raising, so try/except cannot hide it.
+from qutebrowser.config import configdata as _configdata
+if 'fonts.tooltip' in _configdata.DATA:
     c.fonts.tooltip = font
-except Exception:  # option added after qutebrowser 2.5 (Ubuntu 24.04 ships 2.5.4)
-    pass
 c.fonts.debug_console = font
 
 # Binds
