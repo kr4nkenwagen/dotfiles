@@ -164,11 +164,13 @@ vpn_pick() {  # fzf over profiles, in the floating terminal
 }
 
 # ---------- Bookmarks (Chrome folder "$BOOKMARK_FOLDER", from profile files and managed policy) ----------
-BOOKMARK_FOLDER="${SWAY_MENU_BOOKMARK_FOLDER:-Fortnox}"
+# Default: every Chrome bookmark (profiles + managed policy). Set SWAY_MENU_BOOKMARK_FOLDER=Name to show one folder only.
+BOOKMARK_FOLDER="${SWAY_MENU_BOOKMARK_FOLDER:-}"
 bookmarks_list() {  # prints "path<TAB>title<TAB>url", path like "Sub › Deeper" (may be empty)
   python3 - "$BOOKMARK_FOLDER" "$HOME" <<'PY'
 import glob, json, os, sys
 want, home = sys.argv[1].lower(), sys.argv[2]
+ALL = (want == "")
 seen = set()
 def emit(path, title, url):
     if url and (url not in seen):
@@ -181,6 +183,8 @@ def walk_profile(node, path, inside):
         here = inside or node.get("name", "").lower() == want
         sub = (path + " › " + node["name"]) if (inside and path) else (node["name"] if inside else "")
         for c in node.get("children", []): walk_profile(c, sub, here)
+def walk_root(root):  # ALL mode: start inside, but do not prefix with the root folder name
+    for c in root.get("children", []): walk_profile(c, "", True)
 def walk_policy(items, path, inside):
     for it in items:
         if "url" in it and inside: emit(path, it.get("name", ""), it["url"])
@@ -193,12 +197,12 @@ for f in glob.glob(f"{home}/.config/google-chrome*/*/Bookmarks") + glob.glob(f"{
         with open(f, encoding="utf-8") as fh: roots = json.load(fh).get("roots", {})
     except Exception: continue
     for r in roots.values():
-        if isinstance(r, dict): walk_profile(r, "", False)
+        if isinstance(r, dict): (walk_root(r) if ALL else walk_profile(r, "", False))
 def policy_items(mb):
     top = next((x.get("toplevel_name") for x in mb if isinstance(x, dict) and "toplevel_name" in x), "")
     items = [x for x in mb if isinstance(x, dict) and "toplevel_name" not in x]
     before = len(seen)
-    walk_policy(items, "", (top or "").lower() == want)
+    walk_policy(items, "", ALL or (top or "").lower() == want)
     if len(seen) == before:  # no folder by that name: managed bookmarks are all company links, show them all
         walk_policy(items, "", True)
 for f in glob.glob("/etc/opt/chrome/policies/managed/*.json") + glob.glob("/etc/chromium/policies/managed/*.json"):
@@ -248,7 +252,7 @@ leaves_bookmarks() { local p="${1:-}" path title url n=0
     [ -n "$url" ] || continue; n=$((n+1))
     add "󰃀  ${p}${path:+$path › }$title" "open_url $(printf %q "$url")"
   done < <(bookmarks_list)
-  [ "$n" -gt 0 ] || add "󰃀  ${p}No Chrome folder named '$BOOKMARK_FOLDER' found" 'notify Bookmarks "Nothing found in Chrome profiles or managed policy"'; }
+  [ "$n" -gt 0 ] || add "󰃀  ${p}No Chrome bookmarks found${BOOKMARK_FOLDER:+ in folder '$BOOKMARK_FOLDER'}" 'notify Bookmarks "Nothing found in Chrome profiles or managed policy"'; }
 
 # ---------- Install / Update / Learn / About / System ----------
 # fzf over apt, like omarchy-pkg-install/-remove. Runs inside the floating terminal.
