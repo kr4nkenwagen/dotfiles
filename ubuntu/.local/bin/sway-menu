@@ -5,6 +5,7 @@
 #   sway-menu idle   start swayidle (used by the sway config)
 #   sway-menu pkg-install | pkg-remove   fzf over apt packages (run in the floating terminal)
 #   sway-menu wallpaper                   fzf wallpaper picker with image preview
+#   sway-menu vpn-connect NAME | vpn-pick FortiClient VPN (run in the floating terminal)
 # The top level lists the sections, every action of every section ("Section › Action"),
 # and every installed app, so typing searches all of it. Picking a section opens its submenu.
 set -u
@@ -127,6 +128,41 @@ leaves_setup() { local p="${1:-}" cur; cur=$(powerprofilesctl get 2>/dev/null ||
   add "󰌌  ${p}Keyboard layout: se" 'set_layout se'
   add "󰒓  ${p}Edit sway config" "tui nvim $(printf %q "$SWAY_CONFIG")"; }
 
+# ---------- VPN (FortiClient CLI: forticlient vpn list|connect|disconnect|status) ----------
+vpn_profiles() {  # one profile name per line; tolerant of "Name: x" or bare-name list formats
+  local out; out=$(forticlient vpn list 2>/dev/null) || return 0
+  local names; names=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*[Nn]ame[[:space:]]*:[[:space:]]*//p')
+  [ -n "$names" ] || names=$(printf '%s\n' "$out" | sed 's/^[[:space:]]*//' | grep -v -E '^$|^-+$|^=+$|^(Name|Type|Server|Profile)')
+  printf '%s\n' "$names"
+}
+vpn_state() {
+  local st; st=$(forticlient vpn status 2>/dev/null)
+  if printf '%s' "$st" | grep -qi disconnected; then echo off
+  elif printf '%s' "$st" | grep -qi connected; then echo on
+  else echo "?"; fi
+}
+vpn_connect() {  # run inside the floating terminal so password/SAML prompts are visible
+  local name="$1"
+  forticlient vpn connect "$name"; forticlient vpn status
+  printf '\n[done] press enter to close'; read -r _
+}
+vpn_status() { notify "VPN" "$(forticlient vpn status 2>&1 | head -5)"; }
+vpn_gui() {
+  local id; id=$(ls /usr/share/applications 2>/dev/null | grep -i -m1 forticlient | sed 's/\.desktop$//')
+  if [ -n "$id" ]; then bg gtk-launch "$id"; else notify "VPN" "FortiClient GUI desktop entry not found"; fi
+}
+leaves_vpn() { local p="${1:-}" n
+  command -v forticlient >/dev/null || { add "󰖂  ${p}FortiClient not installed" 'notify VPN "forticlient command not found"'; return; }
+  while IFS= read -r n; do [ -n "$n" ] && add "󰖂  ${p}Connect: $n" "tui $(printf %q "$SELF") vpn-connect $(printf %q "$n")"; done < <(vpn_profiles)
+  add "󰖂  ${p}Connect (pick in terminal)" "tui $(printf %q "$SELF") vpn-pick"
+  add "󰖂  ${p}Disconnect ($(vpn_state))" 'forticlient vpn disconnect >/dev/null 2>&1; notify VPN "Disconnected"'
+  add "󰖂  ${p}Status" vpn_status
+  add "󰖂  ${p}FortiClient GUI" vpn_gui; }
+vpn_pick() {  # fzf over profiles, in the floating terminal
+  local n; n=$(vpn_profiles | fzf --prompt 'VPN ❯ ' --header 'enter: connect · esc: cancel') || exit 0
+  [ -n "$n" ] && vpn_connect "$n"
+}
+
 # ---------- Install / Update / Learn / About / System ----------
 # fzf over apt, like omarchy-pkg-install/-remove. Runs inside the floating terminal.
 pkg_install() {
@@ -198,9 +234,9 @@ apps_list() {
 }
 
 # ---------- menus ----------
-sections=(learn capture toggle style setup install update system)
-section_icon() { case "$1" in learn) echo 󰧑;; capture) echo 󰄀;; toggle) echo 󰔎;; style) echo 󰸌;; setup) echo 󰒓;; install) echo 󰏖;; update) echo 󰚰;; system) echo 󰐥;; esac; }
-section_title() { printf '%s' "${1^}"; }
+sections=(learn capture toggle style setup vpn install update system)
+section_icon() { case "$1" in learn) echo 󰧑;; capture) echo 󰄀;; toggle) echo 󰔎;; style) echo 󰸌;; setup) echo 󰒓;; vpn) echo 󰖂;; install) echo 󰏖;; update) echo 󰚰;; system) echo 󰐥;; esac; }
+section_title() { case "$1" in vpn) printf VPN;; *) printf '%s' "${1^}";; esac; }
 submenu() {                                       # submenu SECTION
   reset; "leaves_$1" ""; add "󰁍  Back" main_menu; show "$(section_title "$1")"
 }
@@ -224,6 +260,8 @@ case "${1:-}" in
   pkg-install) pkg_install ;;
   pkg-remove) pkg_remove ;;
   wallpaper) wallpaper_picker ;;
+  vpn-connect) vpn_connect "${2:?profile name}" ;;
+  vpn-pick) vpn_pick ;;
   "") main_menu ;;
-  *) echo "usage: sway-menu [lock|idle|pkg-install|pkg-remove|wallpaper]" >&2; exit 2 ;;
+  *) echo "usage: sway-menu [lock|idle|pkg-install|pkg-remove|wallpaper|vpn-connect NAME|vpn-pick]" >&2; exit 2 ;;
 esac
