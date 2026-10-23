@@ -325,7 +325,9 @@ fi
 for d in "${stow_dirs[@]}"; do
   stow -R -t ~ "$d"
 done
-ln -sfn "$DOTFILES_DIR/.XCompose" ~/.XCompose
+# Relative link: stow 2.4 aborts ("Absolute/relative mismatch") when it meets an
+# absolute symlink into the stow dir while scanning the target.
+ln -sfn "$(realpath --relative-to="$HOME" "$DOTFILES_DIR/.XCompose")" ~/.XCompose
 
 info "Setting up tmux"
 mkdir -p ~/.config/tmux/plugins
