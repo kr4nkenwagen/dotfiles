@@ -154,8 +154,9 @@ vpn_gui() {
 }
 leaves_vpn() { local p="${1:-}" n
   command -v forticlient >/dev/null || { add "󰖂  ${p}FortiClient not installed" 'notify VPN "forticlient command not found"'; return; }
-  while IFS= read -r n; do [ -n "$n" ] && add "󰖂  ${p}Connect: $n" "tui $(printf %q "$SELF") vpn-connect $(printf %q "$n")"; done < <(vpn_profiles)
-  add "󰖂  ${p}Connect (pick in terminal)" "tui $(printf %q "$SELF") vpn-pick"
+  # connect runs in the background: FortiClient brings up its own GUI for the login
+  while IFS= read -r n; do [ -n "$n" ] && add "󰖂  ${p}Connect: $n" "bg forticlient vpn connect $(printf %q "$n"); notify VPN $(printf %q "Connecting to $n")"; done < <(vpn_profiles)
+  add "󰖂  ${p}Connect in terminal (shows CLI output)" "tui $(printf %q "$SELF") vpn-pick"
   add "󰖂  ${p}Disconnect ($(vpn_state))" 'forticlient vpn disconnect >/dev/null 2>&1; notify VPN "Disconnected"'
   add "󰖂  ${p}Status" vpn_status
   add "󰖂  ${p}FortiClient GUI" vpn_gui; }
