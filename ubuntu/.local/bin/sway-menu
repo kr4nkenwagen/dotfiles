@@ -196,7 +196,11 @@ for f in glob.glob(f"{home}/.config/google-chrome*/*/Bookmarks") + glob.glob(f"{
         if isinstance(r, dict): walk_profile(r, "", False)
 def policy_items(mb):
     top = next((x.get("toplevel_name") for x in mb if isinstance(x, dict) and "toplevel_name" in x), "")
-    walk_policy([x for x in mb if isinstance(x, dict) and "toplevel_name" not in x], "", (top or "").lower() == want)
+    items = [x for x in mb if isinstance(x, dict) and "toplevel_name" not in x]
+    before = len(seen)
+    walk_policy(items, "", (top or "").lower() == want)
+    if len(seen) == before:  # no folder by that name: managed bookmarks are all company links, show them all
+        walk_policy(items, "", True)
 for f in glob.glob("/etc/opt/chrome/policies/managed/*.json") + glob.glob("/etc/chromium/policies/managed/*.json"):
     try:
         with open(f, encoding="utf-8") as fh: policy_items(json.load(fh).get("ManagedBookmarks", []))
@@ -205,8 +209,11 @@ for f in glob.glob("/etc/opt/chrome/policies/managed/*.json") + glob.glob("/etc/
 def json_arrays(data):
     i = 0
     while True:
-        i = data.find(b'[{"', i)
+        i = data.find(b'[', i)
         if i < 0: return
+        k = i + 1
+        while k < len(data) and data[k] in b' \t\r\n': k += 1
+        if k >= len(data) or data[k] != 0x7B: i += 1; continue
         depth = 0; j = i; instr = False; esc = False
         while j < len(data):
             c = data[j]
@@ -226,7 +233,7 @@ def json_arrays(data):
         if isinstance(obj, list) and any(isinstance(x, dict) and ("url" in x or "children" in x or "toplevel_name" in x) for x in obj):
             yield obj; i = j + 1
         else:
-            i += 3
+            i += 1
 for f in glob.glob(f"{home}/.config/google-chrome*/Policy/*Cloud Policy") + glob.glob(f"{home}/.config/google-chrome*/*/Policy/User Policy") \
        + glob.glob(f"{home}/.config/chromium/Policy/*Cloud Policy") + glob.glob(f"{home}/.config/chromium/*/Policy/User Policy"):
     try:
