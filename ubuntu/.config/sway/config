@@ -155,7 +155,6 @@ bindsym --locked XF86AudioPrev exec playerctl previous
 # Window rules
 for_window [app_id="TUI.float"] floating enable, resize set 60 ppt 70 ppt, move position center
 for_window [app_id="org.pulseaudio.pavucontrol"] floating enable, resize set 50 ppt 60 ppt, move position center
-for_window [app_id="org.qutebrowser.qutebrowser"] opacity 0.5
 
 include /etc/sway/config.d/*
 # Written by sway-menu (background choice); loaded last so it overrides the default above.
