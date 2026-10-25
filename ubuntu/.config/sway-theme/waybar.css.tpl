@@ -29,6 +29,7 @@
 window#waybar {
   background: alpha(@bg, 0.85);
   color: @fg;
+  border-bottom: 2px solid @accent;
 }
 
 /* Workspaces: no coloured backgrounds anywhere on the bar, state is carried by the text colour. */
