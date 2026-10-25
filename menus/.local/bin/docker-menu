@@ -1,36 +1,57 @@
 #!/usr/bin/env bash
-# docker-menu: Docker containers in the k4 launcher: start/stop, logs, prune, lazydocker.
-K4_NAME=docker-menu
+# docker-menu: Docker containers in the k4 launcher: start/stop in place, logs, prune, lazydocker.
+K4_NAME=docker-menu K4_ID=docker K4_TITLE=Docker K4_KEY=X K4_ICON=󰡨 K4_DESC="Containers, logs and cleanup"
 . "$HOME/.local/share/k4/lib.sh"
 available() { command -v docker >/dev/null; }
-part() { printf 'S\tdocker\tDocker\tX\tContainers, logs and cleanup\t󰡨\nL\tdocker-menu section\n'; }
+missing() { missing_body "start, stop and inspect containers here" "$(install_cmd docker docker.io)" "https://docs.docker.com"; }
+summary() { local err n; err=$(docker info 2>&1 >/dev/null)
+  case "$err" in "") n=$(docker ps -q | grep -c .) || true; echo "$n running" ;; *"permission denied"*) echo "no permission" ;; *) echo "daemon stopped" ;; esac; }
+lazy() { command -v lazydocker >/dev/null && item "Open lazydocker" 'tui lazydocker; close_k4'; return 0; }
+logout_cmd() { if [ -n "${SWAYSOCK:-}" ]; then echo 'swaymsg exit'; elif command -v hyprctl >/dev/null; then echo 'hyprctl dispatch exit'; else echo 'loginctl terminate-user "$USER"'; fi; }
+status_text() {  # "Exited (0) 3 hours ago" -> "exited (0) · 3 h ago"
+  printf '%s' "$1" | sed -E 's/^Exited \(([0-9]+)\) (.*)$/exited (\1) · \2/; s/^Created$/created/; s/ hours? ago/ h ago/; s/ minutes? ago/ min ago/; s/ seconds? ago/ s ago/; s/ days? ago/ d ago/; s/ weeks? ago/ w ago/; s/ months? ago/ mo ago/; s/About an? //; s/^Up .*/running/'; }
 
 section() {
   local err; err=$(docker info --format '{{.ServerVersion}}' 2>&1 >/dev/null)
   if [ -n "$err" ]; then
     case "$err" in
       *"permission denied"*)
-        item "No access to the Docker socket" "notify Docker 'Add yourself to the docker group: sudo usermod -aG docker \$USER, then log in again'" "needs docker group"
-        item "Add me to the docker group" "tui_wait 'sudo usermod -aG docker \"\$USER\" && echo Log out and back in for it to apply.'" "sudo" ;;
-      *) item "Docker is not running" ':' ""
-         item "Start Docker" "tui_wait 'sudo systemctl start docker'" "sudo" ;;
+        desc "Docker is installed but not readable" "" "Search containers…"
+        notice "No permission" "Your user isn't in the docker group." red
+        stay "Copy the fix" "copy fix 'sudo usermod -aG docker \$USER' 'the fix'" 'sudo usermod -aG docker $USER'
+        item "Log out to apply" "$(logout_cmd)" "" "" "confirm=Log out now?|Group changes apply at the next login. Unsaved work in open apps will be lost."
+        lazy ;;
+      *)
+        desc "Daemon stopped" "" "Search containers…"
+        notice "Docker daemon is stopped" "Containers and images appear once it runs." muted
+        item "Start the daemon" "tui_wait 'sudo systemctl start docker'; close_k4" "sudo systemctl start docker"
+        lazy ;;
     esac
     return
   fi
-  local name state status image n=0
-  hdr "Containers · Enter starts or stops"
-  while IFS=$'\t' read -r name state status image; do
-    if [ "$state" = running ]; then stay "$name" "docker stop '$name' >/dev/null && notify '$name' stopped" "running · $image"
-    else stay "$name" "docker start '$name' >/dev/null && notify '$name' started" "$state · $image"; fi
-    n=$((n+1))
-  done < <(docker ps -a --format '{{.Names}}\t{{.State}}\t{{.Status}}\t{{.Image}}')
-  [ $n -gt 0 ] || item "No containers" ':'
-  if docker ps -q | grep -q .; then
+  local name state status image rows=() run=0 ex=0 imgs
+  mapfile -t rows < <(docker ps -a --format '{{.Names}}\t{{.State}}\t{{.Status}}\t{{.Image}}')
+  for r in "${rows[@]}"; do case "$r" in *$'\t'running$'\t'*) run=$((run + 1)) ;; *) ex=$((ex + 1)) ;; esac; done
+  imgs=$(docker images -q | sort -u | grep -c .) || true
+  desc "$run running · $ex exited · $imgs images" "$(plural "${#rows[@]}" containers)" "Search containers…"
+  hints "↑↓" Move "↵" "Start / stop" "⌫" Back
+  hdr "Containers" "${#rows[@]}"
+  [ "${#rows[@]}" -gt 0 ] || empty "No containers"
+  for r in "${rows[@]}"; do
+    IFS=$'\t' read -r name state status image <<<"$r"
+    if [ "$state" = running ]; then
+      stay "$name" "docker stop '$name' >/dev/null && notify Stopped '$name'" running "mark=●;markc=accent;metac=accent;sub=  $(k4flag "$image")"
+    else
+      stay "$name" "docker start '$name' >/dev/null && notify Started '$name'" "$(status_text "$status")" "mark=○;sub=  $(k4flag "$image")"
+    fi
+  done
+  if [ "$run" -gt 0 ]; then
     hdr "Logs"
-    while read -r name; do item "Logs: $name" "tui docker logs -f --tail 200 '$name'"; done < <(docker ps --format '{{.Names}}')
+    for r in "${rows[@]}"; do IFS=$'\t' read -r name state status image <<<"$r"
+      [ "$state" = running ] && item "$name" "tui docker logs -f --tail 200 '$name'; close_k4" "opens terminal" "" "mark=≡"; done
   fi
-  hdr "More"
-  command -v lazydocker >/dev/null && item "lazydocker" 'tui lazydocker'
-  stay "Prune stopped containers and dangling images" 'notify Docker "$(docker system prune -f 2>&1 | tail -1)"' "$(docker images -q | wc -l) images" "confirm=Prune Docker?|Removes stopped containers, unused networks and dangling images."
+  hdr "Manage"
+  stay "Prune unused images…" 'notify Pruned "$(docker image prune -af 2>&1 | tail -1)"' "$([ "${#rows[@]}" -eq 0 ] && echo "$imgs images · ")asks first" "confirm=Prune unused images?|Removes every image no container uses.$([ "${#rows[@]}" -eq 0 ] && printf ';current')"
+  lazy
 }
 k4_dispatch "$@"

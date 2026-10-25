@@ -1,38 +1,90 @@
 #!/usr/bin/env bash
 # gh-menu: GitHub in the k4 launcher via the gh CLI (uses its login, no extra token):
 # review requests, your open pull requests, assigned issues and notifications.
-K4_NAME=gh-menu
+# The last fetch is cached and shown at once; k4 swaps in the fresh rows when they land.
+K4_NAME=gh-menu K4_ID=github K4_TITLE=GitHub K4_KEY=R K4_ICON=󰊤 K4_DESC="Review requests, pull requests and notifications"
 . "$HOME/.local/share/k4/lib.sh"
 # A real gh binary: Omarchy's ~/.local/bin/gh is a wrapper that prints mise status to stdout.
 GH=""
 for c in /usr/bin/gh /usr/local/bin/gh "$(mise which gh 2>/dev/null)" "$(command -v gh)"; do [ -x "$c" ] && { GH=$c; break; }; done
 gh() { "$GH" "$@"; }
 available() { [ -n "$GH" ]; }
-part() { printf 'S\tgithub\tGitHub\tR\tReview requests, pull requests and notifications\t󰊤\nL\tgh-menu section\n'; }
+CACHE="$K4_CACHE/gh-section" SUMMARY="$K4_CACHE/gh-summary"
+missing() { missing_body "see reviews, PRs and notifications here" "$(install_cmd github-cli gh)" "https://cli.github.com"; }
+summary() { cat "$SUMMARY" 2>/dev/null || echo "not fetched yet"; }
 
-prs() {  # prs FLAG: "repo#n<TAB>title<TAB>url<TAB>meta"
-  gh search prs "$1" --state=open --limit 20 --json repository,number,title,url,isDraft,updatedAt \
-    --jq '.[] | "\(.repository.nameWithOwner)#\(.number)\t\(.title)\t\(.url)\t\(if .isDraft then "draft" else "" end)"' 2>/dev/null; }
-section() {
-  if ! gh auth status >/dev/null 2>&1; then item "Log in to GitHub" 'tui gh auth login' "gh auth login"; return; fi
-  local ref title url meta n
-  hdr "Review requests"; n=0
-  while IFS=$'\t' read -r ref title url meta; do item "$title" "open_url '$url'" "$ref${meta:+ · $meta}"; n=$((n+1)); done < <(prs --review-requested=@me)
-  [ $n -gt 0 ] || item "Nothing to review" ':'
-  hdr "Your pull requests"; n=0
-  while IFS=$'\t' read -r ref title url meta; do item "$title" "open_url '$url'" "$ref${meta:+ · $meta}"; n=$((n+1)); done < <(prs --author=@me)
-  [ $n -gt 0 ] || item "No open pull requests" ':'
-  hdr "Assigned issues"; n=0
-  while IFS=$'\t' read -r ref title url; do item "$title" "open_url '$url'" "$ref"; n=$((n+1)); done < <(gh search issues --assignee=@me --state=open --limit 20 \
-      --json repository,number,title,url --jq '.[] | "\(.repository.nameWithOwner)#\(.number)\t\(.title)\t\(.url)"' 2>/dev/null)
-  [ $n -gt 0 ] || item "No assigned issues" ':'
-  hdr "Notifications"; n=0
-  while IFS=$'\t' read -r repo title url reason; do item "$title" "open_url '$url'" "$repo · $reason"; n=$((n+1)); done < <(gh api notifications --jq '.[] |
-      "\(.repository.name)\t\(.subject.title)\t\((.subject.url // .repository.html_url) | sub("api.github.com/repos"; "github.com") | sub("/pulls/"; "/pull/"))\t\({ci_activity: "CI", review_requested: "review", mention: "mention", team_mention: "team", assign: "assigned", author: "yours", comment: "comment", state_change: "state", subscribed: "watching", security_alert: "security"}[.reason] // .reason)"' 2>/dev/null | head -20)
-  if [ $n -gt 0 ]; then stay "Mark all as read" 'gh api -X PUT notifications -f read=true >/dev/null && notify GitHub "notifications marked as read"' "" "confirm=Mark all notifications as read?|They stay on github.com but leave your inbox."
-  else item "No unread notifications" ':'; fi
-  hdr "Open"
-  item "github.com" "open_url https://github.com"
-  item "Your repositories" "open_url 'https://github.com/$(gh api user --jq .login 2>/dev/null)?tab=repositories'"
+skeleton() {  # until the fetch lands: the last one, or the design's loading rows
+  if [ -s "$CACHE" ]; then
+    sed "s/^D\t\([^\t]*\) · fetched when the menu opened\t/D\t\1 · from $(ago "$(stat -c %Y "$CACHE")"), refreshing\t/" "$CACHE"
+    return
+  fi
+  desc "Fetching from GitHub… usually 3–4 s" loading "Search PRs and issues…"
+  hints "…" "Loading GitHub" "⌫" Back Esc Close
+  notice "GitHub is slow to answer" "Results fill in when they arrive. Closing loses nothing." muted slow
+  printf 'A\tk4:retry\tRetry\t\t\tslow\n'
+  item "Open github.com" "open_url https://github.com; close_k4" "opens browser" "" slow
+  hdr "Review requests"; bars 2; hdr "Your PRs"; bars 2; hdr "Assigned issues"; bars 1; hdr "Notifications"; bars 3
 }
+
+prs() {  # prs FLAG: "repo#n<TAB>title<TAB>url<TAB>draft"
+  gh search prs "$1" --state=open --limit 20 --json repository,number,title,url,isDraft \
+    --jq '.[] | "\(.repository.nameWithOwner)#\(.number)\t\(.title)\t\(.url)\t\(.isDraft)"' 2>/dev/null; }
+issues() { gh search issues --assignee=@me --state=open --limit 20 --json repository,number,title,url \
+    --jq '.[] | "\(.repository.nameWithOwner)#\(.number)\t\(.title)\t\(.url)"' 2>/dev/null; }
+notifications() {  # repo<TAB>title<TAB>url<TAB>reason
+  gh api notifications --jq '.[] | "\(.repository.full_name)\t\(.subject.title)\t\((.subject.url // .repository.html_url) | sub("api.github.com/repos"; "github.com") | sub("/pulls/"; "/pull/"))\t\(.reason)"' 2>/dev/null | head -20; }
+open_row() { item "$1" "open_url $(printf %q "$2"); close_k4" "$3" "" "${4:-}"; }
+
+fetch() {
+  if ! gh auth token >/dev/null 2>&1; then
+    desc "No account" "" "Search PRs and issues…"
+    notice "Not logged in" "gh has no GitHub account on this machine." accent
+    item "Log in with gh auth login" "tui_wait 'gh auth login'; close_k4" "opens terminal"
+    item "Open github.com" "open_url https://github.com; close_k4" "opens browser"; return 1
+  fi
+  local login; login=$(gh api user --jq .login 2>/dev/null)
+  if [ -z "$login" ]; then
+    desc "Offline" "" "Search PRs and issues…"
+    notice "Offline" "Couldn't reach api.github.com." red
+    stay "Retry" 'notify Retrying GitHub'
+    if [ -n "${K4_AS_PAGE:-}" ]; then item "Open the Network menu" : "" "" "jump=network"
+    elif command -v sway-menu >/dev/null; then item "Open the Network menu" "bg sway-menu network; close_k4"; fi
+    item "Open github.com" "open_url https://github.com; close_k4" "opens browser"; return 1
+  fi
+  local rev mine iss notif ref title url draft repo reason chip
+  rev=$(prs --review-requested=@me); mine=$(prs --author=@me); iss=$(issues); notif=$(notifications)
+  count() { [ -n "$1" ] && printf '%s\n' "$1" | grep -c . || echo 0; }
+  local nr nm ni nn; nr=$(count "$rev"); nm=$(count "$mine"); ni=$(count "$iss"); nn=$(count "$notif")
+  desc "$login · fetched when the menu opened" "$(( nr + nm + ni + nn )) items" "Search PRs and issues…"
+  hints "↑↓" Move "↵" "Open in browser" "⌫" Back
+  hdr "Review requests" "$nr"
+  if [ "$nr" -eq 0 ]; then empty "Nothing to review"
+  else while IFS=$'\t' read -r ref title url draft; do open_row "$title" "$url" "$ref" "mark=◆;markc=accent"; done <<<"$rev"; fi
+  hdr "Your PRs" "$nm"
+  if [ "$nm" -eq 0 ]; then empty "No open PRs"
+  else while IFS=$'\t' read -r ref title url draft; do open_row "$title" "$url" "$ref" "$([ "$draft" = true ] && echo 'chip=DRAFT;chipc=muted')"; done <<<"$mine"; fi
+  hdr "Assigned issues" "$ni"
+  if [ "$ni" -eq 0 ]; then empty "No assigned issues"
+  else while IFS=$'\t' read -r ref title url; do open_row "$title" "$url" "$ref"; done <<<"$iss"; fi
+  hdr "Notifications" "$nn"
+  if [ "$nn" -eq 0 ]; then empty "All caught up"
+  else
+    while IFS=$'\t' read -r repo title url reason; do
+      case "$reason" in
+        ci_activity) chip="chip=CI;chipc=red;mark=●;markc=red" ;;
+        mention|team_mention) chip="chip=MENTION;chipc=accent;mark=●;markc=accent" ;;
+        review_requested) chip="chip=REVIEW;chipc=dim;mark=●;markc=muted" ;;
+        *) chip="mark=●;markc=muted" ;;
+      esac
+      open_row "$title" "$url" "$repo" "$chip"
+    done <<<"$notif"
+    stay "Mark all as read" 'gh api -X PUT notifications -f read=true >/dev/null && notify Marked "notifications as read"' "" "confirm=Mark all notifications as read?|They stay on github.com but leave your inbox."
+  fi
+  [ $(( nr + nm + ni + nn )) -gt 0 ] || item "Open github.com" "open_url https://github.com; close_k4" "opens browser" "" current
+  mkdir -p "$K4_CACHE"
+  printf '%s to review · %s unread\n' "$nr" "$nn" > "$SUMMARY"
+}
+section() {  # fetch, and keep it for the next open (only a good fetch)
+  local out; out=$(fetch) && { mkdir -p "$K4_CACHE"; printf '%s\n' "$out" > "$CACHE"; }
+  printf '%s\n' "$out"; }
 k4_dispatch "$@"

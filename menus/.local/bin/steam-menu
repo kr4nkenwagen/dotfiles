@@ -1,26 +1,27 @@
 #!/usr/bin/env bash
 # steam-menu: Steam in the k4 launcher, from Steam's local files (no account access).
 #   steam-menu              open k4 inside the Steam section (Omarchy: Super+Ctrl+G)
-#   steam-menu section      the section's rows for k4 --menu (A/H lines)
+#   steam-menu section      the section's lines for k4 --menu
 #   steam-menu view         the games gallery for k4 (I lines, cover art)
 #   steam-menu tree         the full k4 input (section, gallery, runner)
-#   steam-menu part         the section's S/L/G lines (for k4-apps and the Sway menu)
+#   steam-menu part         the section's records (for k4-apps; K4_AS_PAGE=1: a page for the Sway menu)
+#   steam-menu summary      one line for the Apps menu
 #   steam-menu run ID       run a row's action
 #   steam-menu games        appid<TAB>name<TAB>last played (epoch)<TAB>minutes<TAB>art, newest first
 # Games come from every library folder's appmanifest_*.acf; Proton, the Steam Linux Runtimes
 # and redistributables are left out. Last played and playtime come from the logged-in user's
 # localconfig.vdf, art from Steam's library cache.
 set -u
-K4_NAME=steam-menu
+K4_NAME=steam-menu K4_ID=steam K4_TITLE=Steam K4_KEY=G K4_ICON=󰓓 K4_DESC="Your games, from Steam's local library"
 . "$HOME/.local/share/k4/lib.sh"
 STEAM_DIR="${STEAM_DIR:-$HOME/.local/share/Steam}"
 [ -d "$STEAM_DIR" ] || STEAM_DIR="$HOME/.steam/steam"
+STATUS_FILE="$K4_STATE/steam-status"   # Steam does not expose the persona state; the last one set here
 steam_url() { bg steam "$1"; }   # hands the URL to the running client (or starts it)
 available() { command -v steam >/dev/null; }
-part() {
-  printf 'S\tsteam\tSteam\tG\tYour games, from Steam'"'"'s local library\t󰓓\nL\tsteam-menu section\n'
-  printf 'G\tgames\tGames\tcover art from Steam\tsteam-menu view\n'
-}
+running() { pgrep -x steam >/dev/null || pgrep -f 'ubuntu12_32/steam' >/dev/null; }
+extra() { printf 'G\tgames\tLibrary\tNewest played first · covers from Steam'"'"'s local cache\tsteam-menu view\n'; }
+missing() { missing_body "launch your games from here" "$(install_cmd steam steam-installer)" "https://store.steampowered.com"; }
 
 games() {
   python3 - "$STEAM_DIR" <<'PY'
@@ -81,34 +82,51 @@ for last, appid, name, mins, art in sorted(rows, key=lambda r: (-r[0], r[2].lowe
 PY
 }
 
-played() {  # played EPOCH MINUTES -> "12 h · 3 d ago"
-  local t=$1 m=$2 now d h out=""
-  [ "$m" -gt 0 ] && { h=$(( (m + 30) / 60 )); out="$h h"; [ "$h" -eq 0 ] && out="$m min"; }
-  if [ "$t" -gt 0 ]; then
-    now=$(date +%s); d=$(( (now - t) / 86400 ))
-    case $d in 0) out="${out:+$out · }today" ;; 1) out="${out:+$out · }yesterday" ;; *) out="${out:+$out · }$d d ago" ;; esac
-  fi
-  printf '%s' "$out"
-}
+hours() { [ "${1:-0}" -gt 0 ] || return 0; printf '%s h' "$(thousands $(( (${1} + 30) / 60 )))"; }
+played() {  # played EPOCH MINUTES -> "12 182 h · 2 d ago" (the design's tile and row meta)
+  local h; h=$(hours "$2"); [ "$1" -gt 0 ] && h="${h:+$h · }$(ago "$1")"; printf '%s' "${h:-never played}"; }
+status_now() { cat "$STATUS_FILE" 2>/dev/null || echo Online; }
+set_status() {  # set_status Online|Away|Invisible|Offline (the stepper)
+  local v="${K4_VALUE:-$1}"; mkdir -p "$K4_STATE"; echo "$v" > "$STATUS_FILE"
+  steam_url "steam://friends/status/$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')"; notify Status "$v"; }
+game_row() { item "$2" "steam_url steam://rungameid/$1; close_k4" "$(played "$3" "$4")" "" "app;mark=▸"; }
 
-section() { local id name t m art n
-  n=$(games | wc -l)
-  hdr "Games"
-  item "Games" : "$n installed" games
-  while IFS=$'\t' read -r id name t m art; do
-    item "$name" "steam_url steam://rungameid/$id" "$(played "$t" "$m")" "" app
-  done < <(games)
+summary() { local id name t m art; IFS=$'\t' read -r id name t m art < <(games | head -1)
+  [ -n "${name:-}" ] && printf '%s%s\n' "$name" "$([ "$t" -gt 0 ] && echo " · $(ago "$t")")" || echo "no games"; }
+
+section() { local id name t m art n i=0 rows=()
+  mapfile -t rows < <(games); n=${#rows[@]}
+  if ! running; then
+    desc "Steam isn't running" "$(plural "$n" games)" "Search games…"
+    notice "Steam isn't running" "Games still launch (Steam starts first). Status needs Steam open." muted
+    stay "Start Steam" 'bg steam; notify Starting Steam' "" current
+  else
+    desc "$n installed · newest played first" "$(plural "$n" games)" "Search games…"
+  fi
+  hints "↑↓" Move "↵" Launch "← →" Status "⌫" Back
+  hdr "Recently played"
+  if [ "$n" -eq 0 ]; then
+    empty "No games installed yet"; item "Open the Store" "steam_url steam://store; close_k4" "opens Steam"
+  else
+    for i in "${!rows[@]}"; do [ "$i" -lt "$(running && echo 4 || echo 3)" ] || break
+      IFS=$'\t' read -r id name t m art <<<"${rows[$i]}"; game_row "$id" "$name" "$t" "$m"; done
+    running && item "All games" : "$n · grid" games
+  fi
   hdr "Status"
-  for s in online away invisible offline; do item "${s^}" "steam_url steam://friends/status/$s; notify Steam 'status $s'" "" "" stay; done
-  hdr "Open"
-  item "Library" 'steam_url steam://open/games'
-  item "Store" 'steam_url steam://store'
-  item "Friends" 'steam_url steam://open/friends'
-  item "Downloads" 'steam_url steam://open/downloads'
+  if running; then choice "Status" set_status "$(status_now)" "Online|Away|Invisible|Offline" "mark=●;markc=accent"
+  else stay "Status" 'notify Status "needs Steam"' "needs Steam" "mark=○;dim"; fi
+  running || return 0
+  hdr "Open in Steam"
+  item "Library" 'steam_url steam://open/games; close_k4'
+  [ "$n" -gt 0 ] && item "Store" 'steam_url steam://store; close_k4'
+  item "Friends" 'steam_url steam://open/friends; close_k4'
+  item "Downloads" 'steam_url steam://open/downloads; close_k4'
 }
 
 view() { local id name t m art
-  while IFS=$'	' read -r id name t m art; do iview "$name" "steam_url steam://rungameid/$id" "$art"; done < <(games)
+  while IFS=$'\t' read -r id name t m art; do
+    iview "$name" "steam_url steam://rungameid/$id" "$art" "" "wide;sub=$(k4flag "$(played "$t" "$m")");alt=Store page|$(k4id "steam_url steam://store/$id")"
+  done < <(games)
 }
 
 case "${1:-}" in

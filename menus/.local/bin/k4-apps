@@ -1,13 +1,30 @@
 #!/usr/bin/env bash
-# k4-apps: every installed app integration (Steam, GitHub, Docker, Spotify, Ollama,
-# Clipboard) in one k4 menu. Omarchy: Super+Ctrl+M.
+# k4-apps: the app integrations (Steam, GitHub, Spotify, Docker, Ollama, Clipboard) in one k4
+# menu, installed ones first, the rest under "Not installed". Omarchy: Super+Ctrl+M.
+#   k4-apps            open it
+#   k4-apps tree       its k4 --menu input
+#   k4-apps pages      the integrations as pages (P records), for the Sway menu's Apps section
+#   k4-apps summaries  id<TAB>title<TAB>key<TAB>summary<TAB>installed|missing, one per integration
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/snap/bin:$PATH"
 INTEGRATIONS=(steam-menu gh-menu spotify-menu docker-menu ollama-menu clipse-menu)
-tree() { local s; for s in "${INTEGRATIONS[@]}"; do command -v "$s" >/dev/null && "$s" available && "$s" part; done; printf 'R\tk4-exec\n'; }
+HIDDEN="$HOME/.local/state/k4/hidden-apps"
+shown() { local s; for s in "${INTEGRATIONS[@]}"; do command -v "$s" >/dev/null && ! grep -qxF "$s" "$HIDDEN" 2>/dev/null && echo "$s"; done; }
+split() { local s; INST=(); MISS=(); while read -r s; do if "$s" available; then INST+=("$s"); else MISS+=("$s"); fi; done < <(shown); }
+tree() { local s; split
+  local n=$(( ${#INST[@]} + ${#MISS[@]} ))
+  printf 'T\tAPPS\tSearch games, PRs, containers…\t%s\n' "$([ ${#MISS[@]} -eq 0 ] && echo "$n apps" || echo "${#INST[@]} of $n installed")"
+  for s in "${INST[@]}" "${MISS[@]}"; do "$s" part; done
+  printf 'R\tk4-exec\n'; }
+summaries() { local s line id title key; split
+  for s in "${INST[@]}" "${MISS[@]}"; do
+    line=$(sed -n 's/^K4_NAME=[^ ]* \(K4_ID=[^ ]* K4_TITLE=[^ ]* K4_KEY=[^ ]*\).*/\1/p' "$(command -v "$s")"); eval "$line"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$K4_ID" "$K4_TITLE" "$K4_KEY" "$("$s" summary 2>/dev/null | head -1)" "$("$s" available && echo installed || echo missing)"
+  done; }
 case "${1:-}" in
   tree) tree ;;
-  parts) for s in "${INTEGRATIONS[@]}"; do command -v "$s" >/dev/null && "$s" available && "$s" part; done ;;
+  pages) split; for s in "${INST[@]}" "${MISS[@]}"; do K4_AS_PAGE=1 "$s" part; done ;;
+  summaries) summaries ;;
   "") out=$(tree | k4 --menu) || exit 0
       case "$out" in url:*) setsid -f xdg-open "${out#url:}" >/dev/null 2>&1 ;; *) k4-exec "$out" ;; esac ;;
-  *) echo "usage: k4-apps [tree|parts]" >&2; exit 2 ;;
+  *) echo "usage: k4-apps [tree|pages|summaries]" >&2; exit 2 ;;
 esac

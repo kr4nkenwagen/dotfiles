@@ -1,38 +1,58 @@
 #!/usr/bin/env bash
-# clipse-menu: clipse's clipboard history in the k4 launcher: Enter copies an entry back,
-# pinned entries first, clear the history.
-K4_NAME=clipse-menu
+# clipse-menu: clipse's clipboard history in the k4 launcher: Enter copies an entry back
+# (pinned first, then newest; images with a thumbnail), clear the history, start the listener.
+K4_NAME=clipse-menu K4_ID=clipboard K4_TITLE=Clipboard K4_KEY=P K4_ICON=󰅌 K4_DESC="History from clipse"
 . "$HOME/.local/share/k4/lib.sh"
 available() { command -v clipse >/dev/null; }
-part() { printf 'S\tclipboard\tClipboard\tP\tHistory from clipse\t󰅌\nL\tclipse-menu section\n'; }
-
+missing() { missing_body "copy from your clipboard history here" "$(install_cmd clipse '' 'go install github.com/savedra1/clipse@latest')" "https://github.com/savedra1/clipse"; }
 HIST="$HOME/.config/clipse/clipboard_history.json"
+recording() { pgrep -f 'clipse (-listen|--listen)|wl-paste.*clipse' >/dev/null; }
+summary() { local n; n=$(jq '.clipboardHistory | length' "$HIST" 2>/dev/null || echo 0); echo "$n entries$(recording || echo ' · not recording')"; }
+
 copy_entry() {  # copy_entry RECORDED: the entry with that timestamp back onto the clipboard
   local file val
   file=$(jq -r --arg r "$1" '.clipboardHistory[] | select(.recorded == $r) | .filePath' "$HIST")
-  if [ -n "$file" ] && [ "$file" != null ] && [ -f "$file" ]; then wl-copy < "$file"; notify Copied image; return; fi
+  if [ -n "$file" ] && [ "$file" != null ] && [ -f "$file" ]; then wl-copy < "$file"; notify Copied "${file##*/}"; return; fi
   val=$(jq -r --arg r "$1" '.clipboardHistory[] | select(.recorded == $r) | .value' "$HIST")
-  printf '%s' "$val" | wl-copy; notify Copied "$(printf '%s' "$val" | tr '\n\t' '  ' | cut -c1-60)"; }
-ago() { local s=$(( $(date +%s) - $(date -d "${1%.*}" +%s 2>/dev/null || date +%s) ))
-  if [ $s -lt 3600 ]; then echo "$(( s / 60 )) min ago"; elif [ $s -lt 86400 ]; then echo "$(( s / 3600 )) h ago"; else echo "$(( s / 86400 )) d ago"; fi; }
-rows() {  # rows true|false: pinned or not, newest first: recorded<TAB>label
-  jq -r --argjson p "$1" '.clipboardHistory[] | select(.pinned == $p) |
-    (if .filePath != "null" and .filePath != null then "Image  \(.filePath | split("/") | last)" else (.value | gsub("[\\s]+"; " ") | ltrimstr(" ") | rtrimstr(" ") | .[0:80]) end) as $l |
-    select($l != "") | "\(.recorded)\t\($l)"' "$HIST" 2>/dev/null; }
+  printf '%s' "$val" | wl-copy; notify Copied "$(printf '%s' "$val" | head -1 | cut -c1-60)"; }
+rows() {  # rows true|false: recorded<TAB>epoch<TAB>first line<TAB>extra lines<TAB>image path, newest first
+  local off; off=$(date +%z | sed -E 's/^([+-])([0-9]{2})([0-9]{2})$/\1(\2*3600+\3*60)/'); off=$(( off ))
+  jq -r --argjson p "$1" --argjson off "$off" '.clipboardHistory[] | select(.pinned == $p) |
+    ((.recorded[0:19] | strptime("%Y-%m-%d %H:%M:%S") | mktime) - $off) as $t |
+    (if (.filePath // "null") != "null" then .filePath else "" end) as $img |
+    (.value | split("\n") | map(select(test("\\S")))) as $lines |
+    select($img != "" or ($lines | length) > 0) |
+    "\(.recorded)\t\($t)\t\(if $img != "" then ($img | split("/") | last) else ($lines[0] | gsub("\t"; " ") | .[0:200]) end)\t\(if $img != "" then 0 else ($lines | length) - 1 end)\t\($img)"' "$HIST" 2>/dev/null; }
+entry() {  # entry RECORDED EPOCH LABEL EXTRA IMAGE [pinned]: the design's marks (★ pinned, ¶ multi-line, ↗ link)
+  local mark="" more=""
+  if [ -n "$5" ]; then more="thumb=$(k4flag "$5");sub=  $(file -b "$5" 2>/dev/null | grep -oE '[0-9]+ x [0-9]+' | tr -d ' ')"
+  elif [ "$4" -gt 0 ]; then mark="mark=¶"; more="sub=  +$4 lines"
+  elif [[ $3 == http*://* ]]; then mark="mark=↗"; fi
+  [ -n "${6:-}" ] && mark="mark=★;markc=accent"
+  local flags="$mark${mark:+${more:+;}}$more"
+  stay "$3" "copy_entry '$1'" "$(ago "$2")" "$flags"; }
 
 section() {
-  [ -f "$HIST" ] || { item "No clipboard history yet" ':' "is clipse -listen running?"; return; }
-  local r label n=0
-  if [ -n "$(rows true)" ]; then
-    hdr "Pinned"
-    while IFS=$'\t' read -r r label; do stay "$label" "copy_entry '$r'" "pinned"; done < <(rows true)
+  local pinned=() recent=() r
+  [ -f "$HIST" ] && { mapfile -t pinned < <(rows true); mapfile -t recent < <(rows false); }
+  local total=$(( ${#pinned[@]} + ${#recent[@]} ))
+  desc "clipse · $(recording && echo "pinned first, then newest" || echo "not recording")" "$(plural "$total" entries)" "Search history…"
+  hints "↵" Copy "⌫" Back
+  if ! recording; then
+    notice "clipse isn't recording" "New copies aren't saved until the listener runs." red
+    stay "Start the listener" 'bg clipse -listen; sleep 0.5; notify Started "clipse -listen"' "clipse -listen"
   fi
-  hdr "Recent · Enter copies"
-  while IFS=$'\t' read -r r label; do stay "$label" "copy_entry '$r'" "$(ago "$r")"; n=$((n+1)); done < <(rows false | head -60)
-  [ $n -gt 0 ] || item "History is empty" ':'
-  pgrep -x clipse >/dev/null || item "clipse is not recording" "bg clipse -listen; notify clipse 'listening'" "start it"
+  if recording || [ ${#pinned[@]} -gt 0 ]; then
+    hdr "Pinned" "${#pinned[@]}"
+    [ ${#pinned[@]} -gt 0 ] || empty "Nothing pinned"
+    for r in "${pinned[@]}"; do IFS=$'\t' read -r a b c d e <<<"$r"; entry "$a" "$b" "$c" "$d" "$e" pinned; done
+  fi
+  hdr "Recent" "${#recent[@]}"
+  [ ${#recent[@]} -gt 0 ] || empty "Copy something and it shows up here"
+  for r in "${recent[@]:0:60}"; do IFS=$'\t' read -r a b c d e <<<"$r"; entry "$a" "$b" "$c" "$d" "$e"; done
+  recording || return 0
   hdr "Manage"
-  item "Open clipse" 'tui clipse'
-  stay "Clear history" 'clipse -clear && notify Clipboard "history cleared (pinned kept)"' "keeps pinned" "confirm=Clear the clipboard history?|Pinned entries stay."
+  stay "Clear history…" 'clipse -clear && notify Cleared "history (pinned kept)"' "asks first" "confirm=Clear the clipboard history?|Pinned entries stay."
+  item "Open clipse" 'tui clipse; close_k4' "" "" "$([ "$total" -eq 0 ] && echo current)"
 }
 k4_dispatch "$@"

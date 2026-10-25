@@ -1,33 +1,95 @@
 #!/usr/bin/env bash
-# ollama-menu: local models in the k4 launcher: ask a question, chat, stop, pull, remove.
-K4_NAME=ollama-menu
+# ollama-menu: local models in the k4 launcher: ask (the answer opens in a terminal), chat,
+# unload, pull (in the background, progress shown as a snapshot) and remove.
+K4_NAME=ollama-menu K4_ID=ollama K4_TITLE=Ollama K4_KEY=Q K4_ICON=󰚩 K4_DESC="Ask and chat with local models"
 . "$HOME/.local/share/k4/lib.sh"
 available() { command -v ollama >/dev/null; }
-part() { printf 'S\tollama\tOllama\tQ\tAsk and chat with local models\t󰚩\nL\tollama-menu section\n'; }
+missing() { missing_body "run local models from here" "curl -fsSL https://ollama.com/install.sh | sh" "https://ollama.com"; }
+MODEL_FILE="$K4_STATE/ollama-model" RECENT="$K4_STATE/ollama-recent" PULLS="$K4_CACHE/ollama-pulls"
+extra() {  # the Ask page and the Remove page
+  printf 'P\tollama-ask\tAsk\tType a question, Enter sends it\tollama-menu ask-page\n'
+  printf 'P\tollama-remove\tRemove a model\tEnter asks first, then frees the space\tollama-menu remove-page\n'
+}
 
 models() { ollama list 2>/dev/null | awk 'NR > 1 && $1 != "" { print $1 "\t" $3 " " $4 }'; }
-default_model() { printf '%s' "${OLLAMA_MENU_MODEL:-$(models | head -1 | cut -f1)}"; }
-# The question / model name comes from k4's input step ($K4_INPUT); the answer opens in a terminal.
-ask_model() { local m="$1" q="${K4_INPUT:-}"; [ -n "$q" ] || q=$(ask "Ask $m") || return; [ -n "$q" ] || return
-  OLLAMA_Q=$q tui sh -c 'ollama run "$0" "$OLLAMA_Q"; printf "\n[done] press enter to close"; read -r _' "$m"
-  if [ -n "${K4_RUN:-}" ]; then echo k4:close; fi; }
-pull() { local m="${K4_INPUT:-}"; [ -n "$m" ] || m=$(ask "Pull model (e.g. llama3.2)") || return; [ -n "$m" ] || return
-  tui_wait "ollama pull $(printf %q "$m")"
-  if [ -n "${K4_RUN:-}" ]; then echo k4:close; fi; }
+loaded() { ollama ps 2>/dev/null | awk 'NR > 1 && $1 != "" { print $1 "\t" $3 " " $4 }'; }
+model() {  # the chosen model, if it is still installed; else the first
+  local m; m=$(cat "$MODEL_FILE" 2>/dev/null); models | cut -f1 | grep -qxF -- "$m" && { echo "$m"; return; }; models | head -1 | cut -f1; }
+up() { ollama list >/dev/null 2>&1; }
+summary() { up || { echo "not running"; return; }
+  local l n; l=$(loaded | head -1 | cut -f1); n=$(models | grep -c .) || true
+  [ -n "$l" ] && echo "$l loaded" || echo "$(plural "$n" models)"; }
+
+ask_model() {  # the question is $K4_INPUT; the answer opens in a terminal
+  local m="${1:-$(model)}" q="${K4_INPUT:-}"; [ -n "$q" ] || q=$(ask "Ask $m") || return; [ -n "$q" ] || return
+  mkdir -p "$K4_STATE"; { printf '%s\t%s\n' "$(date +%s)" "$q"; grep -vF -- "	$q" "$RECENT" 2>/dev/null | head -19; } > "$RECENT.new" && mv "$RECENT.new" "$RECENT"
+  OLLAMA_Q=$q tui sh -c 'ollama run "$0" "$OLLAMA_Q"; printf "\n[done] press enter to close"; read -r _' "$m"; close_k4; }
+set_model() { mkdir -p "$K4_STATE"; echo "$K4_VALUE" > "$MODEL_FILE"; notify Model "$K4_VALUE"; }
+pull() {  # pull in the background; the progress lands in a log the section reads
+  local m="${K4_INPUT:-}"; [ -n "$m" ] || m=$(ask "Pull model (e.g. gemma3)") || return; [ -n "$m" ] || return
+  mkdir -p "$PULLS"; local log="$PULLS/$(printf '%s' "$m" | tr '/:' '__').log"
+  bg sh -c 'ollama pull "$1" 2>&1 | tr "\r" "\n" > "$2"; if [ "${PIPESTATUS:-0}" = 0 ] && ollama list | grep -q "^$1"; then notify-send Ollama "Pulled $1"; else notify-send -u critical Ollama "Could not pull $1"; fi; rm -f "$2"' sh "$m" "$log"
+  notify Pulling "$m"; }
+pulls() {  # model<TAB>percent<TAB>meta for each pull in progress
+  local f m line pct got tot
+  for f in "$PULLS"/*.log; do [ -f "$f" ] || continue
+    m=$(basename "$f" .log | sed 's/_/:/'); line=$(grep -E '[0-9]+%' "$f" | tail -1)
+    pct=$(printf '%s' "$line" | grep -oE '[0-9]+%' | tail -1 | tr -d %)
+    got=$(printf '%s' "$line" | grep -oE '[0-9.]+ ?[KMG]B/[0-9.]+ ?[KMG]B' | tail -1)
+    printf '%s\t%s\t%s\n' "$m" "${pct:-0}" "${got:+${got/\// / } · }${pct:-0}%"
+  done; }
 
 section() {
-  if ! ollama list >/dev/null 2>&1; then item "Ollama is not running" ':' ""; item "Start it" "tui_wait 'sudo systemctl start ollama'" "sudo"; return; fi
-  local m size dm; dm=$(default_model)
-  if [ -n "$dm" ]; then hdr "Ask"; stay "Ask $dm…" "ask_model '$dm'" "" "input=Ask $dm|The answer opens in a terminal"; fi
-  hdr "Chat"
-  while IFS=$'\t' read -r m size; do item "Chat with $m" "tui ollama run '$m'" "$size"; done < <(models)
-  local running; running=$(ollama ps 2>/dev/null | awk 'NR > 1 && $1 != "" { print $1 }')
-  if [ -n "$running" ]; then
-    hdr "Loaded"
-    while read -r m; do stay "Unload $m" "ollama stop '$m' && notify Ollama 'unloaded $m'" "in memory"; done <<<"$running"
+  if ! up; then
+    desc "Server isn't running" "" "Search models…"
+    notice "Ollama isn't running" "Models are listed once the server is up." muted
+    stay "Start ollama serve" 'bg ollama serve; sleep 1; notify Started "ollama serve"'
+    item "Open ollama.com" "open_url https://ollama.com; close_k4" "opens browser"; return
   fi
-  hdr "Models"
-  stay "Pull a model…" pull "" "input=Pull model|A name from ollama.com/library, e.g. llama3.2"
-  while IFS=$'\t' read -r m size; do stay "Remove $m" "ollama rm '$m' >/dev/null && notify Ollama 'removed $m'" "$size" "confirm=Remove $m?|Frees $size; pull it again to use it."; done < <(models)
+  local m size dm rows=() lrows=() prow=() n nl
+  mapfile -t rows < <(models); mapfile -t lrows < <(loaded); mapfile -t prow < <(pulls)
+  n=${#rows[@]}; nl=${#lrows[@]}; dm=$(model)
+  desc "$(plural "$n" models) · $nl loaded in memory$([ ${#prow[@]} -gt 0 ] && echo " · ${#prow[@]} pulling")" "$(plural "$n" models)" "Search models…"
+  hints "↑↓" Move "↵" "Run / chat" "⌫" Back
+  hdr "Ask"
+  if [ -n "$dm" ]; then
+    item "Ask $dm…" : "answer opens in terminal" ollama-ask "mark=?"
+    item "Chat with $dm" "tui ollama run '$dm'; close_k4" "opens terminal"
+  else stay "Ask…" 'notify Ollama "pull a model first"' "needs a model" "mark=?;dim"; fi
+  if [ ${#prow[@]} -gt 0 ]; then hdr "Pulling" "${#prow[@]}"
+    for r in "${prow[@]}"; do IFS=$'\t' read -r m p meta <<<"$r"; progress "$m" "$p" "$meta"; done; fi
+  if [ "$nl" -gt 0 ]; then hdr "Loaded" "$nl"
+    for r in "${lrows[@]}"; do IFS=$'\t' read -r m size <<<"$r"; stay "Unload $m" "ollama stop '$m' && notify Unloaded '$m'" "frees $size"; done; fi
+  hdr "Installed" "$n"
+  [ "$n" -gt 0 ] || empty "No models yet"
+  local -A isl=(); for r in "${lrows[@]}"; do isl[${r%%$'\t'*}]=1; done
+  for r in "${rows[@]}"; do IFS=$'\t' read -r m size <<<"$r"
+    if [ -n "${isl[$m]:-}" ]; then item "$m" "tui ollama run '$m'; close_k4" "$size" "" "chip=LOADED;chipc=accent;mark=●;markc=accent"
+    else item "$m" "tui ollama run '$m'; close_k4" "$size" "" "mark=○"; fi
+  done
+  hdr "Manage"
+  stay "Pull a model…" pull "$([ "$n" -eq 0 ] && echo "e.g. gemma3")" "input=Pull model|A name from ollama.com/library, e.g. gemma3$([ "$n" -eq 0 ] && printf ';current')"
+  [ "$n" -gt 0 ] && item "Remove a model…" : "asks first" ollama-remove
+  return 0
 }
-k4_dispatch "$@"
+ask_page() {  # design: Ollama · Ask. Typing is the question; Tab steps the model.
+  local dm all t q; dm=$(model); all=$(models | cut -f1 | paste -sd'|')
+  query ask_model
+  desc "Type a question, Enter sends it" "$dm" "Ask a question…"
+  hints "↵" Ask Tab Model "↑↓" Recent Esc Back
+  notice "Enter sends to $dm" "The answer opens in a terminal. Tab picks another model." accent
+  hdr "Model"
+  choice "Model" set_model "$dm" "$all" "mark=●;markc=accent"
+  [ -s "$RECENT" ] || return 0
+  hdr "Recent questions"
+  while IFS=$'\t' read -r t q; do [ -n "$q" ] && stay "$q" "K4_INPUT=$(printf %q "$q") ask_model" "$(ago "$t")" "mark=?"; done < <(head -8 "$RECENT")
+}
+remove_page() { local m size
+  while IFS=$'\t' read -r m size; do
+    stay "$m" "ollama rm '$m' >/dev/null && notify Removed '$m'; echo k4:back" "$size" "mark=○;confirm=Remove $m?|Frees $size. Pull it again to use it."
+  done < <(models); }
+case "${1:-}" in
+  ask-page) ask_page ;;
+  remove-page) remove_page ;;
+  *) k4_dispatch "$@" ;;
+esac
