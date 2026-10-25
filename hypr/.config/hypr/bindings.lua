@@ -116,3 +116,6 @@ o.bind("SUPER + SPACE", "Omarchy menu applications", "omarchy-menu toggle applic
 
 hl.unbind("SUPER + ALT + SPACE")
 o.bind("SUPER + ALT + SPACE", "Omarchy menu", "omarchy-menu toggle root")
+
+-- Steam in the k4 launcher (steam-menu, menus stow package): games with cover art, status, store.
+o.bind("SUPER + CTRL + G", "Steam", "steam-menu")

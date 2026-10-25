@@ -691,8 +691,13 @@ k4_tree() { local s name key desc icon
     printf 'S\t%s\t%s\t%s\t%s\t%s\n' "$s" "$name" "$key" "$desc" "$icon"
     printf 'L\t%q k4-section %s\n' "$SELF" "$s"
   done
+  if command -v steam >/dev/null && command -v steam-menu >/dev/null; then   # Steam section from steam-menu
+    printf 'S\tsteam\tSteam\tG\tYour games, from Steam'"'"'s local library\t󰓓\n'
+    printf 'L\tsteam-menu section\n'
+    printf 'G\tgames\tGames\tcover art from Steam\tsteam-menu view\n'
+  fi
   printf 'V\ttheme\tTheme\tApplies to sway, waybar, terminal and k4\t%q k4-view theme\n' "$SELF"
-  printf 'V\twall\tBackground\t%s\t%q k4-view wall\n' "the theme's backgrounds + extras" "$SELF"
+  printf 'G\twall\tBackground\t%s\t%q k4-view wall\n' "the theme's backgrounds + extras" "$SELF"
   printf 'R\t%q k4-run\n' "$SELF"
 }
 k4_main() { local out

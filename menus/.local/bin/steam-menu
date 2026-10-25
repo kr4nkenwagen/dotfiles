@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# steam-menu: Steam in the k4 launcher, from Steam's local files (no account access).
+#   steam-menu              open k4 inside the Steam section (Omarchy: Super+Ctrl+G)
+#   steam-menu section      the section's rows for k4 --menu (A/H lines)
+#   steam-menu view         the games gallery for k4 (I lines, cover art)
+#   steam-menu tree         the full k4 input (section, gallery, runner)
+#   steam-menu run ID       run a row's action (k4's R command)
+#   steam-menu games        appid<TAB>name<TAB>last played (epoch)<TAB>minutes<TAB>art, newest first
+# Games come from every library folder's appmanifest_*.acf; Proton, the Steam Linux Runtimes
+# and redistributables are left out. Last played and playtime come from the logged-in user's
+# localconfig.vdf, art from Steam's library cache.
+set -u
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/snap/bin:$PATH"
+SELF=$(readlink -f "$0")
+STEAM_DIR="${STEAM_DIR:-$HOME/.local/share/Steam}"
+[ -d "$STEAM_DIR" ] || STEAM_DIR="$HOME/.steam/steam"
+
+k4id() { printf '%s' "$1" | base64 -w0; }
+item() { printf 'A\t%s\t%s\t%s\t%s\t%s\n' "$(k4id "$2")" "$1" "${3:-}" "${4:-}" "${5:-}"; }
+hdr() { printf 'H\t%s\n' "$1"; }
+notify() { if [ -n "${K4_RUN:-}" ]; then printf '%s  %s\n' "$1" "${2:-}"; else command -v notify-send >/dev/null && notify-send "$@"; fi; }
+steam_url() { setsid -f steam "$1" >/dev/null 2>&1 </dev/null; }   # hands the URL to the running client (or starts it)
+
+games() {
+  python3 - "$STEAM_DIR" <<'PY'
+import glob, os, re, sys
+root = sys.argv[1]
+
+def vdf(text):
+    # minimal KeyValues parser: nested dicts of strings
+    toks = re.findall(r'"((?:[^"\\]|\\.)*)"|([{}])', text)
+    stack = [{}]; key = None
+    for s, brace in toks:
+        if brace == "{":
+            d = {}; stack[-1][key] = d; stack.append(d); key = None
+        elif brace == "}":
+            stack.pop(); key = None
+        elif key is None:
+            key = s
+        else:
+            stack[-1][key] = s; key = None
+    return stack[0]
+
+def read(p):
+    try:
+        with open(p, encoding="utf-8", errors="replace") as f: return vdf(f.read())
+    except OSError: return {}
+
+libs = {root}
+lf = read(os.path.join(root, "steamapps", "libraryfolders.vdf")).get("libraryfolders", {})
+for v in lf.values():
+    if isinstance(v, dict) and v.get("path"): libs.add(v["path"])
+
+# last played / playtime of the most recently active local user
+stats = {}
+best = 0
+for cfg in glob.glob(os.path.join(root, "userdata", "*", "config", "localconfig.vdf")):
+    apps = read(cfg).get("UserLocalConfigStore", {}).get("Software", {}).get("Valve", {}).get("Steam", {}).get("apps", {})
+    latest = max((int(a.get("LastPlayed", 0) or 0) for a in apps.values() if isinstance(a, dict)), default=0)
+    if latest >= best:
+        best = latest
+        stats = {k: (int(v.get("LastPlayed", 0) or 0), int(v.get("Playtime", 0) or 0)) for k, v in apps.items() if isinstance(v, dict)}
+
+skip = re.compile(r"^(Proton|Steam Linux Runtime|Steamworks Common|Steam ?VR|SteamVR)", re.I)
+rows = []
+for lib in libs:
+    for m in glob.glob(os.path.join(lib, "steamapps", "appmanifest_*.acf")):
+        st = read(m).get("AppState", {})
+        appid, name = st.get("appid", ""), st.get("name", "")
+        if not appid or not name or skip.match(name): continue
+        last, mins = stats.get(appid, (int(st.get("LastPlayed", 0) or 0), 0))
+        cache = os.path.join(root, "appcache", "librarycache", appid)
+        art = ""
+        for pat in ("header.jpg", "*/header.jpg", "library_hero.jpg", "*/library_hero.jpg", "library_600x900.jpg", "*/library_600x900.jpg", "*.jpg"):
+            hits = sorted(glob.glob(os.path.join(cache, pat)))
+            if hits: art = hits[0]; break
+        rows.append((last, appid, name, mins, art))
+for last, appid, name, mins, art in sorted(rows, key=lambda r: (-r[0], r[2].lower())):
+    print(f"{appid}\t{name}\t{last}\t{mins}\t{art}")
+PY
+}
+
+played() {  # played EPOCH MINUTES -> "12 h · 3 d ago"
+  local t=$1 m=$2 now d h out=""
+  [ "$m" -gt 0 ] && { h=$(( (m + 30) / 60 )); out="$h h"; [ "$h" -eq 0 ] && out="$m min"; }
+  if [ "$t" -gt 0 ]; then
+    now=$(date +%s); d=$(( (now - t) / 86400 ))
+    case $d in 0) out="${out:+$out · }today" ;; 1) out="${out:+$out · }yesterday" ;; *) out="${out:+$out · }$d d ago" ;; esac
+  fi
+  printf '%s' "$out"
+}
+
+section() { local id name t m art n
+  n=$(games | wc -l)
+  hdr "Games"
+  item "Games" : "$n installed" games
+  while IFS=$'\t' read -r id name t m art; do
+    item "$name" "steam_url steam://rungameid/$id" "$(played "$t" "$m")" "" app
+  done < <(games)
+  hdr "Status"
+  for s in online away invisible offline; do item "${s^}" "steam_url steam://friends/status/$s; notify Steam 'status $s'" "" "" stay; done
+  hdr "Open"
+  item "Library" 'steam_url steam://open/games'
+  item "Store" 'steam_url steam://store'
+  item "Friends" 'steam_url steam://open/friends'
+  item "Downloads" 'steam_url steam://open/downloads'
+}
+
+view() { local id name t m art
+  while IFS=$'\t' read -r id name t m art; do
+    printf 'I\t%s\t%s\t%s\t\n' "$(k4id "steam_url steam://rungameid/$id")" "$name" "$art"
+  done < <(games)
+}
+
+tree() {
+  printf 'S\tsteam\tSteam\tG\tYour games, from Steam'"'"'s local library\t󰓓\n'
+  printf 'L\t%q section\n' "$SELF"
+  printf 'G\tgames\tGames\tcover art from Steam\t%q view\n' "$SELF"
+  printf 'R\t%q run\n' "$SELF"
+}
+
+case "${1:-}" in
+  "") out=$(tree | k4 --menu --open steam) || exit 0
+      case "$out" in url:*) xdg-open "${out#url:}" >/dev/null 2>&1 & ;; *) eval "$(printf '%s' "$out" | base64 -d)" ;; esac ;;
+  section) section ;;
+  view) view ;;
+  tree) tree ;;
+  games) games ;;
+  run) K4_RUN=1; eval "$(printf '%s' "${2:?id}" | base64 -d)" ;;
+  *) sed -n '2,12p' "$0" >&2; exit 2 ;;
+esac

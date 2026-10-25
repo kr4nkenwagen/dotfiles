@@ -107,7 +107,7 @@ ubuntu_desktop_packages=(
   libwayland-dev libxkbcommon-dev clang
 )
 
-stow_dirs=(fish nvim tmux theme)
+stow_dirs=(fish nvim tmux theme menus)
 case "$OS" in
   omarchy) stow_dirs+=(qutebrowser aerc ghostty hypr omarchy vesktop) ;;
   arch)    stow_dirs+=(qutebrowser aerc ghostty) ;;
@@ -412,7 +412,7 @@ find ~ ~/.config -maxdepth 1 -xtype l -lname "*${DOTFILES_DIR##*/}*" -print -del
 
 # Unstow packages that belong to other profiles. An older init.sh stowed the
 # Omarchy hypr config everywhere, which breaks a non-Omarchy machine.
-all_stow_dirs=(fish nvim tmux theme aerc qutebrowser ghostty hypr omarchy vesktop ubuntu)
+all_stow_dirs=(fish nvim tmux theme menus aerc qutebrowser ghostty hypr omarchy vesktop ubuntu)
 unstow=()
 for d in "${all_stow_dirs[@]}"; do
   [ -d "$d" ] || continue
