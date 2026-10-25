@@ -1,6 +1,6 @@
 # Lock screen. Rendered by sway-theme-set; sway-menu runs swaylock -C on this file and
 # passes the wallpaper on the command line.
-font=Terminess Nerd Font Mono
+font={{ font }}
 color={{ background_strip }}
 indicator-radius=100
 indicator-thickness=8

@@ -63,9 +63,25 @@ esac
 # PACKAGES #
 ###########
 # Common set for pacman/AUR (arch, omarchy).
+# Every Nerd Font whose Mono variant has programming ligatures (checked in the fonts'
+# GSUB tables, Nerd Fonts 3.5.1): the same set ubuntu_fonts fetches as release tarballs.
+ligature_nerd_fonts=(
+  0xProto AnnotationMono CascadiaCode CommitMono D2Coding FantasqueSansMono FiraCode
+  Hasklig IntelOneMono Iosevka IosevkaTerm IosevkaTermSlab JetBrainsMono Lilex
+  MartianMono Monaspace Monoid Recursive VictorMono ZedMono
+)
+ligature_nerd_font_pkgs=(
+  ttf-0xproto-nerd ttf-annotationmono-nerd ttf-cascadia-code-nerd otf-commit-mono-nerd
+  ttf-d2coding-nerd ttf-fantasque-nerd ttf-firacode-nerd otf-hasklig-nerd ttf-intone-nerd
+  ttf-iosevka-nerd ttf-iosevkaterm-nerd ttf-iosevkatermslab-nerd ttf-jetbrains-mono-nerd
+  ttf-lilex-nerd ttf-martian-mono-nerd otf-monaspace-nerd ttf-monoid-nerd ttf-recursive-nerd
+  ttf-victor-mono-nerd ttf-zed-mono-nerd
+)
+
 arch_packages=(
   stow tmux qutebrowser fish ghostty
   ttf-terminus-nerd ttf-space-mono-nerd ttf-bigblueterminal-nerd
+  "${ligature_nerd_font_pkgs[@]}"
   python-adblock uv ollama nodejs python-pip libffi openssl platformio
   rtorrent adw-gtk-theme mpv steam clipse ranger aerc gdb tenere mcfly
   discordo yq python-libtmux ripgrep youtube-dl go git neovim
@@ -161,10 +177,11 @@ ubuntu_neovim() {
   rm -rf "$tmp"
 }
 
-# Nerd Fonts used by ghostty/tmux/swaylock configs. Not packaged for Ubuntu.
+# Nerd Fonts: the three used by default plus every ligature font (sway-font-set picks
+# among them). Not packaged for Ubuntu; ~360 MB of tarballs, the Iosevka family is most of it.
 ubuntu_fonts() {
   local dir="$HOME/.local/share/fonts/nerd-fonts" font
-  for font in Terminus SpaceMono BigBlueTerminal FiraCode; do
+  for font in Terminus SpaceMono BigBlueTerminal "${ligature_nerd_fonts[@]}"; do
     [ -d "$dir/$font" ] && continue
     info "Installing $font Nerd Font"
     mkdir -p "$dir/$font"

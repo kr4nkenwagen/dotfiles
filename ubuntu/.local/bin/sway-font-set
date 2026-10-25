@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# sway-font-set: choose the font for the whole desktop (ghostty, waybar, fuzzel, mako,
+# swaylock, sway titles, qutebrowser), the Ubuntu/Sway counterpart of omarchy-font-set.
+#   sway-font-set NAME      e.g. "JetBrainsMono Nerd Font Mono"; re-renders the theme and applies live
+#   sway-font-set pick      fuzzel picker over the installed Nerd Font Mono families
+#   sway-font-set list      installed Nerd Font Mono families
+#   sway-font-set current
+set -euo pipefail
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+STATE="${SWAY_THEME_STATE:-$HOME/.local/state/omarchy/current}"
+FONT_FILE="$STATE/font.name"
+
+list() { fc-list : family 2>/dev/null | tr ',' '\n' | sed 's/^ *//' | grep -E ' Nerd Font Mono$' | sort -u; }
+current() { cat "$FONT_FILE" 2>/dev/null || echo "Terminess Nerd Font Mono"; }
+set_font() {
+  local name="$1"
+  list | grep -qxF -- "$name" || { echo "sway-font-set: '$name' is not an installed Nerd Font Mono family (sway-font-set list)" >&2; exit 1; }
+  mkdir -p "$STATE"; printf '%s\n' "$name" > "$FONT_FILE"
+  sway-theme-set "$(sway-theme-set current 2>/dev/null || echo tokyo-night)"   # re-render + live reload of every app
+  command -v notify-send >/dev/null && notify-send "Font" "$name" -t 2000 || true
+}
+pick() {
+  local cur sel; cur=$(current)
+  sel=$(list | sed "s/^\(${cur//\//\\/}\)$/\1  (current)/" \
+        | fuzzel --config "$STATE/theme/fuzzel.ini" --dmenu --prompt "Font ❯ " --lines 15 --width 50) || exit 0
+  sel=${sel%  (current)}; [ -n "$sel" ] && set_font "$sel"
+}
+case "${1:-}" in
+  list) list ;;
+  current) current ;;
+  pick) pick ;;
+  "" | -h | --help) sed -n '2,8p' "$0" >&2; exit 2 ;;
+  *) set_font "$1" ;;
+esac

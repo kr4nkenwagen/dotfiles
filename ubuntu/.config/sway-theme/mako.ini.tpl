@@ -1,5 +1,5 @@
 # Notifications. Rendered by sway-theme-set; mako is started with -c on this file.
-font=Terminess Nerd Font Mono 11
+font={{ font }} 11
 background-color={{ background }}
 text-color={{ foreground }}
 border-color={{ accent }}

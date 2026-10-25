@@ -1,3 +1,8 @@
+# Palette from Omarchy's ghostty template, plus the font chosen with sway-font-set.
+# ghostty appends repeated font-family keys as fallbacks, so clear the list first.
+font-family = ""
+font-family = "{{ font }}"
+
 background = {{ background }}
 foreground = {{ foreground }}
 cursor-color = {{ bright_foreground }}

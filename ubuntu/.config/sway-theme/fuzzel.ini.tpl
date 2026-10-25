@@ -1,7 +1,7 @@
 # App launcher. Rendered by sway-theme-set; fuzzel 1.9 has no include, so the whole
 # file is generated and passed with --config.
 [main]
-font=Terminess Nerd Font Mono:size=12
+font={{ font }}:size=12
 terminal=ghostty -e
 prompt="❯ "
 icons-enabled=no

@@ -8,7 +8,7 @@
 # (user overlay, same precedence as Omarchy). Like omarchy-theme-set, the result is
 # ~/.local/state/omarchy/current/theme: colors.toml plus every file rendered from
 # ~/.config/sway-theme/*.tpl, so ghostty, qutebrowser, nvim and tmux find the theme
-# at the same path on both machines.
+# at the same path on both machines. The font comes from $STATE/font.name (sway-font-set).
 set -euo pipefail
 # sway launches us with the login environment, which lacks the dirs init.sh installs
 # into (awww, theme-color, bluetui, wiremix, lazygit). Fish adds them for terminals only.
@@ -19,6 +19,8 @@ STATE="${SWAY_THEME_STATE:-$HOME/.local/state/omarchy/current}"
 THEME_DIRS=("$HOME/.config/omarchy/themes" "$DOTFILES/themes")   # first match wins
 TEMPLATES="${SWAY_THEME_TEMPLATES:-$HOME/.config/sway-theme}"
 CURRENT="$STATE/theme"
+FONT_FILE="$STATE/font.name"                                      # written by sway-font-set
+DEFAULT_FONT="Terminess Nerd Font Mono"
 NEXT="$STATE/next-theme"
 USER_BACKGROUNDS="$HOME/.config/omarchy/backgrounds"              # per-theme extras, filled by theme-bg-sync
 
@@ -60,7 +62,8 @@ stage() {  # stage DIR: copy the theme and render the templates into $NEXT
   local dir="$1" tpl out
   rm -rf "$NEXT"; mkdir -p "$NEXT"
   cp -r --no-preserve=mode,ownership "$dir"/. "$NEXT"/
-  PALETTE=$(theme-color --file "$NEXT/colors.toml" --all)
+  local font; font=$(cat "$FONT_FILE" 2>/dev/null || true); font=${font:-$DEFAULT_FONT}
+  PALETTE=$(theme-color --file "$NEXT/colors.toml" --all; printf 'font\t%s\n' "$font")
   for tpl in "$TEMPLATES"/*.tpl; do
     [ -f "$tpl" ] || continue
     out="$NEXT/$(basename "$tpl" .tpl)"
@@ -78,7 +81,7 @@ apply_live() {
   # sway: client.* colours take effect at runtime; the file is included on the next start
   if [ -n "${SWAYSOCK:-}" ] && command -v swaymsg >/dev/null; then
     while IFS= read -r line; do
-      [[ $line == client.* ]] && swaymsg -- "$line" >/dev/null 2>&1 || true
+      [[ $line == client.* || $line == font\ * ]] && swaymsg -- "$line" >/dev/null 2>&1 || true
     done <"$CURRENT/sway.conf"
   fi
   bg=$(backgrounds "$name" | head -1)

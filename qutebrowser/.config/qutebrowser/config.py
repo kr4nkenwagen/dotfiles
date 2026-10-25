@@ -22,6 +22,13 @@ def clean_hex(val, fallback):
     return fallback
 
 def get_font():
+    # Ubuntu/Sway: the family chosen with sway-font-set. Omarchy: omarchy-font-set writes kitty.conf.
+    try:
+        name = Path("~/.local/state/omarchy/current/font.name").expanduser().read_text(encoding="utf-8").strip()
+        if name:
+            return name
+    except Exception:
+        pass
     kitty_conf = os.path.expanduser("~/.config/kitty/kitty.conf")
     if os.path.isfile(kitty_conf):
         with open(kitty_conf, "r", encoding="utf-8", errors="ignore") as f:

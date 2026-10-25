@@ -19,7 +19,7 @@
 @define-color magenta   {{ magenta }};
 
 * {
-  font-family: "Terminess Nerd Font Mono", monospace;
+  font-family: "{{ font }}", monospace;
   font-size: 13px;
   min-height: 0;
   border: none;

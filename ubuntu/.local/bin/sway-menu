@@ -11,6 +11,7 @@
 #   sway-menu wifi                        nmcli Wi-Fi picker (fuzzel)
 #   sway-menu vpn-connect NAME | vpn-pick FortiClient VPN (run in the floating terminal)
 #   sway-menu theme NAME | theme-next | theme-pick   switch the Omarchy-format theme (sway-theme-set)
+#   sway-menu font [NAME|pick]            switch the desktop font (sway-font-set)
 #   sway-menu background FILE             set the wallpaper (also used by sway-theme-set)
 #   sway-menu display|network|audio|bluetooth|weather   the waybar module menus (omarchy-shell panels)
 #   sway-menu timezone                     pick a timezone (clock middle click)
@@ -216,6 +217,7 @@ theme_pick() { local names=() previews=() n d cur i t
 leaves_style() { local p="${1:-}"
   add "󰸌  ${p}Theme picker ($(theme_pretty "$(theme_name)"))" theme_pick
   add "󰸌  ${p}Theme: next" 'sway-theme-set next'
+  add "󰛖  ${p}Font picker ($(cat "$HOME/.local/state/omarchy/current/font.name" 2>/dev/null || echo "Terminess Nerd Font Mono"))" 'sway-font-set pick'
   add "󰸉  ${p}Background picker (thumbnails)" wallpaper_picker
   add "󰸉  ${p}Background: next" bg_next
   add "󰸉  ${p}Background: random" bg_random; }
@@ -675,6 +677,7 @@ case "${1:-}" in
   theme) sway-theme-set "${2:?theme name}" ;;
   theme-next) sway-theme-set next ;;
   theme-pick) theme_pick ;;
+  font) sway-font-set "${2:-pick}" ;;
   background) set_background "${2:?image path}" ;;
   display|network|audio|bluetooth|weather) submenu "$1" ;;
   timezone) tz_menu ;;

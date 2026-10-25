@@ -2,7 +2,7 @@
 # (dmenu icons, PNG) are readable, and a large preview once the match list is short.
 # Rendered by sway-theme-set next to fuzzel.ini.
 [main]
-font=Terminess Nerd Font Mono:size=12
+font={{ font }}:size=12
 line-height=42
 prompt="❯ "
 icons-enabled=yes
