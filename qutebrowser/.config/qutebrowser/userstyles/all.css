@@ -1,16 +1,16 @@
 :root {
   --bg_default: #1a1b26;
-  --bg_lighter: #181825;
+  --bg_lighter: #1a1b26;
   --bg_selections: #3e4451;
-  --fg_disabled: #6c7086;
+  --fg_disabled: #414868;
   --fg_default: #c0caf45;
   --bg_lightest: #c0caf45;
-  --red: #f38ba8;
+  --red: #f7768e;
   --orange: #d19a66;
-  --yellow: #a6e3a1;
-  --green: #f5c2e7;
-  --blue: #89b4fa;
-  --teal: #f9e2af;
+  --yellow: #b9f27c;
+  --green: #bb9af7;
+  --blue: #0db9d7;
+  --teal: #ff9e64;
   --purple: #c7a9ff;
   --font: FiraCode Nerd Font;
   --bg_translucent: rgba(26, 27, 38, 0.5);
@@ -29,10 +29,17 @@ body {
   font-family: var(--font)!important;
 }
 /* Root background carries the terminal-like alpha (written by config.py from
-   ghostty's background-opacity); everything painted on top stays solid. */
-html {
+   ghostty's background-opacity); everything painted on top stays solid.
+   :not(#\9) adds an id level of specificity without matching anything: YouTube
+   injects `html { background-color: … !important }` after this sheet, and with
+   equal specificity the later rule would win. */
+html:not(#\9) {
   background-color: var(--bg_translucent) !important;
   font-family: var(--font)!important;
+}
+/* YouTube's app shell paints an opaque base over the whole page; let the root show. */
+ytd-app:not(#\9) {
+  background: transparent !important;
 }
 input,
 textarea {
