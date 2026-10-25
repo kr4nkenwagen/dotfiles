@@ -87,6 +87,7 @@ ubuntu_desktop_packages=(
   waybar mako-notifier fuzzel xdg-terminal-exec wireplumber
   brightnessctl playerctl pavucontrol grim slurp network-manager-gnome blueman ghostty
   wf-recorder wdisplays wlsunset power-profiles-daemon libnotify-bin libgtk-3-bin chafa qrencode
+  libvips-tools
 )
 
 stow_dirs=(fish nvim tmux theme)
@@ -213,6 +214,25 @@ gh_tar_bin() {  # gh_tar_bin NAME REPO ASSET_REGEX: tarball containing the binar
   rm -rf "$tmp"
 }
 
+ensure_cargo() {
+  have cargo || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal || warn "rustup install failed"
+}
+
+# awww (ex-swww): wallpaper daemon with transitions, used by sway-menu when present.
+# Not packaged for Ubuntu; built from source like wiremix.
+ubuntu_awww() {
+  have awww && return
+  info "Building awww (cargo)"
+  apt_install_available liblz4-dev pkg-config
+  ensure_cargo
+  local src="$SRC_DIR/awww"
+  if [ -d "$src/.git" ]; then git -C "$src" pull -q --ff-only || true
+  else git clone -q --depth 1 https://codeberg.org/LGFae/awww "$src" || { warn "could not clone awww"; return; }; fi
+  (cd "$src" && PATH="$HOME/.cargo/bin:$PATH" cargo build --release --locked 2>/dev/null || PATH="$HOME/.cargo/bin:$PATH" cargo build --release) \
+    && install -m755 "$src"/target/release/awww "$src"/target/release/awww-daemon ~/.local/bin/ \
+    || warn "awww build failed; sway-menu falls back to swaybg"
+}
+
 # TUIs bound in the sway config (same keys as Omarchy): bluetui, impala, wiremix, lazygit.
 ubuntu_tuis() {
   local arch; arch="$(uname -m)"
@@ -225,7 +245,7 @@ ubuntu_tuis() {
   if ! have wiremix; then
     info "Building wiremix (cargo)"
     apt_install_available libpipewire-0.3-dev clang pkg-config
-    have cargo || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal || warn "rustup install failed"
+    ensure_cargo
     PATH="$HOME/.cargo/bin:$PATH" cargo install --locked wiremix || warn "wiremix build failed"
   fi
   # impala talks to iwd. Opt in to switching NetworkManager's Wi-Fi backend with UBUNTU_WIFI_IWD=1.
@@ -253,6 +273,7 @@ ubuntu_extras() {
   have dust || ubuntu_dust
   have clipse || go install github.com/savedra1/clipse@latest || warn "clipse install failed"
   ubuntu_tuis
+  ubuntu_awww
 }
 
 # Tokyo Night window colour for Chrome via a managed policy, the same mechanism

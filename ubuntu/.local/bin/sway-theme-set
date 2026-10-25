@@ -83,6 +83,8 @@ apply_live() {
     ln -nsf "$bg" "$STATE/background"
     if command -v sway-menu >/dev/null; then sway-menu background "$bg"; fi
   fi
+  # thumbnails for the picker, built in the background while the rest reloads
+  command -v sway-menu >/dev/null && (sway-menu thumbs-warm >/dev/null 2>&1 &)
   pkill -SIGUSR2 -x waybar 2>/dev/null || true     # reloads its style
   command -v makoctl >/dev/null && makoctl reload 2>/dev/null || true
   pkill -SIGUSR2 -x ghostty 2>/dev/null || true    # re-reads config incl. the theme file

@@ -4,7 +4,9 @@
 #   sway-menu lock   lock the screen (used by the sway config and swayidle)
 #   sway-menu idle   start swayidle (used by the sway config)
 #   sway-menu pkg-install | pkg-remove   fzf over apt packages (run in the floating terminal)
-#   sway-menu wallpaper                   fzf wallpaper picker with image preview
+#   sway-menu wallpaper | wallpaper-next | wallpaper-random   fuzzel wallpaper picker (thumbnails)
+#   sway-menu wallpaper-restore           repaint the saved wallpaper (sway config runs it at start)
+#   sway-menu thumbs-warm                 build thumbnails for the current theme's wallpapers
 #   sway-menu wifi                        nmcli Wi-Fi picker (fuzzel)
 #   sway-menu vpn-connect NAME | vpn-pick FortiClient VPN (run in the floating terminal)
 #   sway-menu theme NAME | theme-next | theme-pick   switch the Omarchy-format theme (sway-theme-set)
@@ -23,11 +25,14 @@ STATE="$HOME/.local/state/sway"          # included by the sway config: *.conf
 SHOTS="$HOME/Pictures/Screenshots"
 RECS="$HOME/Videos/Recordings"
 THEME="$HOME/.local/state/omarchy/current/theme"   # rendered by sway-theme-set
+BG_LINK="$HOME/.local/state/omarchy/current/background"   # current wallpaper, same symlink Omarchy keeps
 DEFAULT_WALLPAPER="$DOTFILES/wallpapers/neon-city.png"
 WALLPAPER_DIRS=("$THEME/backgrounds" "$HOME/.config/omarchy/backgrounds/$(cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null)" "$DOTFILES/wallpapers")  # theme + extras from theme-bg-sync
+THUMBS="$HOME/.cache/sway-menu/thumbs"
 
 # ---------- tiny menu framework: parallel arrays of labels and actions ----------
 fz() { fuzzel --config "$THEME/fuzzel.ini" "$@"; }
+fz_img() { fuzzel --config "$THEME/fuzzel-images.ini" "$@"; }   # tall rows with thumbnail icons
 L=(); A=()
 reset() { L=(); A=(); }
 add() { L+=("$1"); A+=("$2"); }                  # add "icon  Label" 'action'
@@ -55,11 +60,29 @@ tui_wait() { tui sh -c "$1; printf '\n[done] press enter to close'; read -r _"; 
 bg() { "$@" >/dev/null 2>&1 & disown; }
 
 # ---------- lock / idle / wallpaper ----------
-wallpaper() {
-  local f; f=$(sed -n 's/^output \* bg "\(.*\)" fill$/\1/p' "$STATE/background.conf" 2>/dev/null)
+wallpaper() {  # current wallpaper: the Omarchy-style symlink, else the default
+  local f; f=$(readlink -f "$BG_LINK" 2>/dev/null)
   [ -f "${f:-}" ] && printf '%s' "$f" || printf '%s' "$DEFAULT_WALLPAPER"
 }
 lock() { swaylock -f -C "$THEME/swaylock.conf" -i "$(wallpaper)" -s fill; }
+# awww (ex-swww) paints with a transition when installed; otherwise sway's own swaybg.
+bg_tool() { command -v awww || command -v swww || true; }
+apply_bg() {  # apply_bg FILE
+  local t; t=$(bg_tool)
+  if [ -n "$t" ]; then
+    if ! "$t" query >/dev/null 2>&1; then
+      "${t}-daemon" >/dev/null 2>&1 & disown
+      local i; for i in $(seq 30); do "$t" query >/dev/null 2>&1 && break; sleep 0.1; done
+    fi
+    "$t" img "$1" --transition-type grow --transition-pos center --transition-duration 1 --transition-fps 60 >/dev/null 2>&1 \
+      || swaymsg output '*' bg "$1" fill >/dev/null
+  else
+    swaymsg output '*' bg "$1" fill >/dev/null
+  fi
+}
+set_background() { local f; f=$(readlink -f "$1"); [ -f "$f" ] || return
+  mkdir -p "$(dirname "$BG_LINK")"; ln -nsf "$f" "$BG_LINK"; apply_bg "$f"; }
+wallpaper_restore() { rm -f "$STATE/background.conf"; apply_bg "$(wallpaper)"; }   # background.conf: older versions persisted the choice there
 idle() {
   exec swayidle -w \
     timeout 300 "$0 lock" \
@@ -106,41 +129,65 @@ leaves_toggle() { local p="${1:-}"
   add "󰂛  ${p}Do not disturb ($(onoff sh -c 'makoctl mode | grep -qx do-not-disturb'))" toggle_dnd; }
 
 # ---------- Style ----------
-set_background() { local f="$1"; mkdir -p "$STATE"
-  printf 'output * bg "%s" fill\n' "$f" > "$STATE/background.conf"
-  swaymsg output '*' bg "$f" fill >/dev/null; }
-# fzf with an image preview (chafa; Kitty graphics in ghostty, text art elsewhere). Runs in the floating terminal.
-wallpaper_picker() {
-  local fmt=symbols f
-  [ -n "${GHOSTTY_RESOURCES_DIR:-}" ] || [ -n "${KITTY_WINDOW_ID:-}" ] && fmt=kitty
-  # Full paths from every wallpaper dir; fzf shows just the file name (last / field).
-  f=$(find "${WALLPAPER_DIRS[@]}" -maxdepth 1 -type f 2>/dev/null | sort \
-    | fzf --prompt 'Background ❯ ' --header 'enter: set · esc: cancel' --delimiter / --with-nth -1 \
-          --preview "chafa -f $fmt -s \${FZF_PREVIEW_COLUMNS}x\${FZF_PREVIEW_LINES} {}" \
-          --preview-window 'right:75%:noborder') || exit 0
-  [ -n "$f" ] && set_background "$f"
+bg_list() { find -L "${WALLPAPER_DIRS[@]}" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) 2>/dev/null | sort -u; }
+bg_next() { local cur list; cur=$(wallpaper); mapfile -t list < <(bg_list); [ ${#list[@]} -gt 0 ] || return
+  local i n=${#list[@]} next="${list[0]}"
+  for i in "${!list[@]}"; do [ "$(readlink -f "${list[$i]}")" = "$cur" ] && next="${list[$(( (i + 1) % n ))]}"; done
+  set_background "$next"; }
+bg_random() { local f; f=$(bg_list | shuf -n1); [ -n "$f" ] && set_background "$f"; }
+# Thumbnails (PNG, the only raster fuzzel loads) cached by path+size+mtime, like omarchy-menu-images.
+thumb_path() { printf '%s/%s.png' "$THUMBS" "$(printf '%s:%s' "$1" "$(stat -c '%s:%Y' "$1" 2>/dev/null)" | md5sum | cut -c1-32)"; }
+thumb_make() {  # thumb_make FILE OUT
+  if command -v vipsthumbnail >/dev/null; then vipsthumbnail "$1" --size 480x270 --smartcrop centre -o "$2[strip]" 2>/dev/null
+  elif command -v magick >/dev/null; then magick "$1" -thumbnail 480x270^ -gravity center -extent 480x270 "$2" 2>/dev/null
+  elif command -v convert >/dev/null; then convert "$1" -thumbnail 480x270^ -gravity center -extent 480x270 "$2" 2>/dev/null
+  elif command -v ffmpeg >/dev/null; then ffmpeg -loglevel error -y -i "$1" -vf 'scale=480:270:force_original_aspect_ratio=increase,crop=480:270' -frames:v 1 "$2" 2>/dev/null
+  else return 1; fi
 }
-# Themes: sway-theme-set lists "name<TAB>dir"; the picker previews each theme's preview.png.
+thumbs_warm() {  # thumbs_warm [FILE...]: missing thumbnails for the given (default: current) wallpapers, in parallel
+  mkdir -p "$THUMBS"; local f t
+  { if [ $# -gt 0 ]; then printf '%s\n' "$@"; else bg_list; fi; } | while IFS= read -r f; do
+      t=$(thumb_path "$f"); [ -f "$t" ] || printf '%s\0%s\0' "$f" "$t"
+    done | xargs -0 -r -n2 -P "$(nproc)" sh -c '"$0" thumb-make "$1" "$2"' "$SELF"
+  # drop thumbnails older than 60 days that nothing listed (cache hygiene)
+  find "$THUMBS" -type f -mtime +60 -delete 2>/dev/null
+}
+image_pick() {  # image_pick PROMPT CURRENT FILE... -> prints the chosen file; rows = "name\0icon\x1fthumb"
+  local prompt="$1" cur="$2"; shift 2; local f t i n=$#
+  [ "$n" -gt 0 ] || return 1
+  thumbs_warm "$@"
+  i=$(for f in "$@"; do t=$(thumb_path "$f"); n=$(basename "$f"); n="${n%.*}"
+        [ "$(readlink -f "$f")" = "$cur" ] && n="$n  (current)"
+        if [ -f "$t" ]; then printf '%s\0icon\x1f%s\n' "$n" "$t"; else printf '%s\n' "$n"; fi
+      done | fz_img --dmenu --index --prompt "$prompt ❯ ") || return 1
+  [[ "${i:-}" =~ ^[0-9]+$ ]] || return 1
+  shift "$i"; printf '%s' "$1"
+}
+wallpaper_picker() { local f; mapfile -t list < <(bg_list)
+  if [ -n "${SWAY_MENU_DRY_RUN:-}" ]; then thumbs_warm "${list[@]}"; for f in "${list[@]}"; do printf '%s\t%s\n' "$f" "$(thumb_path "$f")"; done; return; fi
+  f=$(image_pick Background "$(wallpaper)" "${list[@]}") || return 0; [ -n "$f" ] && set_background "$f"; }
+# Themes: sway-theme-set lists "name<TAB>dir"; the picker shows each theme's preview.png.
 theme_name() { sway-theme-set current 2>/dev/null; }
 theme_pretty() { printf '%s' "$1" | sed -E 's/(^|-)([a-z])/\1\u\2/g; s/-/ /g'; }
-theme_pick() {
-  local fmt=symbols n
-  [ -n "${GHOSTTY_RESOURCES_DIR:-}" ] || [ -n "${KITTY_WINDOW_ID:-}" ] && fmt=kitty
-  n=$(sway-theme-set list | fzf --prompt 'Theme ❯ ' --header 'enter: apply · esc: cancel' --delimiter $'\t' --with-nth 1 \
-        --preview "[ -f {2}/preview.png ] && chafa -f $fmt -s \${FZF_PREVIEW_COLUMNS}x\${FZF_PREVIEW_LINES} {2}/preview.png || head -40 {2}/colors.toml" \
-        --preview-window 'right:75%:noborder' | cut -f1) || exit 0
-  [ -n "$n" ] && sway-theme-set "$n"
+theme_pick() { local names=() previews=() n d cur i t
+  cur=$(theme_name)
+  while IFS=$'\t' read -r n d; do names+=("$n"); previews+=("$d/preview.png"); done < <(sway-theme-set list 2>/dev/null)
+  [ ${#names[@]} -gt 0 ] || return 0
+  thumbs_warm "${previews[@]}"
+  i=$(for i in "${!names[@]}"; do t=$(thumb_path "${previews[$i]}"); n="$(theme_pretty "${names[$i]}")$([ "${names[$i]}" = "$cur" ] && printf '  (current)')"
+        if [ -f "$t" ]; then printf '%s\0icon\x1f%s\n' "$n" "$t"; else printf '%s\n' "$n"; fi
+      done | fz_img --dmenu --index --prompt "Theme ❯ ") || return 0
+  [[ "${i:-}" =~ ^[0-9]+$ ]] && sway-theme-set "${names[$i]}"
 }
-leaves_style() { local p="${1:-}" d f n cur; cur=$(theme_name)
-  add "󰸌  ${p}Theme picker (preview)" "tui $(printf %q "$SELF") theme-pick"
+leaves_style() { local p="${1:-}" d n cur; cur=$(theme_name)
+  add "󰸌  ${p}Theme picker (previews)" theme_pick
   add "󰸌  ${p}Theme: next" 'sway-theme-set next'
   while IFS=$'\t' read -r n d; do
     add "󰸌  ${p}Theme: $(theme_pretty "$n")$([ "$n" = "$cur" ] && printf '  (current)')" "sway-theme-set $(printf %q "$n")"
   done < <(sway-theme-set list 2>/dev/null)
-  add "󰸉  ${p}Background picker (preview)" "tui $(printf %q "$SELF") wallpaper"
-  for d in "${WALLPAPER_DIRS[@]}"; do
-    for f in "$d"/*; do [ -f "$f" ] && add "󰋩  ${p}Background: ${f##*/}" "set_background $(printf %q "$f")"; done
-  done; }
+  add "󰸉  ${p}Background picker (thumbnails)" wallpaper_picker
+  add "󰸉  ${p}Background: next" bg_next
+  add "󰸉  ${p}Background: random" bg_random; }
 
 # ---------- Setup ----------
 set_layout() { swaymsg input type:keyboard xkb_layout "$1" >/dev/null && notify "Keyboard" "Layout: $1"; }
@@ -575,6 +622,11 @@ case "${1:-}" in
   pkg-install) pkg_install ;;
   pkg-remove) pkg_remove ;;
   wallpaper) wallpaper_picker ;;
+  wallpaper-next) bg_next ;;
+  wallpaper-random) bg_random ;;
+  wallpaper-restore) wallpaper_restore ;;
+  thumbs-warm) thumbs_warm ;;
+  thumb-make) mkdir -p "$(dirname "$3")"; thumb_make "${2:?file}" "${3:?out}" ;;
   wifi) wifi_menu ;;
   vpn-connect) vpn_connect "${2:?profile name}" ;;
   vpn-pick) vpn_pick ;;
