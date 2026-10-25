@@ -1,7 +1,7 @@
 /* Rendered by sway-theme-set from the current theme; waybar is started with -s on this file.
    Each module gets its own palette colour so the bar reads at a glance:
-   workspaces accent · clock foreground · audio magenta · network cyan ·
-   bluetooth blue · battery green/yellow/red by state. */
+   workspaces accent · clock foreground · weather orange · backlight yellow ·
+   audio magenta · network cyan · bluetooth blue · battery green/yellow/red by state. */
 @define-color bg        {{ background }};
 @define-color bg_light  {{ lighter_background }};
 @define-color fg        {{ foreground }};
@@ -65,7 +65,9 @@ window#waybar {
 }
 
 /* Right side: one colour per module, dimmed when inactive. */
+#custom-weather,
 #tray,
+#backlight,
 #wireplumber,
 #network,
 #bluetooth,
@@ -75,6 +77,11 @@ window#waybar {
 }
 #tray > .passive { -gtk-icon-effect: dim; }
 #tray > .needs-attention { -gtk-icon-effect: highlight; }
+
+#custom-weather { color: @orange; }
+#custom-weather.stale { color: @muted; }
+
+#backlight { color: @yellow; }
 
 #wireplumber { color: @magenta; }
 #wireplumber.muted { color: @muted; }

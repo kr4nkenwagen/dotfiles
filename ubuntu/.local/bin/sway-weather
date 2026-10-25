@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# sway-weather: weather for waybar's custom/weather module, the stand-in for the
+# omarchy-shell weather panel. Same sources as Omarchy: location from a saved file
+# or wttr.in's IP lookup, conditions and a 4-day forecast from open-meteo.
+#   sway-weather                 print one waybar JSON line (text, tooltip, class)
+#   sway-weather --tooltip       print the tooltip text (menu rows, notifications)
+#   sway-weather --unit          print metric|imperial
+#   sway-weather --toggle-units
+#   sway-weather --search QUERY  geocode: lines "Name, Region, Country · lat, lon"
+#   sway-weather --set-location "Name, Region, Country · lat, lon"
+#   sway-weather --clear-location   back to automatic (IP) location
+#   sway-weather --refresh       make waybar re-run this script (signal 8)
+set -u
+
+STATE="$HOME/.local/state/sway/weather.json"        # {name, latitude, longitude, unit}
+CACHE="$HOME/.cache/sway-weather.json"              # last successful waybar output
+AUTO="$HOME/.cache/sway-weather-location.json"      # IP-detected location
+CURL=(curl -fs --max-time 8)   # quiet: failures fall back to the cache
+
+jqs() { jq -r "$1" "$2" 2>/dev/null; }
+unit() { local u; u=$(jqs '.unit // empty' "$STATE"); [ "$u" = imperial ] && echo imperial || echo metric; }
+state_set() {  # state_set JQ-FILTER
+  mkdir -p "$(dirname "$STATE")"
+  local cur; cur=$(cat "$STATE" 2>/dev/null); [ -n "$cur" ] || cur='{}'
+  printf '%s' "$cur" | jq "$1" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+}
+refresh() { pkill -RTMIN+8 -x waybar 2>/dev/null; }
+
+location() {  # prints "name<TAB>lat<TAB>lon"
+  local n la lo
+  n=$(jqs '.name // empty' "$STATE"); la=$(jqs '.latitude // empty' "$STATE"); lo=$(jqs '.longitude // empty' "$STATE")
+  if [ -n "$la" ] && [ -n "$lo" ]; then printf '%s\t%s\t%s\n' "${n:-$la,$lo}" "$la" "$lo"; return; fi
+  # automatic: cached for a day, otherwise ask wttr.in which area the IP is in
+  if [ -f "$AUTO" ] && [ "$(( $(date +%s) - $(stat -c %Y "$AUTO") ))" -lt 86400 ]; then
+    jq -r '[.name, .latitude, .longitude] | @tsv' "$AUTO" 2>/dev/null && return
+  fi
+  local j
+  mkdir -p "$(dirname "$AUTO")"
+  j=$("${CURL[@]}" --max-time 5 'https://wttr.in/?format=j1') || return 1
+  printf '%s' "$j" | jq -e '.nearest_area[0] | {name: (.areaName[0].value + ", " + .country[0].value), latitude: (.latitude|tonumber), longitude: (.longitude|tonumber)}' > "$AUTO.tmp" 2>/dev/null || return 1
+  mv "$AUTO.tmp" "$AUTO"
+  jq -r '[.name, .latitude, .longitude] | @tsv' "$AUTO"
+}
+
+wmo() {  # wmo CODE IS_DAY -> "icon<TAB>description"
+  local c=$1 day=${2:-1} i d
+  case $c in
+    0)        d="Clear";          i=$([ "$day" = 1 ] && printf '󰖙' || printf '󰖔') ;;
+    1|2)      d="Partly cloudy";  i=$([ "$day" = 1 ] && printf '󰖕' || printf '󰼱') ;;
+    3)        d="Overcast";       i='󰖐' ;;
+    45|48)    d="Fog";            i='󰖑' ;;
+    51|53|55|56|57) d="Drizzle";  i='󰖗' ;;
+    61|63|65|66|67) d="Rain";     i='󰖖' ;;
+    71|73|75|77)    d="Snow";     i='󰖘' ;;
+    80|81|82) d="Showers";        i='󰖖' ;;
+    85|86)    d="Snow showers";   i='󰖘' ;;
+    95|96|99) d="Thunderstorm";   i='󰖓' ;;
+    *)        d="Unknown";        i='󰖐' ;;
+  esac
+  printf '%s\t%s\n' "$i" "$d"
+}
+
+fetch() {  # writes $CACHE and prints it; returns 1 on failure
+  local name la lo u url j tunit wunit
+  IFS=$'\t' read -r name la lo < <(location) || return 1
+  [ -n "${la:-}" ] || return 1
+  u=$(unit); tunit="°C"; wunit="km/h"
+  url="https://api.open-meteo.com/v1/forecast?latitude=$la&longitude=$lo&daily=weather_code,temperature_2m_max,temperature_2m_min&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code,is_day&forecast_days=4&timezone=auto"
+  if [ "$u" = imperial ]; then url="$url&temperature_unit=fahrenheit&wind_speed_unit=mph"; tunit="°F"; wunit="mph"; fi
+  j=$("${CURL[@]}" "$url") || return 1
+
+  local temp feels hum wind code isday icon desc
+  IFS=$'\t' read -r temp feels hum wind code isday < <(printf '%s' "$j" | jq -r '.current | [(.temperature_2m|round), (.apparent_temperature|round), .relative_humidity_2m, (.wind_speed_10m|round), .weather_code, .is_day] | @tsv') || return 1
+  [ -n "${code:-}" ] || return 1
+  IFS=$'\t' read -r icon desc < <(wmo "$code" "$isday")
+
+  local tooltip forecast="" d dcode dmax dmin dicon ddesc
+  tooltip=$(printf '󰍎 %s\n%s %s  %s°  (feels %s°)\n󰖝 %s %s   󰖎 %s%%' "$name" "$icon" "$desc" "$temp" "$feels" "$wind" "$wunit" "$hum")
+  while IFS=$'\t' read -r d dcode dmax dmin; do
+    IFS=$'\t' read -r dicon ddesc < <(wmo "$dcode" 1)
+    forecast+=$(printf '\n%s  %s %-13s %3s° / %s°' "$(date -d "$d" +%a)" "$dicon" "$ddesc" "$dmin" "$dmax")
+  done < <(printf '%s' "$j" | jq -r '.daily | [.time, .weather_code, (.temperature_2m_max|map(round)), (.temperature_2m_min|map(round))] | transpose[] | @tsv')
+  tooltip+=$'\n'"${forecast#$'\n'}"
+
+  mkdir -p "$(dirname "$CACHE")"
+  jq -n --arg text "$icon ${temp}°" --arg tooltip "$tooltip" --arg alt "$desc" --arg tunit "$tunit" \
+    '{text: $text, tooltip: $tooltip, alt: $alt, class: "ok", unit: $tunit, fetched: now}' > "$CACHE.tmp" && mv "$CACHE.tmp" "$CACHE"
+  cat "$CACHE"
+}
+
+output() {  # the waybar JSON line; stale cache rather than an empty module
+  local out
+  if out=$(fetch); then printf '%s\n' "$out" | jq -c '{text, tooltip, alt, class}'
+  elif [ -f "$CACHE" ]; then jq -c '{text, tooltip: (.tooltip + "\n(offline, last update " + (.fetched | strflocaltime("%H:%M")) + ")"), alt, class: "stale"}' "$CACHE"
+  else printf '{"text":"󰼯","tooltip":"Weather unavailable","class":"error"}\n'; fi
+}
+
+search() {
+  "${CURL[@]}" "https://geocoding-api.open-meteo.com/v1/search?name=$(printf '%s' "$1" | jq -sRr @uri)&count=5&language=en&format=json" \
+    | jq -r '.results[]? | [.name, .admin1, .country] | map(select(. != null and . != "")) | join(", ")' 2>/dev/null | paste -d'\0' - <("${CURL[@]}" "https://geocoding-api.open-meteo.com/v1/search?name=$(printf '%s' "$1" | jq -sRr @uri)&count=5&language=en&format=json" | jq -r '.results[]? | " · \(.latitude), \(.longitude)"')
+}
+
+case "${1:-}" in
+  "")               output ;;
+  --tooltip)        { [ -f "$CACHE" ] || fetch >/dev/null; jq -r '.tooltip' "$CACHE" 2>/dev/null; } ;;
+  --unit)           unit ;;
+  --toggle-units)   if [ "$(unit)" = metric ]; then state_set '.unit = "imperial"'; else state_set '.unit = "metric"'; fi; rm -f "$CACHE"; refresh ;;
+  --search)         search "${2:?query}" ;;
+  --set-location)   sel="${2:?line}"; name="${sel%% · *}"; coords="${sel##* · }"; la="${coords%%,*}"; lo="${coords##*, }"
+                    [[ $la =~ ^-?[0-9.]+$ && $lo =~ ^-?[0-9.]+$ ]] || { echo "sway-weather: cannot parse '$sel'" >&2; exit 1; }
+                    state_set --arg n "$name" --argjson la "$la" --argjson lo "$lo" '.name = $n | .latitude = $la | .longitude = $lo' 2>/dev/null \
+                      || state_set ".name = \"$name\" | .latitude = $la | .longitude = $lo"
+                    rm -f "$CACHE"; refresh ;;
+  --clear-location) state_set 'del(.name, .latitude, .longitude)'; rm -f "$CACHE" "$AUTO"; refresh ;;
+  --refresh)        refresh ;;
+  *) sed -n '2,13p' "$0" >&2; exit 2 ;;
+esac

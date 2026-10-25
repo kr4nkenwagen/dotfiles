@@ -9,6 +9,9 @@
 #   sway-menu vpn-connect NAME | vpn-pick FortiClient VPN (run in the floating terminal)
 #   sway-menu theme NAME | theme-next | theme-pick   switch the Omarchy-format theme (sway-theme-set)
 #   sway-menu background FILE             set the wallpaper (also used by sway-theme-set)
+#   sway-menu display|network|audio|bluetooth|weather   the waybar module menus (omarchy-shell panels)
+#   sway-menu timezone                     pick a timezone (clock middle click)
+# SWAY_MENU_DRY_RUN=1 prints a menu's entries instead of showing it.
 # The top level lists the sections, every action of every section ("Section › Action"),
 # and every installed app, so typing searches all of it. Picking a section opens its submenu.
 set -u
@@ -31,6 +34,7 @@ add() { L+=("$1"); A+=("$2"); }                  # add "icon  Label" 'action'
 show() {                                          # show PROMPT [ROWS]: run the chosen entry's action
   local prompt="$1" n=${#L[@]} rows="${2:-25}" i
   [ "$n" -gt 0 ] || return 0
+  if [ -n "${SWAY_MENU_DRY_RUN:-}" ]; then for i in "${!L[@]}"; do printf '%s\t%s\n' "${L[$i]}" "${A[$i]}"; done; return 0; fi
   i=$(printf '%s\n' "${L[@]}" | fz --dmenu --index --prompt "$prompt ❯ " \
         --lines "$(( n < rows ? n : rows ))" --width 60)
   [[ "${i:-}" =~ ^[0-9]+$ ]] && [ "$i" -lt "$n" ] || return 0
@@ -142,12 +146,10 @@ leaves_style() { local p="${1:-}" d f n cur; cur=$(theme_name)
 set_layout() { swaymsg input type:keyboard xkb_layout "$1" >/dev/null && notify "Keyboard" "Layout: $1"; }
 set_power() { powerprofilesctl set "$1" && notify "Power profile" "$1"; }
 leaves_setup() { local p="${1:-}" cur; cur=$(powerprofilesctl get 2>/dev/null || echo "?")
-  add "󰕾  ${p}Audio (wiremix)" "tui sh -c 'command -v wiremix >/dev/null && exec wiremix || exec pavucontrol'"
-  add "󰕾  ${p}Audio (GUI)" 'bg pavucontrol'
-  add "󰤨  ${p}Wifi" "wifi_menu"
-  add "󰤨  ${p}Wifi (nmtui)" 'tui nmtui'
-  add "󰂯  ${p}Bluetooth (bluetui)" 'tui bluetui'
-  add "󰂯  ${p}Bluetooth (GUI)" 'bg blueman-manager'
+  add "󰕾  ${p}Audio…" 'submenu audio'
+  add "󰤨  ${p}Network…" 'submenu network'
+  add "󰂯  ${p}Bluetooth…" 'submenu bluetooth'
+  add "󰍹  ${p}Display…" 'submenu display'
   add "󰓅  ${p}Power profile: performance (now: $cur)" 'set_power performance'
   add "󰾅  ${p}Power profile: balanced (now: $cur)" 'set_power balanced'
   add "󰾆  ${p}Power profile: power-saver (now: $cur)" 'set_power power-saver'
@@ -320,6 +322,162 @@ leaves_bookmarks() { local p="${1:-}" path title url n=0
   done < <(bookmarks_list)
   [ "$n" -gt 0 ] || add "󰃀  ${p}No Chrome bookmarks found${BOOKMARK_FOLDER:+ in folder '$BOOKMARK_FOLDER'}" 'notify Bookmarks "Nothing found in Chrome profiles or managed policy"'; }
 
+
+# ---------- Display (omarchy-shell monitor panel) ----------
+copy() { printf '%s' "$1" | wl-copy; notify "Copied" "$1"; }
+bright_pct() { brightnessctl -m 2>/dev/null | awk -F, 'NR==1 { gsub(/%/, "", $4); print $4 }'; }
+set_bright() { brightnessctl set "$1" >/dev/null 2>&1; submenu display; }
+focused_output() { swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | select(.focused) | .name'; }
+set_scale() {  # persisted in ~/.local/state/sway/display.conf, included by the sway config
+  local o; o=$(focused_output); [ -n "$o" ] || return
+  swaymsg output "$o" scale "$1" >/dev/null; mkdir -p "$STATE"
+  { grep -v "^output $o scale" "$STATE/display.conf" 2>/dev/null; echo "output $o scale $1"; } > "$STATE/display.conf.new" && mv "$STATE/display.conf.new" "$STATE/display.conf"
+  submenu display
+}
+toggle_output() {  # toggle_output NAME true|false
+  local n; n=$(swaymsg -t get_outputs | jq '[.[] | select(.active)] | length')
+  if [ "$2" = true ]; then
+    if [ "$n" -le 1 ]; then notify "Display" "Cannot disable the last active display"; else swaymsg output "$1" disable >/dev/null; fi
+  else swaymsg output "$1" enable >/dev/null; fi
+  submenu display
+}
+leaves_display() { local p="${1:-}" b o l s name active mode
+  b=$(bright_pct)
+  if [ -n "$b" ]; then
+    add "󰃠  ${p}Brightness ${b}%  (+10)" 'set_bright 10%+'
+    add "󰃞  ${p}Brightness ${b}%  (−10)" 'set_bright 10%-'
+    for l in 10 25 50 75 100; do add "󰃟  ${p}Brightness $l%" "set_bright $l%"; done
+  fi
+  o=$(focused_output)
+  for s in 1 1.25 1.5 2; do add "󰍹  ${p}Scale $s${o:+ ($o)}" "set_scale $s"; done
+  while IFS=$'\t' read -r name active mode; do
+    add "$([ "$active" = true ] && printf '󰍹' || printf '󰶐')  ${p}Display $name · $mode · $([ "$active" = true ] && echo on || echo off)" "toggle_output $(printf %q "$name") $active"
+  done < <(swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | [.name, (.active|tostring), ((.current_mode // {}) | "\(.width // "?")x\(.height // "?")")] | @tsv')
+  add "󰖔  ${p}Night light ($(onoff pgrep -x wlsunset))" 'toggle_night; submenu display'
+  add "󰍹  ${p}Monitors (wdisplays)" 'bg wdisplays'; }
+
+# ---------- Network (omarchy-shell network panel; nmcli) ----------
+primary_dev() { nmcli -t -f DEVICE,TYPE,STATE dev 2>/dev/null | awk -F: '$3 == "connected" && ($2 == "wifi" || $2 == "ethernet") { print $1; exit }'; }
+active_con() { nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | awk -F: -v d="$1" '$2 == d { print $1; exit }'; }
+net_ping() { local r1 r2
+  r1=$(ping -c1 -W1 "$1" 2>/dev/null | awk -F'time=' '/time=/ { print $2 }'); r2=$(ping -c1 -W1 1.1.1.1 2>/dev/null | awk -F'time=' '/time=/ { print $2 }')
+  notify "Ping" "gateway: ${r1:-timeout}
+1.1.1.1: ${r2:-timeout}"; }
+set_dns() {  # set_dns CONNECTION ''|'servers'|ask
+  local con="$1" servers="$2"
+  if [ "$servers" = ask ]; then servers=$(fz --dmenu --prompt "DNS servers ❯ " --lines 0 --width 40 </dev/null) || return; fi
+  if [ -z "$servers" ]; then nmcli con mod "$con" ipv4.dns "" ipv4.ignore-auto-dns no
+  else nmcli con mod "$con" ipv4.dns "$servers" ipv4.ignore-auto-dns yes; fi >/dev/null 2>&1
+  nmcli con up "$con" >/dev/null 2>&1 && notify "DNS" "${servers:-automatic (DHCP)}"
+  submenu network
+}
+set_band() { local b="$2"; [ "$b" = auto ] && b=""
+  nmcli con mod "$1" 802-11-wireless.band "$b" >/dev/null 2>&1 && nmcli con up "$1" >/dev/null 2>&1 && notify "Wi-Fi band" "$2"
+  submenu network; }
+wifi_qr() { local psk; psk=$(nmcli -s -g 802-11-wireless-security.psk con show "$1" 2>/dev/null)
+  WIFI_QR="WIFI:T:WPA;S:$2;P:$psk;;" tui_wait 'qrencode -t ansiutf8 "$WIFI_QR"; printf "\n%s\n" "'"$2"'"'; }
+leaves_network() { local p="${1:-}" dev con ip gw dns act sig freq ssid n b
+  dev=$(primary_dev); con=${dev:+$(active_con "$dev")}
+  if [ -n "$dev" ]; then
+    ip=$(nmcli -g IP4.ADDRESS dev show "$dev" 2>/dev/null | head -1); gw=$(nmcli -g IP4.GATEWAY dev show "$dev" 2>/dev/null)
+    dns=$(nmcli -g IP4.DNS dev show "$dev" 2>/dev/null | paste -sd' ')
+    IFS=: read -r act sig freq ssid < <(nmcli -t -f ACTIVE,SIGNAL,FREQ,SSID dev wifi list 2>/dev/null | awk -F: '$1 == "yes" { print; exit }')
+    [ -n "${ssid:-}" ] && add "󰤨  ${p}$ssid  ${sig}%  $freq" "copy $(printf %q "$ssid")"
+    add "󰩟  ${p}$dev  $ip" "copy $(printf %q "${ip%%/*}")"
+    add "󰑩  ${p}Gateway $gw" "copy $(printf %q "$gw")"
+    add "󰇖  ${p}DNS ${dns:-automatic}" "copy $(printf %q "$dns")"
+    add "󰓅  ${p}Ping gateway and 1.1.1.1" "net_ping $(printf %q "$gw")"
+  fi
+  add "󰤨  ${p}Wi-Fi power: $(nmcli radio wifi 2>/dev/null || echo ?)" 'nmcli radio wifi "$([ "$(nmcli radio wifi)" = enabled ] && echo off || echo on)"; submenu network'
+  add "󰤨  ${p}Wi-Fi networks…" wifi_menu
+  if [ -n "$con" ]; then
+    add "󰇖  ${p}DNS: automatic (DHCP)" "set_dns $(printf %q "$con") ''"
+    add "󰇖  ${p}DNS: Cloudflare" "set_dns $(printf %q "$con") '1.1.1.1 1.0.0.1'"
+    add "󰇖  ${p}DNS: Google" "set_dns $(printf %q "$con") '8.8.8.8 8.8.4.4'"
+    add "󰇖  ${p}DNS: custom…" "set_dns $(printf %q "$con") ask"
+    if [ -n "${ssid:-}" ]; then
+      for b in auto a bg; do add "󰤨  ${p}Band: $b" "set_band $(printf %q "$con") $b"; done
+      command -v qrencode >/dev/null && add "󰐲  ${p}Share Wi-Fi (QR)" "wifi_qr $(printf %q "$con") $(printf %q "$ssid")"
+    fi
+  fi
+  while IFS= read -r n; do [ -n "$n" ] && add "󰅖  ${p}Forget: $n" "nmcli con delete $(printf %q "$n") >/dev/null; submenu network"; done < <(nmcli -t -f NAME,TYPE con show 2>/dev/null | awk -F: '$2 == "802-11-wireless" { print $1 }')
+  add "󰤨  ${p}Wifi (nmtui)" 'tui nmtui'; }
+
+# ---------- Audio (omarchy-shell audio panel; wpctl) ----------
+wp_list() {  # wp_list Sinks|Sources|Streams -> "id<TAB>*|-<TAB>name<TAB>vol"
+  wpctl status 2>/dev/null | awk -v sec="$1" '
+    /^Audio/ { a = 1 } /^Video/ { a = 0 }
+    a && /^ [├└]─ / { insec = index($0, sec ":") > 0; next }
+    a && insec && match($0, /^ │ +\*? *[0-9]+\. /) {
+      if ($0 ~ / [<>] /) next                                   # stream port lines
+      def = ($0 ~ /^ │ +\*/) ? "*" : "-"
+      id = substr($0, 1, RLENGTH); sub(/\. $/, "", id); sub(/.*[^0-9]/, "", id)
+      name = substr($0, RLENGTH + 1); vol = ""
+      if (match(name, /\[vol: [0-9.]+( MUTED)?\]/)) { vol = substr(name, RSTART + 6, RLENGTH - 7); name = substr(name, 1, RSTART - 1) }
+      sub(/ +$/, "", name)
+      printf "%s\t%s\t%s\t%s\n", id, def, name, vol
+    }'
+}
+vol_pct() { wpctl get-volume "$1" 2>/dev/null | awk '{ printf "%d%%%s", $2 * 100 + 0.5, ($3 == "[MUTED]" ? " muted" : "") }'; }
+set_vol() { wpctl set-volume -l 1 "$1" "$2" >/dev/null 2>&1; submenu audio; }
+leaves_audio() { local p="${1:-}" o i l id def name vol
+  o=$(vol_pct @DEFAULT_AUDIO_SINK@); i=$(vol_pct @DEFAULT_AUDIO_SOURCE@)
+  add "󰕾  ${p}Output ${o:-?}  (+10)" 'set_vol @DEFAULT_AUDIO_SINK@ 10%+'
+  add "󰕿  ${p}Output ${o:-?}  (−10)" 'set_vol @DEFAULT_AUDIO_SINK@ 10%-'
+  add "󰝟  ${p}Output mute toggle" 'wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle; submenu audio'
+  for l in 0 25 50 75 100; do add "󰕾  ${p}Output $l%" "set_vol @DEFAULT_AUDIO_SINK@ $l%"; done
+  while IFS=$'\t' read -r id def name vol; do
+    add "$([ "$def" = '*' ] && printf '󰓃' || printf '󰓄')  ${p}Output device: $name$([ "$def" = '*' ] && printf '  (default)')" "wpctl set-default $id; submenu audio"
+  done < <(wp_list Sinks)
+  add "󰍬  ${p}Input ${i:-?}  (+10)" 'set_vol @DEFAULT_AUDIO_SOURCE@ 10%+'
+  add "󰍬  ${p}Input ${i:-?}  (−10)" 'set_vol @DEFAULT_AUDIO_SOURCE@ 10%-'
+  add "󰍭  ${p}Input mute toggle" 'wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle; submenu audio'
+  while IFS=$'\t' read -r id def name vol; do
+    add "$([ "$def" = '*' ] && printf '󰍬' || printf '󰍮')  ${p}Input device: $name$([ "$def" = '*' ] && printf '  (default)')" "wpctl set-default $id; submenu audio"
+  done < <(wp_list Sources)
+  while IFS=$'\t' read -r id def name vol; do
+    add "󰎈  ${p}Stream: $name${vol:+  $vol}  (mute toggle)" "wpctl set-mute $id toggle; submenu audio"
+  done < <(wp_list Streams)
+  add "󰕾  ${p}Mixer (wiremix)" "tui sh -c 'command -v wiremix >/dev/null && exec wiremix || exec pavucontrol'"
+  add "󰕾  ${p}Audio (GUI)" 'bg pavucontrol'; }
+
+# ---------- Bluetooth (omarchy-shell bluetooth panel; bluetoothctl) ----------
+bt_powered() { bluetoothctl show 2>/dev/null | grep -q "Powered: yes"; }
+bt_devices() { bluetoothctl devices "$@" 2>/dev/null | awk '$1 == "Device" { mac = $2; $1 = $2 = ""; sub(/^ +/, ""); print mac "\t" $0 }'; }
+bt_scan() { notify "Bluetooth" "Scanning for 8 s…"; bluetoothctl --timeout 8 scan on >/dev/null 2>&1; BT_SHOW_NEW=1 submenu bluetooth; }
+bt_pair() {
+  if bluetoothctl pair "$1" >/dev/null 2>&1 && bluetoothctl trust "$1" >/dev/null 2>&1 && bluetoothctl connect "$1" >/dev/null 2>&1; then notify "Bluetooth" "Connected"
+  else notify -u critical "Bluetooth" "Pairing failed"; fi
+  submenu bluetooth
+}
+leaves_bluetooth() { local p="${1:-}" mac name st; st=$(bt_powered && echo on || echo off)
+  local -A connected=() known=()
+  add "󰂯  ${p}Power: $st" "bluetoothctl power $([ "$st" = on ] && echo off || echo on) >/dev/null; submenu bluetooth"
+  while IFS=$'\t' read -r mac name; do connected[$mac]=1; add "󰂱  ${p}Connected: $name  (disconnect)" "bluetoothctl disconnect $mac >/dev/null; submenu bluetooth"; done < <(bt_devices Connected)
+  while IFS=$'\t' read -r mac name; do known[$mac]=1; [ -n "${connected[$mac]:-}" ] || add "󰂯  ${p}Connect: $name" "bluetoothctl connect $mac >/dev/null; submenu bluetooth"; done < <(bt_devices Paired)
+  add "󰂰  ${p}Scan for new devices (8 s)…" bt_scan
+  if [ -n "${BT_SHOW_NEW:-}" ]; then
+    while IFS=$'\t' read -r mac name; do [ -n "${known[$mac]:-}" ] || add "󰂳  ${p}Pair: $name" "bt_pair $mac"; done < <(bt_devices)
+  fi
+  while IFS=$'\t' read -r mac name; do add "󰅖  ${p}Forget: $name" "bluetoothctl remove $mac >/dev/null; submenu bluetooth"; done < <(bt_devices Paired)
+  add "󰂯  ${p}Bluetooth (bluetui)" 'tui bluetui'
+  add "󰂯  ${p}Bluetooth (GUI)" 'bg blueman-manager'; }
+
+# ---------- Weather (omarchy-shell weather panel; sway-weather) ----------
+weather_set_location() { local q sel
+  q=$(fz --dmenu --prompt "Location ❯ " --lines 0 --width 40 </dev/null) || return; [ -n "$q" ] || return
+  sel=$(sway-weather --search "$q" | fz --dmenu --prompt "Pick ❯ " --lines 6 --width 70) || return
+  [ -n "$sel" ] && sway-weather --set-location "$sel" && submenu weather; }
+leaves_weather() { local p="${1:-}" line
+  while IFS= read -r line; do [ -n "$line" ] && add "󰖐  ${p}$line" "copy $(printf %q "$line")"; done < <(sway-weather --tooltip 2>/dev/null)
+  add "󰍎  ${p}Set location…" weather_set_location
+  add "󰍎  ${p}Use automatic location" 'sway-weather --clear-location; submenu weather'
+  add "󰔏  ${p}Units: $(sway-weather --unit)  (toggle)" 'sway-weather --toggle-units; submenu weather'
+  add "󰑓  ${p}Refresh now" 'sway-weather --refresh; notify Weather "Refreshing"'; }
+tz_menu() { local tz
+  tz=$(timedatectl list-timezones 2>/dev/null | fz --dmenu --prompt "Timezone ❯ " --lines 20 --width 50) || return
+  [ -n "$tz" ] && tui_wait "sudo timedatectl set-timezone $(printf %q "$tz") && echo Timezone: $(printf %q "$tz")"; }
+
 # ---------- Install / Update / Learn / About / System ----------
 # fzf over apt, like omarchy-pkg-install/-remove. Runs inside the floating terminal.
 pkg_install() {
@@ -391,8 +549,8 @@ apps_list() {
 }
 
 # ---------- menus ----------
-sections=(learn capture toggle style setup vpn bookmarks install update system)
-section_icon() { case "$1" in learn) echo 󰧑;; capture) echo 󰄀;; toggle) echo 󰔎;; style) echo 󰸌;; setup) echo 󰒓;; vpn) echo 󰖂;; bookmarks) echo 󰃀;; install) echo 󰏖;; update) echo 󰚰;; system) echo 󰐥;; esac; }
+sections=(learn capture toggle style display network audio bluetooth weather setup vpn bookmarks install update system)
+section_icon() { case "$1" in learn) echo 󰧑;; capture) echo 󰄀;; toggle) echo 󰔎;; style) echo 󰸌;; display) echo 󰍹;; network) echo 󰤨;; audio) echo 󰕾;; bluetooth) echo 󰂯;; weather) echo 󰖐;; setup) echo 󰒓;; vpn) echo 󰖂;; bookmarks) echo 󰃀;; install) echo 󰏖;; update) echo 󰚰;; system) echo 󰐥;; esac; }
 section_title() { case "$1" in vpn) printf VPN;; *) printf '%s' "${1^}";; esac; }
 submenu() {                                       # submenu SECTION
   reset; "leaves_$1" ""; add "󰁍  Back" main_menu; show "$(section_title "$1")"
@@ -424,6 +582,8 @@ case "${1:-}" in
   theme-next) sway-theme-set next ;;
   theme-pick) theme_pick ;;
   background) set_background "${2:?image path}" ;;
+  display|network|audio|bluetooth|weather) submenu "$1" ;;
+  timezone) tz_menu ;;
   "") main_menu ;;
-  *) echo "usage: sway-menu [lock|idle|pkg-install|pkg-remove|wallpaper|wifi|vpn-connect NAME|vpn-pick|theme NAME|theme-next|theme-pick|background FILE]" >&2; exit 2 ;;
+  *) echo "usage: sway-menu [lock|idle|pkg-install|pkg-remove|wallpaper|wifi|vpn-connect NAME|vpn-pick|theme NAME|theme-next|theme-pick|background FILE|display|network|audio|bluetooth|weather|timezone]" >&2; exit 2 ;;
 esac

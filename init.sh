@@ -86,7 +86,7 @@ ubuntu_desktop_packages=(
   sway swaylock swayidle swaybg xdg-desktop-portal-wlr xdg-desktop-portal-gtk lxpolkit
   waybar mako-notifier fuzzel xdg-terminal-exec wireplumber
   brightnessctl playerctl pavucontrol grim slurp network-manager-gnome blueman ghostty
-  wf-recorder wdisplays wlsunset power-profiles-daemon libnotify-bin libgtk-3-bin chafa
+  wf-recorder wdisplays wlsunset power-profiles-daemon libnotify-bin libgtk-3-bin chafa qrencode
 )
 
 stow_dirs=(fish nvim tmux theme)
