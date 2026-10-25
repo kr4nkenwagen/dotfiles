@@ -29,6 +29,8 @@ BG_LINK="$HOME/.local/state/omarchy/current/background"   # current wallpaper, s
 DEFAULT_WALLPAPER="$DOTFILES/wallpapers/neon-city.png"
 WALLPAPER_DIRS=("$THEME/backgrounds" "$HOME/.config/omarchy/backgrounds/$(cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null)" "$DOTFILES/wallpapers")  # theme + extras from theme-bg-sync
 THUMBS="$HOME/.cache/sway-menu/thumbs"
+PICK_LOG="$HOME/.cache/sway-menu/pick.log"   # every pick and paint step, for diagnosing the picker
+plog() { mkdir -p "${PICK_LOG%/*}"; printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >> "$PICK_LOG"; }
 
 # ---------- tiny menu framework: parallel arrays of labels and actions ----------
 fz() { fuzzel --config "$THEME/fuzzel.ini" "$@"; }
@@ -74,12 +76,16 @@ apply_bg() {  # apply_bg FILE
       "${t}-daemon" >/dev/null 2>&1 & disown
       local i; for i in $(seq 30); do "$t" query >/dev/null 2>&1 && break; sleep 0.1; done
     fi
-    if "$t" img "$1" --transition-type grow --transition-pos center --transition-duration 1 --transition-fps 60 >/dev/null 2>&1; then
-      # sway's own swaybg (from an `output * bg` in an older config, still alive in a running
-      # session) would stay on top of awww's surface and the picture would never change.
+    # with a transition first, then plain (older/newer CLIs differ in flags); stderr goes to the pick log
+    if "$t" img "$1" --transition-type grow --transition-pos center --transition-duration 1 --transition-fps 60 2>>"$PICK_LOG" \
+       || { plog "apply_bg: $t img with transition failed, retrying plain"; "$t" img "$1" 2>>"$PICK_LOG"; }; then
+      # a swaybg left from an older config or from the fallback below would sit on top of
+      # awww's surface and hide every later change; sway does not respawn it
       pkill -x swaybg 2>/dev/null || true
     else
-      plog "apply_bg: $t img failed, falling back to swaymsg"
+      # awww cannot paint: stop its daemon so the swaybg fallback is actually visible
+      plog "apply_bg: $t img failed, stopping the daemon and using swaybg"
+      "$t" kill >/dev/null 2>&1 || pkill -x "${t}-daemon" 2>/dev/null
       swaymsg output '*' bg "$1" fill >/dev/null || plog "apply_bg: swaymsg failed"
     fi
   else
@@ -161,8 +167,6 @@ thumbs_warm() {  # thumbs_warm [FILE...]: missing thumbnails for the given (defa
   # drop thumbnails older than 60 days that nothing listed (cache hygiene)
   find "$THUMBS" -type f -mtime +60 -delete 2>/dev/null
 }
-PICK_LOG="$HOME/.cache/sway-menu/pick.log"
-plog() { mkdir -p "${PICK_LOG%/*}"; printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >> "$PICK_LOG"; }
 image_pick() {  # image_pick PROMPT CURRENT FILE... -> prints the chosen file
   # Rows are "label\0icon\x1fthumb"; fuzzel prints the chosen label, which is mapped back
   # to the file (labels are unique), so nothing depends on --index semantics.
