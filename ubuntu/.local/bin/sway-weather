@@ -10,6 +10,7 @@
 #   sway-weather --set-location "Name, Region, Country · lat, lon"
 #   sway-weather --clear-location   back to automatic (IP) location
 #   sway-weather --refresh       make waybar re-run this script (signal 8)
+#   sway-weather --report now|day|week   plain text: current, next 24 hours, 7-day forecast
 set -u
 # sway launches us with the login environment, which lacks the dirs init.sh installs
 # into (awww, theme-color, bluetui, wiremix, lazygit). Fish adds them for terminals only.
@@ -103,8 +104,36 @@ search() {
     | jq -r '.results[]? | [.name, .admin1, .country] | map(select(. != null and . != "")) | join(", ")' 2>/dev/null | paste -d'\0' - <("${CURL[@]}" "https://geocoding-api.open-meteo.com/v1/search?name=$(printf '%s' "$1" | jq -sRr @uri)&count=5&language=en&format=json" | jq -r '.results[]? | " · \(.latitude), \(.longitude)"')
 }
 
+report() {  # report now|day|week
+  local name la lo u url j tunit
+  IFS=$'\t' read -r name la lo < <(location) || { echo "Location unknown"; return 1; }
+  u=$(unit); tunit="°"
+  url="https://api.open-meteo.com/v1/forecast?latitude=$la&longitude=$lo&timezone=auto"
+  [ "$u" = imperial ] && url="$url&temperature_unit=fahrenheit&wind_speed_unit=mph"
+  case "$1" in
+    now)
+      [ -f "$CACHE" ] || fetch >/dev/null
+      jq -r '.tooltip' "$CACHE" 2>/dev/null | head -3 ;;
+    day)
+      j=$("${CURL[@]}" "$url&hourly=temperature_2m,weather_code,precipitation_probability&forecast_hours=24") || { echo "Weather unavailable"; return 1; }
+      printf '󰍎 %s, next 24 hours\n' "$name"
+      while IFS=$'\t' read -r t temp code rain; do
+        IFS=$'\t' read -r icon desc < <(wmo "$code" 1)
+        printf '%s  %s %-13s %4s%s  %s%%\n' "$(date -d "$t" +%H:%M)" "$icon" "$desc" "$temp" "$tunit" "$rain"
+      done < <(printf '%s' "$j" | jq -r '.hourly | [.time, (.temperature_2m|map(round)), .weather_code, .precipitation_probability] | transpose[] | @tsv' | awk 'NR % 3 == 1') ;;
+    week)
+      j=$("${CURL[@]}" "$url&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=7") || { echo "Weather unavailable"; return 1; }
+      printf '󰍎 %s, 7 days\n' "$name"
+      while IFS=$'\t' read -r d code hi lo; do
+        IFS=$'\t' read -r icon desc < <(wmo "$code" 1)
+        printf '%s  %s %-13s %3s%s / %s%s\n' "$(date -d "$d" +%a)" "$icon" "$desc" "$lo" "$tunit" "$hi" "$tunit"
+      done < <(printf '%s' "$j" | jq -r '.daily | [.time, .weather_code, (.temperature_2m_max|map(round)), (.temperature_2m_min|map(round))] | transpose[] | @tsv') ;;
+  esac
+}
+
 case "${1:-}" in
   "")               output ;;
+  --report)         report "${2:-now}" ;;
   --tooltip)        { [ -f "$CACHE" ] || fetch >/dev/null; jq -r '.tooltip' "$CACHE" 2>/dev/null; } ;;
   --unit)           unit ;;
   --toggle-units)   if [ "$(unit)" = metric ]; then state_set '.unit = "imperial"'; else state_set '.unit = "metric"'; fi; rm -f "$CACHE"; refresh ;;

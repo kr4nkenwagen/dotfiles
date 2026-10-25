@@ -11,6 +11,8 @@ custom-shader-animation = always
 config-file = ?"~/.local/state/omarchy/current/ghostty-shaders.conf"
 config-file = ?"~/.local/state/omarchy/current/theme/ghostty.conf"
 config-file = ?"~/.config/ghostty/local.conf"
+# Opacity chosen in the k4 menu (Style › Opacity); absent unless set there.
+config-file = ?"~/.local/state/omarchy/current/ghostty-opacity.conf"
 
 # Fix general slowness on hyprland (https://github.com/ghostty-org/ghostty/discussions/3224)
 async-backend = epoll

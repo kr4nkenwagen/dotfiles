@@ -653,6 +653,241 @@ apps_scan() {
   ' "$@" 2>/dev/null | sort -f -t $'\t' -k1,1
 }
 
+# ---------- k4 --menu: the Kestrel design (used when the launcher is k4) ----------
+# k4 reads the section tree below on stdin, loads each section's actions by running
+# `sway-menu k4-section NAME` in the background, and prints the chosen action's id: the
+# shell action base64-encoded (or url:<url> from its web search), which runs here.
+k4id() { printf '%s' "$1" | base64 -w0; }
+item() { printf 'A\t%s\t%s\t%s\t%s\n' "$(k4id "$2")" "$1" "${3:-}" "${4:-}"; }   # item LABEL ACTION [META] [VIEW]
+K4_SECTIONS=(apps learn capture toggle style display network audio bluetooth weather setup vpn bookmarks install update system about)
+k4_meta() { case "$1" in
+  apps) echo "Apps|A|Launch and manage applications|󰀻" ;;
+  learn) echo "Learn|L|Docs and cheat sheets, offline first|󰧑" ;;
+  capture) echo "Capture|C|Screenshots, recordings and color picking|󰄀" ;;
+  toggle) echo "Toggle|T|Flip things on and off|󰔎" ;;
+  style) echo "Style|S|Theme, wallpaper and window decoration|󰸌" ;;
+  display) echo "Display|D|Outputs, modes and scaling|󰍹" ;;
+  network) echo "Network|N|Wi-Fi, ethernet and connections|󰤨" ;;
+  audio) echo "Audio|O|Devices and levels via PipeWire|󰕾" ;;
+  bluetooth) echo "Bluetooth|B|Pair and connect devices|󰂯" ;;
+  weather) echo "Weather|W|Forecast for your location|󰖐" ;;
+  setup) echo "Setup|E|Configure the desktop|󰒓" ;;
+  vpn) echo "VPN|V|Private connections|󰖂" ;;
+  bookmarks) echo "Bookmarks|K|Saved links, opened in your browser|󰃀" ;;
+  install) echo "Install|I|Add software to the system|󰏖" ;;
+  update) echo "Update|U|Keep everything current|󰚰" ;;
+  system) echo "System|Y|Session and power|󰐥" ;;
+  about) echo "About|H|This machine and this launcher|󰋽" ;;
+  esac; }
+k4_tree() { local s name key desc icon
+  for s in "${K4_SECTIONS[@]}"; do
+    IFS='|' read -r name key desc icon <<<"$(k4_meta "$s")"
+    printf 'S\t%s\t%s\t%s\t%s\t%s\n' "$s" "$name" "$key" "$desc" "$icon"
+    printf 'L\t%q k4-section %s\n' "$SELF" "$s"
+  done
+  printf 'V\ttheme\tTheme\tApplies to sway, waybar, terminal and k4\t%q k4-view theme\n' "$SELF"
+  printf 'V\twall\tWallpaper\t%s\t%q k4-view wall\n' "the theme's backgrounds + extras" "$SELF"
+}
+k4_main() { local out
+  out=$(k4_tree | k4 --menu) || return 0
+  case "$out" in
+    url:*) open_url "${out#url:}" ;;
+    *) eval "$(printf '%s' "$out" | base64 -d)" ;;
+  esac
+}
+k4_view() { local n d f r t cur
+  case "$1" in
+    theme) cur=$(theme_name)
+      while IFS=$'\t' read -r n d; do
+        printf 'I\t%s\t%s\t%s\t%s\n' "$(k4id "sway-theme-set $(printf %q "$n")")" "$(theme_pretty "$n")" "$d/preview.png" "$([ "$n" = "$cur" ] && echo current)"
+      done < <(theme_list) ;;
+    wall) cur=$(wallpaper)
+      while IFS= read -r f; do
+        t=$(thumb_path "$f"); [ -f "$t" ] || t=$f
+        r=$(readlink -f "$f")   # theme-bg-sync links are named <source>-<file>; show the file's own name
+        printf 'I\t%s\t%s\t%s\t%s\n' "$(k4id "set_background $(printf %q "$f")")" "${r##*/}" "$t" "$([ "$r" = "$cur" ] && echo current)"
+      done < <(bg_list) ;;
+  esac; }
+
+# pickers and toggles the design's items need (each runs once; no menu re-open)
+pick_index() { local prompt="$1"; shift; printf '%s\n' "$@" | fz --dmenu --index --prompt "$prompt ❯ " --lines "$(( $# < 15 ? $# : 15 ))"; }
+app_pick() { local names=() ids=() n id i
+  while IFS=$'\t' read -r n id; do names+=("$n"); ids+=("$id"); done < <(apps_list)
+  i=$(pick_index Launch "${names[@]}") && [[ $i =~ ^[0-9]+$ ]] && bg gtk-launch "${ids[$i]}"; }
+window_pick() { local rows=() ids=() id app title i
+  while IFS=$'\t' read -r id app title; do ids+=("$id"); rows+=("$app — $title"); done < <(swaymsg -t get_tree | jq -r '.. | select(.pid? and .type? != "workspace") | [.id, (.app_id // .window_properties.class // "?"), (.name // "")] | @tsv')
+  i=$(pick_index Windows "${rows[@]}") && [[ $i =~ ^[0-9]+$ ]] && swaymsg "[con_id=${ids[$i]}] focus" >/dev/null; }
+floating_state() { swaymsg -t get_tree | jq -r '[.. | select(.focused? == true) | .type] | first // ""' | grep -q floating_con && echo on || echo off; }
+gaps_now() { sed -n 's/^gaps inner \([0-9]*\).*/\1/p' "$STATE/gaps.conf" 2>/dev/null | tail -1; }
+gaps_apply() {  # gaps_apply INNER OUTER BORDER; persisted in ~/.local/state/sway/gaps.conf (included by the sway config)
+  mkdir -p "$STATE"; printf 'gaps inner %s\ngaps outer %s\ndefault_border pixel %s\n' "$1" "$2" "$3" > "$STATE/gaps.conf"
+  swaymsg "gaps inner all set $1; gaps outer all set $2; [all] border pixel $3" >/dev/null; }
+toggle_gaps() { local g; g=$(gaps_now); g=${g:-5}
+  if [ "$g" -gt 0 ]; then printf '%s\n' "$g" > "$STATE/gaps.saved"; gaps_apply 0 0 2
+  else g=$(cat "$STATE/gaps.saved" 2>/dev/null || echo 5); gaps_apply "$g" $((g * 2)) 2; fi; }
+gaps_pick() { local i; i=$(pick_index "Gaps & borders" "None · 1 px border" "Small · 2 px border (default)" "Medium · 2 px border" "Large · 3 px border") || return
+  case "$i" in 0) gaps_apply 0 0 1 ;; 1) gaps_apply 5 10 2 ;; 2) gaps_apply 10 20 2 ;; 3) gaps_apply 16 32 3 ;; esac; }
+opacity_now() { sed -n 's/^background-opacity = //p' "$HOME/.local/state/omarchy/current/ghostty-opacity.conf" 2>/dev/null || true; }
+opacity_pick() { local levels=(1.0 0.9 0.8 0.7 0.5) i v
+  i=$(pick_index "Opacity (terminal + browser)" "${levels[@]}") && [[ $i =~ ^[0-9]+$ ]] || return; v=${levels[$i]}
+  mkdir -p "$HOME/.local/state/omarchy/current"
+  printf 'background-opacity = %s\n' "$v" > "$HOME/.local/state/omarchy/current/ghostty-opacity.conf"
+  printf '%s\n' "$v" > "$HOME/.config/qutebrowser/opacity"
+  pkill -SIGUSR2 -x ghostty 2>/dev/null; command -v theme-sync-qutebrowser >/dev/null && theme-sync-qutebrowser; notify "Opacity" "$v"; }
+mode_pick() { local o rows=() i; o=$(focused_output); [ -n "$o" ] || return
+  mapfile -t rows < <(swaymsg -t get_outputs | jq -r --arg o "$o" '.[] | select(.name == $o) | .modes[] | "\(.width)x\(.height)@\(.refresh / 1000 | floor)Hz"' | awk '!seen[$0]++')
+  i=$(pick_index "Mode ($o)" "${rows[@]}") && [[ $i =~ ^[0-9]+$ ]] || return
+  swaymsg output "$o" mode "${rows[$i]}" >/dev/null && { grep -v "^output $o mode" "$STATE/display.conf" 2>/dev/null; echo "output $o mode ${rows[$i]}"; } > "$STATE/display.conf.new" && mv "$STATE/display.conf.new" "$STATE/display.conf"; }
+scale_pick() { local o i levels=(1 1.25 1.5 2); o=$(focused_output); [ -n "$o" ] || return
+  i=$(pick_index "Scale ($o)" "${levels[@]}") && [[ $i =~ ^[0-9]+$ ]] || return
+  swaymsg output "$o" scale "${levels[$i]}" >/dev/null; mkdir -p "$STATE"
+  { grep -v "^output $o scale" "$STATE/display.conf" 2>/dev/null; echo "output $o scale ${levels[$i]}"; } > "$STATE/display.conf.new" && mv "$STATE/display.conf.new" "$STATE/display.conf"; }
+external_outputs() { swaymsg -t get_outputs | jq -r '.[] | select(.name | test("^eDP|^LVDS|^DSI") | not) | "\(.name)\t\(.active)"'; }
+external_state() { external_outputs | awk -F'\t' '$2 == "true" { on = 1 } END { print on ? "on" : (NR ? "off" : "none") }'; }
+toggle_external() { local n a want; want=disable; [ "$(external_state)" = off ] && want=enable
+  while IFS=$'\t' read -r n a; do swaymsg output "$n" "$want" >/dev/null; done < <(external_outputs); notify "External displays" "$want"; }
+mirror_output() { if command -v wl-mirror >/dev/null; then bg wl-mirror "$(focused_output)"; else notify "Mirror" "Needs wl-mirror (apt install wl-mirror)"; fi; }
+wifi_ssid() { nmcli -t -f ACTIVE,SSID dev wifi 2>/dev/null | awk -F: '$1 == "yes" { print $2; exit }'; }
+eth_dev() { nmcli -t -f DEVICE,TYPE,STATE dev 2>/dev/null | awk -F: '$2 == "ethernet" { print $1 "\t" $3; exit }'; }
+eth_state() { local d st; IFS=$'\t' read -r d st < <(eth_dev); [ -n "$d" ] || { echo none; return; }; [ "$st" = connected ] && echo connected || echo unplugged; }
+eth_toggle() { local d st; IFS=$'\t' read -r d st < <(eth_dev); [ -n "$d" ] || { notify Ethernet "No ethernet device"; return; }
+  if [ "$st" = connected ]; then nmcli dev disconnect "$d" >/dev/null; else nmcli dev connect "$d" >/dev/null; fi; notify Ethernet "$(eth_state)"; }
+airplane_state() { [ "$(nmcli radio all 2>/dev/null | tail -1 | awk '{print $2}')" = disabled ] && echo on || echo off; }
+airplane_toggle() { if [ "$(airplane_state)" = on ]; then nmcli radio all on; bluetoothctl power on >/dev/null 2>&1; else nmcli radio all off; bluetoothctl power off >/dev/null 2>&1; fi; notify "Airplane mode" "$(airplane_state)"; }
+hidden_wifi() { local h; h=$(wifi_prompt "Hidden SSID") || return; [ -n "$h" ] && wifi_connect "$h" WPA hidden; }
+default_name() { wp_list "$1" | awk -F'\t' '$2 == "*" { print $3; exit }'; }
+dev_pick() { local ids=() rows=() id def name vol i
+  while IFS=$'\t' read -r id def name vol; do ids+=("$id"); rows+=("$name$([ "$def" = '*' ] && printf '  (default)')"); done < <(wp_list "$1")
+  i=$(pick_index "$2" "${rows[@]}") && [[ $i =~ ^[0-9]+$ ]] && wpctl set-default "${ids[$i]}"; }
+volume_pick() { local i; i=$(pick_index "Volume ($(vol_pct @DEFAULT_AUDIO_SINK@))" 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%) && [[ $i =~ ^[0-9]+$ ]] && wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ "$((i * 10))%"; }
+mic_muted() { wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | grep -q MUTED && echo on || echo off; }
+bt_paired_pick() { local macs=() rows=() mac name i; local -A conn=()
+  while IFS=$'\t' read -r mac name; do conn[$mac]=1; done < <(bt_devices Connected)
+  while IFS=$'\t' read -r mac name; do macs+=("$mac"); rows+=("$([ -n "${conn[$mac]:-}" ] && echo "Disconnect: $name" || echo "Connect: $name")"); done < <(bt_devices Paired)
+  [ ${#rows[@]} -gt 0 ] || { notify Bluetooth "No paired devices"; return; }
+  i=$(pick_index "Paired devices" "${rows[@]}") && [[ $i =~ ^[0-9]+$ ]] || return
+  if [ -n "${conn[${macs[$i]}]:-}" ]; then bluetoothctl disconnect "${macs[$i]}" >/dev/null; else bluetoothctl connect "${macs[$i]}" >/dev/null && notify Bluetooth Connected; fi; }
+bt_scan_pick() { local macs=() rows=() mac name i; local -A known=()
+  notify Bluetooth "Scanning for 8 s…"; bluetoothctl --timeout 8 scan on >/dev/null 2>&1
+  while IFS=$'\t' read -r mac name; do known[$mac]=1; done < <(bt_devices Paired)
+  while IFS=$'\t' read -r mac name; do [ -n "${known[$mac]:-}" ] || { macs+=("$mac"); rows+=("$name"); }; done < <(bt_devices)
+  [ ${#rows[@]} -gt 0 ] || { notify Bluetooth "No new devices found"; return; }
+  i=$(pick_index "Pair" "${rows[@]}") && [[ $i =~ ^[0-9]+$ ]] || return
+  if bluetoothctl pair "${macs[$i]}" >/dev/null 2>&1 && bluetoothctl trust "${macs[$i]}" >/dev/null 2>&1 && bluetoothctl connect "${macs[$i]}" >/dev/null 2>&1; then notify Bluetooth Connected; else notify -u critical Bluetooth "Pairing failed"; fi; }
+weather_location() { local q sel; q=$(fz --dmenu --prompt "Location ❯ " --lines 0 </dev/null) || return; [ -n "$q" ] || return
+  sel=$(sway-weather --search "$q" | fz --dmenu --prompt "Pick ❯ " --lines 6) || return; [ -n "$sel" ] && sway-weather --set-location "$sel" && notify Weather "$sel"; }
+input_pick() { local i nat; nat=$(swaymsg -t get_inputs | jq -r '[.[] | select(.type == "touchpad") | .libinput.natural_scroll] | first // "n/a"')
+  i=$(pick_index "Input devices" "Keyboard layout: us" "Keyboard layout: se" "Touchpad natural scroll ($nat)" "Show all devices") || return
+  case "$i" in 0) set_layout us ;; 1) set_layout se ;;
+    2) swaymsg input type:touchpad natural_scroll "$([ "$nat" = enabled ] && echo disabled || echo enabled)" >/dev/null ;;
+    3) tui_wait "swaymsg -t get_inputs | jq -r '.[] | \"\(.type)\t\(.name)\"' | sort -u" ;; esac; }
+vpn_connect_pick() { local names=() n i
+  command -v forticlient >/dev/null || { notify VPN "forticlient command not found"; return; }
+  mapfile -t names < <(vpn_profiles); [ ${#names[@]} -gt 0 ] || { notify VPN "No profiles"; return; }
+  i=$(pick_index "VPN profile" "${names[@]}") && [[ $i =~ ^[0-9]+$ ]] && { bg forticlient vpn connect "${names[$i]}"; notify VPN "Connecting to ${names[$i]}"; }; }
+QB_BOOKMARKS="$HOME/.config/qutebrowser/bookmarks/urls"
+bookmark_pick() { local urls=() rows=() url title path i
+  while IFS=$'\t' read -r url title path; do [ -n "$url" ] && { urls+=("$url"); rows+=("${path:+$path › }$title"); }; done < <(bookmarks_list)
+  while read -r url title; do [ -n "$url" ] && { urls+=("$url"); rows+=("$title"); }; done < "$QB_BOOKMARKS" 2>/dev/null
+  [ ${#rows[@]} -gt 0 ] || { notify Bookmarks "No bookmarks"; return; }
+  i=$(pick_index Bookmarks "${rows[@]}") && [[ $i =~ ^[0-9]+$ ]] && open_url "${urls[$i]}"; }
+bookmark_add() { local url title; url=$(fz --dmenu --prompt "URL ❯ " --lines 0 </dev/null) || return; [ -n "$url" ] || return
+  title=$(fz --dmenu --prompt "Title ❯ " --lines 0 </dev/null) || return
+  printf '%s %s\n' "$url" "${title:-$url}" >> "$QB_BOOKMARKS"; notify Bookmarks "Added ${title:-$url}"; }
+webapp_add() { local name url slug f; name=$(fz --dmenu --prompt "Web app name ❯ " --lines 0 </dev/null) || return; [ -n "$name" ] || return
+  url=$(fz --dmenu --prompt "URL ❯ " --lines 0 </dev/null) || return; [ -n "$url" ] || return
+  slug=$(printf '%s' "$name" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-'); f="$HOME/.local/share/applications/webapp-$slug.desktop"
+  mkdir -p "${f%/*}"; printf '[Desktop Entry]\nType=Application\nName=%s\nExec=qutebrowser --target window %s\nIcon=applications-internet\nCategories=Network;\n' "$name" "$url" > "$f"
+  notify "Web app" "$name added to Apps"; }
+flatpak_install() { if command -v flatpak >/dev/null; then tui sh -c 'q=$(printf "" | fzf --print-query --prompt "Flatpak search ❯ " | head -1); [ -n "$q" ] && id=$(flatpak search --columns=application,name "$q" | fzf --prompt "Install ❯ " | cut -f1) && [ -n "$id" ] && flatpak install -y flathub "$id"; printf "\n[done] press enter"; read -r _'
+  else notify Flatpak "flatpak is not installed (apt install flatpak)"; fi; }
+font_install() { tui sh -c 'f=$(curl -fsSL https://api.github.com/repos/ryanoasis/nerd-fonts/releases/latest | jq -r ".assets[].name | select(endswith(\".tar.xz\")) | sub(\".tar.xz\"; \"\")" | fzf --prompt "Nerd Font ❯ ") && [ -n "$f" ] && mkdir -p "$HOME/.local/share/fonts/nerd-fonts/$f" && curl -fsSL "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/$f.tar.xz" | tar -xJ -C "$HOME/.local/share/fonts/nerd-fonts/$f" && fc-cache -f && echo "Installed $f"; printf "\n[done] press enter"; read -r _'; }
+
+k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
+  case "$s" in
+  apps) item "Launch app…" app_pick
+        item "Running windows" window_pick swaymsg
+        item "Scratchpad" 'swaymsg scratchpad show >/dev/null'
+        item "Kill focused app" 'swaymsg kill >/dev/null' "Super+X" ;;
+  learn) item "Sway keybindings" show_keybindings
+         item "man sway(5)" 'tui man 5 sway'
+         item "Arch Wiki" 'open_url https://wiki.archlinux.org'
+         item "Neovim tutor" 'tui nvim +Tutor'
+         item "Shell cheat sheet" "tui sh -c 'curl -s cheat.sh/fish | less -R'" ;;
+  capture) item "Screenshot region" shot_region "grim + slurp"
+           item "Screenshot window" shot_window
+           item "Screenshot output" shot
+           item "Record region" 'record_toggle region' "$([ "$rec" = Stop ] && echo recording || echo wf-recorder)"
+           item "Record output" record_toggle "$([ "$rec" = Stop ] && echo recording)"
+           item "Pick color" color_picker ;;
+  toggle) item "Waybar" toggle_bar "$(onoff pgrep -x waybar)"
+          item "Idle inhibitor" toggle_idle "$(pgrep -x swayidle >/dev/null && echo off || echo on)"
+          item "Night light" toggle_night "$(onoff pgrep -x wlsunset)"
+          item "Do not disturb" toggle_dnd "$(onoff sh -c 'makoctl mode | grep -qx do-not-disturb')"
+          item "Gaps" toggle_gaps "$([ "$(gaps_now)" = 0 ] && echo off || echo on)"
+          item "Floating (focused)" 'swaymsg floating toggle >/dev/null' "$(floating_state)" ;;
+  style) local w; w=$(wallpaper)
+         item "Theme" : "$(theme_pretty "$(theme_name)")" theme
+         item "Wallpaper" : "${w##*/}" wall
+         item "Font" 'sway-font-set pick' "$(sway-font-set current 2>/dev/null | sed 's/ Nerd Font Mono$//')"
+         item "Gaps & borders" gaps_pick
+         item "Opacity" opacity_pick "$(opacity_now)" ;;
+  display) item "Arrange outputs" 'bg wdisplays' wdisplays
+           item "Resolution & refresh" mode_pick
+           item "Scale" scale_pick
+           item "Mirror" mirror_output
+           item "Disable external" toggle_external "$(external_state)" ;;
+  network) item "Wi-Fi networks" wifi_menu "$(wifi_ssid)"
+           item "Connect to hidden…" hidden_wifi
+           item "Ethernet" eth_toggle "$(eth_state)"
+           item "Airplane mode" airplane_toggle "$(airplane_state)"
+           item "Open nmtui" 'tui nmtui' ;;
+  audio) item "Output device" 'dev_pick Sinks "Output device"' "$(default_name Sinks)"
+         item "Input device" 'dev_pick Sources "Input device"' "$(default_name Sources)"
+         item "Volume" volume_pick "$(vol_pct @DEFAULT_AUDIO_SINK@)"
+         item "Mute microphone" 'wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle' "$(mic_muted)"
+         item "Open mixer" "tui sh -c 'command -v wiremix >/dev/null && exec wiremix || exec pavucontrol'" ;;
+  bluetooth) item "Power" "bluetoothctl power $(bt_powered && echo off || echo on) >/dev/null" "$(bt_powered && echo on || echo off)"
+             item "Paired devices" bt_paired_pick "$(bt_devices Paired | wc -l)"
+             item "Scan & pair…" bt_scan_pick
+             item "Open bluetui" 'tui bluetui' ;;
+  weather) item "Right now" 'notify Weather "$(sway-weather --report now)"'
+           item "Next 24 hours" 'notify -t 20000 Weather "$(sway-weather --report day)"'
+           item "7-day forecast" 'notify -t 20000 Weather "$(sway-weather --report week)"'
+           item "Change location…" weather_location ;;
+  setup) item "Keybindings" show_keybindings
+         item "Input devices" input_pick
+         item "Default apps" 'tui nvim "$HOME/.config/mimeapps.list"'
+         item "Autostart" "tui nvim +/^#\\ Autostart $(printf %q "$SWAY_CONFIG")"
+         item "Edit sway config" "tui nvim $(printf %q "$SWAY_CONFIG")"
+         item "Reload sway" 'swaymsg reload >/dev/null' "Super+Ctrl+R" ;;
+  vpn) item "Connect…" vpn_connect_pick
+       item "Disconnect" 'forticlient vpn disconnect >/dev/null 2>&1; notify VPN Disconnected'
+       item "Status" vpn_status "$(command -v forticlient >/dev/null && vpn_state || echo 'not installed')"
+       item "Add profile…" vpn_gui ;;
+  bookmarks) item "Open bookmark…" bookmark_pick
+             item "Add bookmark" bookmark_add
+             item "Edit bookmarks" "tui nvim $(printf %q "$QB_BOOKMARKS")" ;;
+  install) item "Package" "tui $(printf %q "$SELF") pkg-install" apt
+           item "AUR package" 'notify Install "The AUR is Arch-only; use Package (apt) here"' yay
+           item "Flatpak" flatpak_install
+           item "Web app" webapp_add
+           item "Font" font_install ;;
+  update) item "System packages" "tui_wait 'sudo apt update && sudo apt full-upgrade'" apt
+          item "Firmware" "tui_wait 'fwupdmgr refresh; fwupdmgr update'" fwupd
+          item "Mirror list" 'command -v software-properties-gtk >/dev/null && bg software-properties-gtk || notify Update "Mirrors: Software & Updates (software-properties-gtk)"'
+          item "Kestrel" "tui_wait 'cd ~/repos/k4 && git pull --ff-only; ./build.sh install'" ;;
+  system) item "Lock" lock swaylock
+          item "Suspend" 'systemctl suspend'
+          item "Log out" 'swaymsg exit'
+          item "Reboot" 'systemctl reboot'
+          item "Shut down" 'systemctl poweroff' ;;
+  about) item "System info" about
+         item "Hardware" "tui_wait 'lscpu | head -20; echo; free -h; echo; lsblk'"
+         item "Disk usage" "tui_wait 'command -v duf >/dev/null && duf || df -h'"
+         item "Kestrel version" 'notify k4 "$(k4 --version)"' ;;
+  esac; }
+
 # ---------- menus ----------
 sections=(learn capture toggle style display network audio bluetooth weather setup vpn bookmarks install update system)
 # Sections whose rows are cheap to build (no device/network queries); only these are searchable
@@ -666,6 +901,7 @@ submenu() {                                       # submenu SECTION
   reset; "leaves_$1" ""; add "󰁍  Back" main_menu; show "$(section_title "$1")"
 }
 main_menu() {
+  if [ "$LAUNCHER" = k4 ]; then k4_main; return; fi
   reset
   local s
   add "󰀻  Apps" 'bg fz'
@@ -701,6 +937,8 @@ case "${1:-}" in
   background) set_background "${2:?image path}" ;;
   display|network|audio|bluetooth|weather) submenu "$1" ;;
   timezone) tz_menu ;;
+  k4-section) k4_section "${2:?section}" ;;
+  k4-view) k4_view "${2:?view}" ;;
   "") main_menu ;;
   *) echo "usage: sway-menu [lock|idle|pkg-install|pkg-remove|wallpaper|wifi|vpn-connect NAME|vpn-pick|theme NAME|theme-next|theme-pick|background FILE|display|network|audio|bluetooth|weather|timezone]" >&2; exit 2 ;;
 esac
