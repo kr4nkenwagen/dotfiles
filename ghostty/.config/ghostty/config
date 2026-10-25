@@ -5,10 +5,10 @@ confirm-close-surface = false
 title = "󱙝 "
 mouse-hide-while-typing = true
 window-decoration = false
-custom-shader = starfield.glsl
 custom-shader-animation = always
-custom-shader = cursor_smear.glsl
-custom-shader = bloom025.glsl
+# Shader list (starfield, cursor smear, bloom) written by starfield-toggle so the
+# starfield can be switched off without editing this file.
+config-file = ?"~/.local/state/omarchy/current/ghostty-shaders.conf"
 config-file = ?"~/.local/state/omarchy/current/theme/ghostty.conf"
 config-file = ?"~/.config/ghostty/local.conf"
 

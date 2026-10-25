@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# starfield-toggle: the drifting starfield behind ghostty (custom shader) and qutebrowser
+# (userstyle + userscript), on both the Omarchy and the Ubuntu/Sway profile.
+#   starfield-toggle            flip it
+#   starfield-toggle on|off
+#   starfield-toggle status     prints on|off
+#   starfield-toggle --ensure   write ghostty's shader list if missing (init.sh); keeps the state
+# State: ~/.local/state/omarchy/current/starfield.off exists = off. ghostty reads its shader
+# list from ~/.local/state/omarchy/current/ghostty-shaders.conf (included by the main config).
+set -u
+export PATH="$HOME/.local/bin:$PATH"
+STATE="$HOME/.local/state/omarchy/current"
+OFF="$STATE/starfield.off"
+SHADERS="$STATE/ghostty-shaders.conf"
+GH="$HOME/.config/ghostty"
+
+status() { [ -e "$OFF" ] && echo off || echo on; }
+write_shaders() {  # ghostty runs shaders in the order listed; the starfield goes first
+  mkdir -p "$STATE"
+  {
+    echo "# Written by starfield-toggle ($(status)); included from ~/.config/ghostty/config."
+    [ -e "$OFF" ] || echo "custom-shader = $GH/starfield.glsl"
+    echo "custom-shader = $GH/cursor_smear.glsl"
+    echo "custom-shader = $GH/bloom025.glsl"
+  } > "$SHADERS"
+}
+apply() {
+  write_shaders
+  pkill -SIGUSR2 -x ghostty 2>/dev/null || true          # ghostty re-reads its config
+  command -v theme-sync-qutebrowser >/dev/null && theme-sync-qutebrowser   # config.py re-picks the userstyle
+  command -v notify-send >/dev/null && notify-send "Starfield" "$(status)" -t 2000 || true
+}
+case "${1:-toggle}" in
+  status) status ;;
+  --ensure) [ -f "$SHADERS" ] || write_shaders ;;
+  on) rm -f "$OFF"; apply ;;
+  off) mkdir -p "$STATE"; touch "$OFF"; apply ;;
+  toggle) if [ -e "$OFF" ]; then rm -f "$OFF"; else mkdir -p "$STATE"; touch "$OFF"; fi; apply ;;
+  *) sed -n '2,9p' "$0" >&2; exit 2 ;;
+esac

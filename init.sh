@@ -444,6 +444,9 @@ done
 # absolute symlink into the stow dir while scanning the target.
 ln -sfn "$(realpath --relative-to="$HOME" "$DOTFILES_DIR/.XCompose")" ~/.XCompose
 
+# ghostty reads its shader list from a state file starfield-toggle maintains.
+starfield-toggle --ensure 2>/dev/null || warn "could not write ghostty's shader list"
+
 info "Setting up tmux"
 mkdir -p ~/.config/tmux/plugins
 if [ ! -d ~/.config/tmux/plugins/tpm ]; then

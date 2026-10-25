@@ -344,10 +344,10 @@ c.colors.webpage.darkmode.enabled = True
 c.content.blocking.method = 'both'
 c.statusbar.show = 'in-mode'
 c.tabs.show = 'never'
-c.content.user_stylesheets = [
-    '~/.config/qutebrowser/userstyles/all.css',
-    '~/.config/qutebrowser/userstyles/starfield.css',
-]
+c.content.user_stylesheets = ['~/.config/qutebrowser/userstyles/all.css']
+# starfield-toggle: the stylesheet sets --qb-starfield, which the userscript polls.
+if not Path("~/.local/state/omarchy/current/starfield.off").expanduser().exists():
+    c.content.user_stylesheets.append('~/.config/qutebrowser/userstyles/starfield.css')
 
 # Fonts
 font = f'{get_font_size()}pt "{get_font()}"'

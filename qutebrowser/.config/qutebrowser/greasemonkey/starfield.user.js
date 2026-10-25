@@ -10,6 +10,22 @@
 (function () {
   "use strict";
 
+  // starfield-toggle: starfield.css (a user stylesheet config.py adds only while the
+  // effect is on) sets --qb-starfield on html. Poll it so a toggle applies to open tabs.
+  function enabled() {
+    return getComputedStyle(document.documentElement).getPropertyValue("--qb-starfield").trim() === "on";
+  }
+  let running = null;
+  function sync() {
+    const on = enabled();
+    if (on && !running) running = start();
+    else if (!on && running) { running.stop(); running = null; }
+  }
+  setInterval(sync, 2000);
+  sync();
+
+  function start() {
+
   // Same shader as the Ghostty one, minus the terminal texture/mask.
   // Outputs only star light with alpha (premultiplied); the page's own
   // (possibly translucent) root background shows through between stars.
@@ -77,7 +93,7 @@ void main() { gl_Position = vec4(pos, 0.0, 1.0); }
   const canvas = document.createElement("canvas");
   canvas.id = "qb-starfield";
   const gl = canvas.getContext("webgl", { alpha: true, premultipliedAlpha: true, antialias: false });
-  if (!gl) return;
+  if (!gl) return { stop() {} };
 
   function compile(type, src) {
     const s = gl.createShader(type);
@@ -182,7 +198,8 @@ void main() { gl_Position = vec4(pos, 0.0, 1.0); }
     if (scanTimer) return;
     scanTimer = setTimeout(() => { scanTimer = 0; clearBackgrounds(); }, 300);
   }
-  new MutationObserver(scheduleScan).observe(document.documentElement, {
+  const observer = new MutationObserver(scheduleScan);
+  observer.observe(document.documentElement, {
     childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style", "hidden"],
   });
   window.addEventListener("resize", scheduleScan);
@@ -190,13 +207,29 @@ void main() { gl_Position = vec4(pos, 0.0, 1.0); }
   window.addEventListener("scroll", scheduleScan, { passive: true });
   scheduleScan();
 
-  const start = performance.now();
+  const t0 = performance.now();
+  let raf = 0;
   function frame(now) {
-    gl.uniform1f(uTime, ((now - start) / 1000) % 32000); // wrap: see PERIOD in shader
+    gl.uniform1f(uTime, ((now - t0) / 1000) % 32000); // wrap: see PERIOD in shader
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    requestAnimationFrame(frame);
+    raf = requestAnimationFrame(frame);
   }
-  requestAnimationFrame(frame);
+  raf = requestAnimationFrame(frame);
+
+  return {
+    stop() {  // undo what start() added; site backgrounds cleared by clearBackgrounds come back on reload
+      cancelAnimationFrame(raf);
+      observer.disconnect();
+      window.removeEventListener("resize", resize);
+      window.removeEventListener("resize", scheduleScan);
+      window.removeEventListener("load", scheduleScan);
+      window.removeEventListener("scroll", scheduleScan);
+      canvas.remove();
+      style.remove();
+      document.documentElement.style.removeProperty("background-color");
+    },
+  };
+  }
 })();

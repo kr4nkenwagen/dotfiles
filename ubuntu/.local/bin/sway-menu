@@ -153,7 +153,8 @@ leaves_toggle() { local p="${1:-}"
   add "󰖔  ${p}Night light ($(onoff pgrep -x wlsunset))" toggle_night
   add "󰌾  ${p}Idle lock ($(onoff pgrep -x swayidle))" toggle_idle
   add "󰍜  ${p}Bar ($(onoff pgrep -x waybar))" toggle_bar
-  add "󰂛  ${p}Do not disturb ($(onoff sh -c 'makoctl mode | grep -qx do-not-disturb'))" toggle_dnd; }
+  add "󰂛  ${p}Do not disturb ($(onoff sh -c 'makoctl mode | grep -qx do-not-disturb'))" toggle_dnd
+  add "󰖔  ${p}Starfield ($(starfield-toggle status 2>/dev/null || echo on))" 'starfield-toggle'; }
 
 # ---------- Style ----------
 bg_list() { find -L "${WALLPAPER_DIRS[@]}" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) 2>/dev/null | sort -u; }
