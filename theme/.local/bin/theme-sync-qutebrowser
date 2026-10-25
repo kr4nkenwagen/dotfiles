@@ -1,8 +1,9 @@
 #!/bin/bash
-# theme-sync-qutebrowser: make a running qutebrowser re-read config.py, which reads
-# the current theme's colors.toml. Only when exactly one instance runs: with several,
-# the IPC command could land in the wrong one.
-if [ "$(pgrep -x qutebrowser | wc -l)" -eq 1 ]; then
+# theme-sync-qutebrowser: make the running qutebrowser re-read config.py, which reads the
+# current theme's colors.toml and the starfield flag. The IPC command goes to the instance
+# using the default basedir; test instances started with --basedir have their own socket.
+# Without a running instance `qutebrowser :cmd` would open a new window, hence the check.
+if pgrep -x qutebrowser >/dev/null; then
   qutebrowser :config-source >/dev/null 2>&1
 fi
 exit 0
