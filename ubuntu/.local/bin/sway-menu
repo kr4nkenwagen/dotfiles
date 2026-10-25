@@ -100,20 +100,23 @@ shot() { mkdir -p "$SHOTS"; local f="$SHOTS/$(date +%Y-%m-%d_%H-%M-%S).png"
   grim "$@" "$f" && wl-copy < "$f" && notify "Screenshot" "Saved and copied: ${f##*/}"; }
 shot_region() { local g; g=$(slurp) || return; shot -g "$g"; }
 shot_window() { local g; g=$(swaymsg -t get_tree | jq -r '.. | select(.pid? and .visible?) | .rect | "\(.x),\(.y) \(.width)x\(.height)"' | slurp) || return; shot -g "$g"; }
+REC_PID="$STATE/recording.pid"
+recording() { [ -f "$REC_PID" ] && kill -0 "$(<"$REC_PID")" 2>/dev/null; }   # pidfile: pgrep costs ~40 ms per menu open
 record_toggle() {
-  if pgrep -x wf-recorder >/dev/null; then
-    pkill -INT -x wf-recorder; notify "Screen recording" "Stopped. Saved in ${RECS/#$HOME/~}"
+  if recording; then
+    kill -INT "$(<"$REC_PID")" 2>/dev/null; rm -f "$REC_PID"; notify "Screen recording" "Stopped. Saved in ${RECS/#$HOME/~}"
   else
-    mkdir -p "$RECS"; local f="$RECS/$(date +%Y-%m-%d_%H-%M-%S).mp4" g=""
+    mkdir -p "$RECS" "$STATE"; local f="$RECS/$(date +%Y-%m-%d_%H-%M-%S).mp4" g=""
     if [ "${1:-}" = region ]; then g=$(slurp) || return; fi
-    if [ -n "$g" ]; then bg wf-recorder -g "$g" -f "$f"; else bg wf-recorder -f "$f"; fi
+    if [ -n "$g" ]; then wf-recorder -g "$g" -f "$f" >/dev/null 2>&1 & else wf-recorder -f "$f" >/dev/null 2>&1 & fi
+    echo $! > "$REC_PID"; disown
     notify "Screen recording" "Started. Pick Record again to stop."
   fi
 }
 color_picker() { local p hex; p=$(slurp -p) || return
   hex=$(grim -g "$p" -t ppm - | tail -c 3 | od -An -tx1 | tr -d ' \n')
   printf '#%s' "$hex" | wl-copy; notify "Color picked" "#$hex copied"; }
-leaves_capture() { local p="${1:-}" rec="Start"; pgrep -x wf-recorder >/dev/null && rec="Stop"
+leaves_capture() { local p="${1:-}" rec="Start"; recording && rec="Stop"
   add "󰹑  ${p}Screenshot region" shot_region
   add "󱣴  ${p}Screenshot window" shot_window
   add "󰍹  ${p}Screenshot screen" shot
@@ -172,12 +175,12 @@ wallpaper_picker() { local f; mapfile -t list < <(bg_list)
   if [ -n "${SWAY_MENU_DRY_RUN:-}" ]; then thumbs_warm "${list[@]}"; for f in "${list[@]}"; do printf '%s\t%s\n' "$f" "$(thumb_path "$f")"; done; return; fi
   f=$(image_pick Background "$(wallpaper)" "${list[@]}") || return 0; [ -n "$f" ] && set_background "$f"; }
 # Themes: sway-theme-set lists "name<TAB>dir"; the picker shows each theme's preview.png.
-theme_name() { cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null; }
+theme_name() { local f="$HOME/.local/state/omarchy/current/theme.name"; [ -f "$f" ] && printf '%s' "$(<"$f")"; }
 theme_list() {  # name<TAB>dir, like `sway-theme-set list` but without the fork; user themes shadow repo themes
   local -A seen=(); local d t n
   for d in "$HOME/.config/omarchy/themes" "$DOTFILES/themes"; do
-    for t in "$d"/*/; do n=$(basename "$t"); [ -f "$t/colors.toml" ] && [ -z "${seen[$n]:-}" ] && { seen[$n]=1; printf '%s\t%s\n' "$n" "${t%/}"; }; done
-  done | sort
+    for t in "$d"/*/; do t=${t%/}; n=${t##*/}; [ -f "$t/colors.toml" ] && [ -z "${seen[$n]:-}" ] && { seen[$n]=1; printf '%s\t%s\n' "$n" "$t"; }; done
+  done
 }
 theme_pretty() { local w out=""; for w in ${1//-/ }; do out+="${w^} "; done; printf '%s' "${out% }"; }   # no fork: the top level calls this per theme
 theme_pick() { local names=() previews=() n d cur i t
@@ -194,7 +197,7 @@ leaves_style() { local p="${1:-}" d n cur; cur=$(theme_name)
   add "󰸌  ${p}Theme picker (previews)" theme_pick
   add "󰸌  ${p}Theme: next" 'sway-theme-set next'
   while IFS=$'\t' read -r n d; do
-    add "󰸌  ${p}Theme: $(theme_pretty "$n")$([ "$n" = "$cur" ] && printf '  (current)')" "sway-theme-set $(printf %q "$n")"
+    add "󰸌  ${p}Theme: $(theme_pretty "$n")$([ "$n" = "$cur" ] && printf '  (current)')" "sway-theme-set ${n@Q}"
   done < <(theme_list)
   add "󰸉  ${p}Background picker (thumbnails)" wallpaper_picker
   add "󰸉  ${p}Background: next" bg_next
@@ -585,7 +588,7 @@ leaves_system() { local p="${1:-}"
 apps_add() {
   local name id
   while IFS=$'\t' read -r name id; do
-    add "󰀻  App: $name" "bg gtk-launch $(printf %q "$id")"
+    add "󰀻  App: $name" "bg gtk-launch ${id@Q}"
   done < <(apps_list)
 }
 apps_list() {  # cached in ~/.cache/sway-menu/apps.tsv until any applications dir changes
