@@ -1,6 +1,6 @@
 /* Rendered by sway-theme-set from the current theme; waybar is started with -s on this file.
    Each module gets its own palette colour so the bar reads at a glance:
-   workspaces accent · clock foreground · weather orange · backlight yellow ·
+   text only, no coloured backgrounds: workspaces accent · clock foreground · weather orange · backlight yellow ·
    audio magenta · network cyan · bluetooth blue · battery green/yellow/red by state. */
 @define-color bg        {{ background }};
 @define-color bg_light  {{ lighter_background }};
@@ -31,31 +31,29 @@ window#waybar {
   color: @fg;
 }
 
-/* Workspaces: the focused one is a pill in the accent colour, like the tmux window pill. */
+/* Workspaces: no coloured backgrounds anywhere on the bar, state is carried by the text colour. */
 #workspaces {
-  margin: 3px 6px;
+  margin: 0 6px;
 }
 #workspaces button {
   padding: 0 8px;
   margin: 0 2px;
   color: @fg_dim;
   background: transparent;
-  border-radius: 10px;
 }
 #workspaces button:hover {
   color: @fg_bright;
-  background: @selection;
+  background: transparent;
   box-shadow: none;
   text-shadow: none;
 }
 #workspaces button.focused {
-  color: @bg;
-  background: @accent;
+  color: @accent;
   font-weight: bold;
 }
 #workspaces button.urgent {
-  color: @bg;
-  background: @red;
+  color: @red;
+  font-weight: bold;
 }
 
 #clock {
