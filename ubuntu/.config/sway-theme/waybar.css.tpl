@@ -1,4 +1,11 @@
-@import "colors.css";
+/* Rendered by sway-theme-set from the current theme; waybar is started with -s on this file. */
+@define-color bg     {{ background }};
+@define-color fg     {{ foreground }};
+@define-color blue   {{ accent }};
+@define-color gray   {{ muted }};
+@define-color green  {{ green }};
+@define-color yellow {{ yellow }};
+@define-color red    {{ red }};
 
 * {
   font-family: "Terminess Nerd Font Mono", monospace;

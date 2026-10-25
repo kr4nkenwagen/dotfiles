@@ -7,6 +7,8 @@
 #   sway-menu wallpaper                   fzf wallpaper picker with image preview
 #   sway-menu wifi                        nmcli Wi-Fi picker (fuzzel)
 #   sway-menu vpn-connect NAME | vpn-pick FortiClient VPN (run in the floating terminal)
+#   sway-menu theme NAME | theme-next | theme-pick   switch the Omarchy-format theme (sway-theme-set)
+#   sway-menu background FILE             set the wallpaper (also used by sway-theme-set)
 # The top level lists the sections, every action of every section ("Section › Action"),
 # and every installed app, so typing searches all of it. Picking a section opens its submenu.
 set -u
@@ -17,24 +19,26 @@ SWAY_CONFIG="$HOME/.config/sway/config"
 STATE="$HOME/.local/state/sway"          # included by the sway config: *.conf
 SHOTS="$HOME/Pictures/Screenshots"
 RECS="$HOME/Videos/Recordings"
+THEME="$HOME/.local/state/omarchy/current/theme"   # rendered by sway-theme-set
 DEFAULT_WALLPAPER="$DOTFILES/wallpapers/neon-city.png"
-WALLPAPER_DIRS=("$DOTFILES/wallpapers" "$HOME/repos/cool-wallpapers/tokyonight")  # cloned by init.sh
+WALLPAPER_DIRS=("$THEME/backgrounds" "$DOTFILES/wallpapers" "$HOME/repos/cool-wallpapers/tokyonight")  # cloned by init.sh
 
 # ---------- tiny menu framework: parallel arrays of labels and actions ----------
+fz() { fuzzel --config "$THEME/fuzzel.ini" "$@"; }
 L=(); A=()
 reset() { L=(); A=(); }
 add() { L+=("$1"); A+=("$2"); }                  # add "icon  Label" 'action'
 show() {                                          # show PROMPT [ROWS]: run the chosen entry's action
   local prompt="$1" n=${#L[@]} rows="${2:-25}" i
   [ "$n" -gt 0 ] || return 0
-  i=$(printf '%s\n' "${L[@]}" | fuzzel --dmenu --index --prompt "$prompt ❯ " \
+  i=$(printf '%s\n' "${L[@]}" | fz --dmenu --index --prompt "$prompt ❯ " \
         --lines "$(( n < rows ? n : rows ))" --width 60)
   [[ "${i:-}" =~ ^[0-9]+$ ]] && [ "$i" -lt "$n" ] || return 0
   eval "${A[$i]}"
 }
 pick() {                                          # pick PROMPT ENTRY... -> prints chosen label (icon stripped)
   local prompt="$1"; shift
-  printf '%s\n' "$@" | fuzzel --dmenu --prompt "$prompt ❯ " --lines "$#" --width 40 \
+  printf '%s\n' "$@" | fz --dmenu --prompt "$prompt ❯ " --lines "$#" --width 40 \
     | sed -E 's/^[^[:alnum:]]*[[:space:]]+//'
 }
 confirm() { [ "$(pick "$1" "󰄬  Yes" "󰅖  No")" = Yes ]; }
@@ -51,7 +55,7 @@ wallpaper() {
   local f; f=$(sed -n 's/^output \* bg "\(.*\)" fill$/\1/p' "$STATE/background.conf" 2>/dev/null)
   [ -f "${f:-}" ] && printf '%s' "$f" || printf '%s' "$DEFAULT_WALLPAPER"
 }
-lock() { swaylock -f -i "$(wallpaper)" -s fill; }
+lock() { swaylock -f -C "$THEME/swaylock.conf" -i "$(wallpaper)" -s fill; }
 idle() {
   exec swayidle -w \
     timeout 300 "$0 lock" \
@@ -112,7 +116,23 @@ wallpaper_picker() {
           --preview-window 'right:75%:noborder') || exit 0
   [ -n "$f" ] && set_background "$f"
 }
-leaves_style() { local p="${1:-}" d f
+# Themes: sway-theme-set lists "name<TAB>dir"; the picker previews each theme's preview.png.
+theme_name() { sway-theme-set current 2>/dev/null; }
+theme_pretty() { printf '%s' "$1" | sed -E 's/(^|-)([a-z])/\1\u\2/g; s/-/ /g'; }
+theme_pick() {
+  local fmt=symbols n
+  [ -n "${GHOSTTY_RESOURCES_DIR:-}" ] || [ -n "${KITTY_WINDOW_ID:-}" ] && fmt=kitty
+  n=$(sway-theme-set list | fzf --prompt 'Theme ❯ ' --header 'enter: apply · esc: cancel' --delimiter $'\t' --with-nth 1 \
+        --preview "[ -f {2}/preview.png ] && chafa -f $fmt -s \${FZF_PREVIEW_COLUMNS}x\${FZF_PREVIEW_LINES} {2}/preview.png || head -40 {2}/colors.toml" \
+        --preview-window 'right:75%:noborder' | cut -f1) || exit 0
+  [ -n "$n" ] && sway-theme-set "$n"
+}
+leaves_style() { local p="${1:-}" d f n cur; cur=$(theme_name)
+  add "󰸌  ${p}Theme picker (preview)" "tui $(printf %q "$SELF") theme-pick"
+  add "󰸌  ${p}Theme: next" 'sway-theme-set next'
+  while IFS=$'\t' read -r n d; do
+    add "󰸌  ${p}Theme: $(theme_pretty "$n")$([ "$n" = "$cur" ] && printf '  (current)')" "sway-theme-set $(printf %q "$n")"
+  done < <(sway-theme-set list 2>/dev/null)
   add "󰸉  ${p}Background picker (preview)" "tui $(printf %q "$SELF") wallpaper"
   for d in "${WALLPAPER_DIRS[@]}"; do
     for f in "$d"/*; do [ -f "$f" ] && add "󰋩  ${p}Background: ${f##*/}" "set_background $(printf %q "$f")"; done
@@ -143,7 +163,7 @@ wifi_list() {  # prints "*|-<TAB>ssid<TAB>signal<TAB>security" (never an empty f
     | sed 's/\\:/\x01/g' | awk -F: '$2 != "" && !seen[$2]++ { gsub(/\x01/, ":", $2); printf "%s\t%s\t%s\t%s\n", ($1 == "*" ? "*" : "-"), $2, $3, $4 }' \
     | sort -t$'\t' -k3,3nr
 }
-wifi_prompt() { fuzzel --dmenu --prompt "$1 ❯ " --lines 0 --width 40 ${2:+--password} < /dev/null; }
+wifi_prompt() { fz --dmenu --prompt "$1 ❯ " --lines 0 --width 40 ${2:+--password} < /dev/null; }
 wifi_connect() {  # wifi_connect SSID SECURITY [hidden]
   local ssid="$1" sec="$2" hidden="${3:-}" pw="" out
   if nmcli -g NAME con show 2>/dev/null | grep -qxF -- "$ssid"; then
@@ -161,7 +181,7 @@ wifi_menu() {  # wifi_menu [rescan]
     ssids+=("$ssid"); secs+=("$sec")
   done < <(wifi_list "${1:-no}")
   local n=${#entries[@]}
-  i=$(printf '%s\n' "${entries[@]}" "󰑓  Rescan" "󰤫  Hidden network…" "󰤭  Disconnect" | fuzzel --dmenu --index --prompt "Wi-Fi ❯ " --lines "$(( n + 3 < 20 ? n + 3 : 20 ))" --width 60)
+  i=$(printf '%s\n' "${entries[@]}" "󰑓  Rescan" "󰤫  Hidden network…" "󰤭  Disconnect" | fz --dmenu --index --prompt "Wi-Fi ❯ " --lines "$(( n + 3 < 20 ? n + 3 : 20 ))" --width 60)
   [[ "${i:-}" =~ ^[0-9]+$ ]] || return 0
   if [ "$i" -lt "$n" ]; then wifi_connect "${ssids[$i]}" "${secs[$i]}"
   elif [ "$i" -eq "$n" ]; then wifi_menu yes
@@ -331,7 +351,7 @@ leaves_update() { local p="${1:-}"
 show_keybindings() {
   grep -E '^\s*bindsym' "$SWAY_CONFIG" \
     | sed -E 's/^\s*bindsym\s+(--[a-z-]+\s+)*//; s/\$mod/Super/g; s/Mod1/Alt/g; s/\s+exec\s+/  →  /; s/^([^ ]+)\s+/\1  →  /' \
-    | fuzzel --dmenu --prompt "Keybindings ❯ " --lines 25 --width 80 >/dev/null; }
+    | fz --dmenu --prompt "Keybindings ❯ " --lines 25 --width 80 >/dev/null; }
 leaves_learn() { local p="${1:-}"
   add "󰌌  ${p}Keybindings" show_keybindings
   add "󰖟  ${p}Sway wiki" 'bg xdg-open https://github.com/swaywm/sway/wiki'
@@ -380,7 +400,7 @@ submenu() {                                       # submenu SECTION
 main_menu() {
   reset
   local s
-  add "󰀻  Apps" 'bg fuzzel'
+  add "󰀻  Apps" 'bg fz'
   for s in "${sections[@]}"; do add "$(section_icon "$s")  $(section_title "$s")" "submenu $s"; done
   add "󰋽  About" about
   local top=${#L[@]}
@@ -400,6 +420,10 @@ case "${1:-}" in
   wifi) wifi_menu ;;
   vpn-connect) vpn_connect "${2:?profile name}" ;;
   vpn-pick) vpn_pick ;;
+  theme) sway-theme-set "${2:?theme name}" ;;
+  theme-next) sway-theme-set next ;;
+  theme-pick) theme_pick ;;
+  background) set_background "${2:?image path}" ;;
   "") main_menu ;;
-  *) echo "usage: sway-menu [lock|idle|pkg-install|pkg-remove|wallpaper|wifi|vpn-connect NAME|vpn-pick]" >&2; exit 2 ;;
+  *) echo "usage: sway-menu [lock|idle|pkg-install|pkg-remove|wallpaper|wifi|vpn-connect NAME|vpn-pick|theme NAME|theme-next|theme-pick|background FILE]" >&2; exit 2 ;;
 esac

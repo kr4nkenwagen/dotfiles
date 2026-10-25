@@ -94,6 +94,13 @@ background_color = None
 selection_foreground_color = None
 selection_background_color = None
 colors = [None] * 16
+semantic = {}
+SEMANTIC_ANSI = {
+    "background": 0, "red": 1, "green": 2, "yellow": 3, "blue": 4, "magenta": 5,
+    "cyan": 6, "foreground": 7, "muted": 8, "bright_red": 9, "bright_green": 10,
+    "bright_yellow": 11, "bright_blue": 12, "bright_magenta": 13, "bright_cyan": 14,
+    "bright_foreground": 15,
+}
 
 if theme_file_path and os.path.isfile(theme_file_path):
     with open(theme_file_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -124,6 +131,23 @@ if theme_file_path and os.path.isfile(theme_file_path):
                 idx = int(key[5:])
                 if 0 <= idx < 16:
                     colors[idx] = hex_val
+            elif key in SEMANTIC_ANSI:
+                semantic[key] = hex_val
+            elif key == "selection":
+                semantic["selection"] = hex_val
+
+    # Omarchy 4 themes define only semantic names (no color0..15). Map them onto
+    # the ANSI slots the same way Omarchy's ghostty.conf template does; explicit
+    # colorN / selection_* keys from older themes keep precedence.
+    semantic.setdefault("background", background_color)
+    semantic.setdefault("foreground", foreground_color)
+    for name, idx in SEMANTIC_ANSI.items():
+        if colors[idx] is None and semantic.get(name):
+            colors[idx] = semantic[name]
+    if selection_background_color is None and "selection" in semantic:
+        selection_background_color = semantic["selection"]
+    if selection_foreground_color is None and "bright_foreground" in semantic:
+        selection_foreground_color = semantic["bright_foreground"]
 
 def get_font_size():
     xdg_config = os.environ.get("XDG_CONFIG_HOME")

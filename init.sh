@@ -7,8 +7,9 @@
 #   ./init.sh
 #
 # Ubuntu is the work-laptop profile: dev tools, shell, Sway desktop, ghostty, nvim, qutebrowser.
-# Tokyo Night everywhere, no games, chat, media or personal repos. Sway is used
-# instead of Hyprland because Ubuntu LTS (24.04) has no Hyprland in apt.
+# Themes are Omarchy's (themes/ in this repo), applied by sway-theme-set; no games,
+# chat, media or personal repos. Sway is used instead of Hyprland because Ubuntu
+# LTS (24.04) has no Hyprland in apt.
 set -euo pipefail
 
 DOTFILES_DIR="${DOTFILES_DIR:-$HOME/repos/dotfiles}"
@@ -88,7 +89,7 @@ ubuntu_desktop_packages=(
   wf-recorder wdisplays wlsunset power-profiles-daemon libnotify-bin libgtk-3-bin chafa
 )
 
-stow_dirs=(fish nvim tmux)
+stow_dirs=(fish nvim tmux theme)
 case "$OS" in
   omarchy) stow_dirs+=(qutebrowser aerc ghostty hypr omarchy vesktop) ;;
   arch)    stow_dirs+=(qutebrowser aerc ghostty) ;;
@@ -370,7 +371,7 @@ find ~ ~/.config -maxdepth 1 -xtype l -lname "*${DOTFILES_DIR##*/}*" -print -del
 
 # Unstow packages that belong to other profiles. An older init.sh stowed the
 # Omarchy hypr config everywhere, which breaks a non-Omarchy machine.
-all_stow_dirs=(fish nvim tmux aerc qutebrowser ghostty hypr omarchy vesktop ubuntu)
+all_stow_dirs=(fish nvim tmux theme aerc qutebrowser ghostty hypr omarchy vesktop ubuntu)
 unstow=()
 for d in "${all_stow_dirs[@]}"; do
   [ -d "$d" ] || continue
@@ -417,8 +418,9 @@ if have fish && ! grep -qxF 'fish' ~/.bashrc 2>/dev/null; then
 fi
 
 if [ "$OS" = ubuntu ] && have fish; then
+  # Named ANSI colours only, so fish follows whatever palette the terminal shows.
   info "Setting fish theme"
-  fish -c 'fish_config theme save "TokyoNight Night"' || warn "fish theme not set"
+  fish -c 'fish_config theme save Terminal' || warn "fish theme not set"
 fi
 
 # Tokyo Night wallpapers (third-party, ~120 MB, so referenced rather than vendored):
@@ -445,12 +447,23 @@ if [ "$OS" = omarchy ]; then
       cp -n "$DOTFILES_DIR/${theme}_wallpapers"/* ~/.config/omarchy/themes/$theme/backgrounds/
     fi
   done
+  # The custom theme lives in the repo; Omarchy's own themes are already installed.
+  ln -sfn "$DOTFILES_DIR/themes/kr4nkengine" ~/.config/omarchy/themes/kr4nkengine
   omarchy-font-set "Terminess Nerd Font Mono"
   omarchy-theme-set osaka-jade
   omarchy-theme-bg-next
 fi
 
 if [ "$OS" = ubuntu ]; then
+  info "Applying theme"
+  # nvim loads the theme's neovim.lua through this link, the same one Omarchy creates.
+  mkdir -p ~/.config/nvim/lua/plugins
+  ln -sfn ../../../../.local/state/omarchy/current/theme/neovim.lua ~/.config/nvim/lua/plugins/theme.lua
+  # Renders the current theme (Tokyo Night on a fresh machine) so sway, waybar, mako,
+  # fuzzel, swaylock and ghostty have their files before the session starts.
+  # Inside a running session this also retints everything live.
+  sway-theme-set "$(cat ~/.local/state/omarchy/current/theme.name 2>/dev/null || echo tokyo-night)" \
+    || warn "theme not applied"
   info "Skipping personal repos on the work profile"
 else
   info "Cloning personal repos"

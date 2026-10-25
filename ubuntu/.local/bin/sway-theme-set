@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# sway-theme-set: apply an Omarchy-format theme on the Ubuntu/Sway profile.
+#   sway-theme-set NAME     stage the theme, render app configs, apply everything live
+#   sway-theme-set next     cycle to the next theme (bound to Super+Shift+Ctrl+Space)
+#   sway-theme-set list     print "name<TAB>dir" for every available theme
+#   sway-theme-set current  print the current theme's name
+# Themes come from $DOTFILES/themes (copied from Omarchy) and ~/.config/omarchy/themes
+# (user overlay, same precedence as Omarchy). Like omarchy-theme-set, the result is
+# ~/.local/state/omarchy/current/theme: colors.toml plus every file rendered from
+# ~/.config/sway-theme/*.tpl, so ghostty, qutebrowser, nvim and tmux find the theme
+# at the same path on both machines.
+set -euo pipefail
+
+DOTFILES="${DOTFILES_DIR:-$HOME/repos/dotfiles}"
+STATE="${SWAY_THEME_STATE:-$HOME/.local/state/omarchy/current}"
+THEME_DIRS=("$HOME/.config/omarchy/themes" "$DOTFILES/themes")   # first match wins
+TEMPLATES="${SWAY_THEME_TEMPLATES:-$HOME/.config/sway-theme}"
+CURRENT="$STATE/theme"
+NEXT="$STATE/next-theme"
+EXTRA_BACKGROUNDS="$HOME/repos/cool-wallpapers/tokyonight"       # for tokyo-night, cloned by init.sh
+
+die() { printf 'sway-theme-set: %s\n' "$1" >&2; exit 1; }
+snake() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr ' _' '--'; }
+pretty() { printf '%s' "$1" | sed -E 's/(^|-)([a-z])/\1\u\2/g; s/-/ /g'; }
+
+list_themes() {  # name<TAB>dir, sorted, user themes shadowing repo themes of the same name
+  local d t
+  for d in "${THEME_DIRS[@]}"; do
+    for t in "$d"/*/; do
+      [ -f "$t/colors.toml" ] || continue
+      printf '%s\t%s\n' "$(basename "$t")" "${t%/}"
+    done
+  done | sort -t$'\t' -k1,1 -u
+}
+theme_dir() { list_themes | awk -F'\t' -v n="$1" '$1 == n { print $2; exit }'; }
+current_name() { cat "$STATE/theme.name" 2>/dev/null || true; }
+
+render() {  # render SRC.tpl DEST: {{ key }}, {{ key_strip }} (no #), {{ key_rgb }} (r,g,b)
+  local src="$1" dest="$2" key value hex
+  local sed_script; sed_script=$(mktemp)
+  while IFS=$'\t' read -r key value; do
+    printf 's|{{ %s }}|%s|g\n' "$key" "$value"
+    printf 's|{{ %s_strip }}|%s|g\n' "$key" "${value#\#}"
+    if [[ $value =~ ^#[0-9A-Fa-f]{6}$ ]]; then
+      hex=${value#\#}
+      printf 's|{{ %s_rgb }}|%d,%d,%d|g\n' "$key" "0x${hex:0:2}" "0x${hex:2:2}" "0x${hex:4:2}"
+    fi
+  done <<<"$PALETTE" >"$sed_script"
+  sed -f "$sed_script" "$src" >"$dest"
+  rm -f "$sed_script"
+  if grep -q '{{' "$dest"; then
+    die "unresolved placeholder in $dest: $(grep -o '{{[^}]*}}' "$dest" | sort -u | tr '\n' ' ')"
+  fi
+}
+
+stage() {  # stage DIR: copy the theme and render the templates into $NEXT
+  local dir="$1" tpl out
+  rm -rf "$NEXT"; mkdir -p "$NEXT"
+  cp -r --no-preserve=mode,ownership "$dir"/. "$NEXT"/
+  PALETTE=$(theme-color --file "$NEXT/colors.toml" --all)
+  for tpl in "$TEMPLATES"/*.tpl; do
+    [ -f "$tpl" ] || continue
+    out="$NEXT/$(basename "$tpl" .tpl)"
+    [ -f "$out" ] || render "$tpl" "$out"   # files the theme ships win over templates
+  done
+}
+
+backgrounds() {  # one path per line, sorted
+  local dirs=("$CURRENT/backgrounds")
+  [ "$1" = tokyo-night ] && dirs+=("$EXTRA_BACKGROUNDS")
+  find -L "${dirs[@]}" -maxdepth 1 -type f \
+    \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp' \) 2>/dev/null | sort
+}
+
+apply_live() {
+  local name="$1" bg line
+  # sway: client.* colours take effect at runtime; the file is included on the next start
+  if [ -n "${SWAYSOCK:-}" ] && command -v swaymsg >/dev/null; then
+    while IFS= read -r line; do
+      [[ $line == client.* ]] && swaymsg -- "$line" >/dev/null 2>&1 || true
+    done <"$CURRENT/sway.conf"
+  fi
+  bg=$(backgrounds "$name" | head -1)
+  if [ -n "$bg" ]; then
+    ln -nsf "$bg" "$STATE/background"
+    if command -v sway-menu >/dev/null; then sway-menu background "$bg"; fi
+  fi
+  pkill -SIGUSR2 -x waybar 2>/dev/null || true     # reloads its style
+  command -v makoctl >/dev/null && makoctl reload 2>/dev/null || true
+  pkill -SIGUSR2 -x ghostty 2>/dev/null || true    # re-reads config incl. the theme file
+  command -v theme-sync-tmux >/dev/null && theme-sync-tmux || true
+  command -v theme-sync-qutebrowser >/dev/null && theme-sync-qutebrowser || true
+  command -v notify-send >/dev/null && notify-send "Theme" "$(pretty "$name")" -t 2000 || true
+}
+
+set_theme() {
+  local name dir
+  name=$(snake "$1")
+  dir=$(theme_dir "$name"); [ -n "$dir" ] || die "theme '$1' not found (sway-theme-set list)"
+  mkdir -p "$STATE"
+  stage "$dir"
+  rm -rf "$CURRENT"; mv "$NEXT" "$CURRENT"
+  printf '%s\n' "$name" >"$STATE/theme.name"
+  [ "${SWAY_THEME_NO_APPLY:-0}" = 1 ] || apply_live "$name"
+}
+
+next_theme() {
+  local names cur i n
+  mapfile -t names < <(list_themes | cut -f1)
+  n=${#names[@]}; [ "$n" -gt 0 ] || die "no themes found"
+  cur=$(current_name); i=0
+  for idx in "${!names[@]}"; do [ "${names[$idx]}" = "$cur" ] && i=$(( (idx + 1) % n )); done
+  set_theme "${names[$i]}"
+}
+
+case "${1:-}" in
+  list) list_themes ;;
+  current) current_name ;;
+  next) next_theme ;;
+  "" | -h | --help) sed -n '2,8p' "$0" >&2; exit 2 ;;
+  *) set_theme "$1" ;;
+esac

@@ -1,0 +1,8 @@
+#!/bin/bash
+# theme-sync-qutebrowser: make a running qutebrowser re-read config.py, which reads
+# the current theme's colors.toml. Only when exactly one instance runs: with several,
+# the IPC command could land in the wrong one.
+if [ "$(pgrep -x qutebrowser | wc -l)" -eq 1 ]; then
+  qutebrowser :config-source >/dev/null 2>&1
+fi
+exit 0

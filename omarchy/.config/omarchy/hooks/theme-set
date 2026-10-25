@@ -1,17 +1,7 @@
 #!/bin/bash
+# Omarchy calls this with the snake-cased name of the theme that has just been set.
+# The sync scripts come from the theme stow package (~/.local/bin) and are shared
+# with the Ubuntu/Sway profile's sway-theme-set.
 
-# This hook is called with the snake-cased name of the theme that has just been set.
-# To put it into use, remove .sample from the name.
-
-# Example: Show the name of the theme that was just set.
-# notify-send "New theme" "Your new theme is $1"
-
-# Sync tmux colors
-"$HOME/.config/omarchy/hooks/tmux-theme-sync" "$1"
-# Sync qutebrowser
-instances=$(pgrep -x qutebrowser | wc -l)
-if [ "$instances" -eq 1 ]; then
-  #qutebrowser :config-source &
-  qutebrowser :config-source
-fi
-tmux source-file ~/.config/tmux/tmux.conf
+"$HOME/.local/bin/theme-sync-tmux" "$1"
+"$HOME/.local/bin/theme-sync-qutebrowser"

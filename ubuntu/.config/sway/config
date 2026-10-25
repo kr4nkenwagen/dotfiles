@@ -1,12 +1,14 @@
 # Sway config for the Ubuntu work-laptop profile. Mirrors the Omarchy Hyprland
-# bindings as closely as Sway allows. Tokyo Night (night).
+# bindings as closely as Sway allows. Colours come from the current Omarchy-format
+# theme: sway-theme-set renders them into $theme (see ~/.local/bin/sway-theme-set).
 # Needs: sway swaylock swayidle swaybg waybar mako fuzzel lxpolkit xdg-terminal-exec
 #        brightnessctl playerctl pavucontrol grim slurp wl-clipboard clipse
 
 set $mod Mod4
 set $term ghostty
 set $browser qutebrowser
-set $menu fuzzel
+set $theme ~/.local/state/omarchy/current/theme
+set $menu fuzzel --config $theme/fuzzel.ini
 set $wallpaper ~/repos/dotfiles/wallpapers/neon-city.png
 set $menu_sys ~/.local/bin/sway-menu
 set $lock $menu_sys lock
@@ -14,17 +16,8 @@ set $tui $term --class=TUI.float -e
 
 font pango:Terminess Nerd Font Mono 11
 
-# Tokyo Night
-set $bg     #1a1b26
-set $fg     #c0caf5
-set $blue   #7aa2f7
-set $gray   #414868
-set $red    #f7768e
-#                       border  background text    indicator child_border
-client.focused          $blue   $blue      $bg     $blue     $blue
-client.focused_inactive $gray   $gray      $fg     $gray     $gray
-client.unfocused        $gray   $bg        $fg     $gray     $gray
-client.urgent           $red    $red       $bg     $red      $red
+# Window colours (client.*), rendered from the theme by sway-theme-set
+include $theme/sway.conf
 
 default_border pixel 2
 default_floating_border pixel 2
@@ -59,8 +52,8 @@ input type:pointer {
 # Autostart
 exec dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP=sway
 # exec_always so a reload restarts the bar and picks up config changes.
-exec_always sh -c 'pkill -x waybar; sleep 0.3; exec waybar'
-exec mako
+exec_always sh -c 'pkill -x waybar; sleep 0.3; exec waybar -s $theme/waybar.css'
+exec mako -c $theme/mako.ini
 exec lxpolkit
 exec nm-applet
 exec blueman-applet
@@ -72,6 +65,7 @@ bindsym $mod+Return exec $term
 bindsym $mod+Mod1+Return exec xdg-terminal-exec
 bindsym $mod+space exec $menu
 bindsym $mod+Mod1+space exec $menu_sys
+bindsym $mod+Shift+Ctrl+space exec $menu_sys theme-next
 bindsym $mod+Shift+b exec $browser
 bindsym $mod+Shift+n exec $term -e nvim
 bindsym $mod+Shift+t exec $tui btop
