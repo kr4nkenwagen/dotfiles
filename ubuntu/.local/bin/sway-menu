@@ -213,12 +213,9 @@ theme_pick() { local names=() previews=() n d cur i t
       done | fz_img --dmenu --index --prompt "Theme ❯ ") || return 0
   [[ "${i:-}" =~ ^[0-9]+$ ]] && sway-theme-set "${names[$i]}"
 }
-leaves_style() { local p="${1:-}" d n cur; cur=$(theme_name)
-  add "󰸌  ${p}Theme picker (previews)" theme_pick
+leaves_style() { local p="${1:-}"
+  add "󰸌  ${p}Theme picker ($(theme_pretty "$(theme_name)"))" theme_pick
   add "󰸌  ${p}Theme: next" 'sway-theme-set next'
-  while IFS=$'\t' read -r n d; do
-    add "󰸌  ${p}Theme: $(theme_pretty "$n")$([ "$n" = "$cur" ] && printf '  (current)')" "sway-theme-set ${n@Q}"
-  done < <(theme_list)
   add "󰸉  ${p}Background picker (thumbnails)" wallpaper_picker
   add "󰸉  ${p}Background: next" bg_next
   add "󰸉  ${p}Background: random" bg_random; }
