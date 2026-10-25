@@ -61,6 +61,10 @@ end
 if command -q starship
     starship init fish | source
 end
+# mise: per-project tool versions (odin for ~/repos/k4, node, python, …)
+if command -q mise
+    mise activate fish | source
+end
 
 if not set -q TMUX; and not set -q SSH_CONNECTION
     tmux

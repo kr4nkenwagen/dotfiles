@@ -82,7 +82,7 @@ arch_packages=(
   stow tmux qutebrowser fish ghostty
   ttf-terminus-nerd ttf-space-mono-nerd ttf-bigblueterminal-nerd
   "${ligature_nerd_font_pkgs[@]}"
-  python-adblock uv ollama nodejs python-pip libffi openssl platformio
+  python-adblock uv ollama nodejs python-pip libffi openssl platformio mise clang
   rtorrent adw-gtk-theme mpv steam clipse ranger aerc gdb tenere mcfly
   discordo yq python-libtmux ripgrep youtube-dl go git neovim
 )
@@ -104,7 +104,7 @@ ubuntu_desktop_packages=(
   brightnessctl playerctl pavucontrol grim slurp network-manager-gnome blueman ghostty
   wf-recorder wdisplays wlsunset power-profiles-daemon libnotify-bin libgtk-3-bin chafa qrencode
   libvips-tools
-  libwayland-dev libxkbcommon-dev
+  libwayland-dev libxkbcommon-dev clang
 )
 
 stow_dirs=(fish nvim tmux theme)
@@ -286,6 +286,8 @@ ubuntu_extras() {
   ubuntu_fonts
 
   have starship || curl -sS https://starship.rs/install.sh | sh -s -- -y -b "$HOME/.local/bin" || warn "starship install failed"
+  # mise: tool versions (k4 pins its Odin compiler with it). Not in apt on 24.04.
+  have mise || curl -fsSL https://mise.run | MISE_INSTALL_PATH="$HOME/.local/bin/mise" sh || warn "mise install failed"
   have uv || curl -LsSf https://astral.sh/uv/install.sh | sh || warn "uv install failed"
   have carapace || ubuntu_carapace
   have dust || ubuntu_dust
@@ -446,10 +448,19 @@ done
 ln -sfn "$(realpath --relative-to="$HOME" "$DOTFILES_DIR/.XCompose")" ~/.XCompose
 
 # k4, the Odin launcher sway-menu can use instead of fuzzel (Toggle › Launcher), lives in its
-# own repo. Built when it is checked out at ~/repos/k4 and odin is installed.
-if [ -x ~/repos/k4/build.sh ] && have odin; then
+# own repo. Its build fetches the pinned Odin through mise (Ubuntu's apt "odin" is an
+# unrelated MRI tool, so mise is required there).
+if [ ! -d ~/repos/k4/.git ]; then
+  info "Cloning k4"
+  git clone https://github.com/kr4nkenwagen/k4 ~/repos/k4 \
+    && git -C ~/repos/k4 remote set-url --push origin git@github.com:kr4nkenwagen/k4.git \
+    || warn "could not clone k4"
+fi
+if [ -x ~/repos/k4/build.sh ] && have mise; then
   info "Building k4"
   ~/repos/k4/build.sh install || warn "k4 build failed; sway-menu keeps using fuzzel"
+elif [ -x ~/repos/k4/build.sh ]; then
+  warn "mise is missing; k4 not built"
 fi
 
 # ghostty reads its shader list from a state file starfield-toggle maintains.
