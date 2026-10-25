@@ -12,6 +12,10 @@ FONT_FILE="$STATE/font.name"
 
 list() { fc-list : family 2>/dev/null | tr ',' '\n' | sed 's/^ *//' | grep -E ' Nerd Font Mono$' | sort -u; }
 current() { cat "$FONT_FILE" 2>/dev/null || echo "Terminess Nerd Font Mono"; }
+launcher() {  # same choice as sway-menu: k4 when selected and installed, else fuzzel
+  local l="${SWAY_MENU_LAUNCHER:-$(cat "$HOME/.local/state/sway/launcher" 2>/dev/null || echo fuzzel)}"
+  if [ "$l" = k4 ] && command -v k4 >/dev/null; then k4 "$@"; else fuzzel --config "$STATE/theme/fuzzel.ini" "$@"; fi
+}
 set_font() {
   local name="$1"
   list | grep -qxF -- "$name" || { echo "sway-font-set: '$name' is not an installed Nerd Font Mono family (sway-font-set list)" >&2; exit 1; }
@@ -22,7 +26,7 @@ set_font() {
 pick() {
   local cur sel; cur=$(current)
   sel=$(list | sed "s/^\(${cur//\//\\/}\)$/\1  (current)/" \
-        | fuzzel --config "$STATE/theme/fuzzel.ini" --dmenu --prompt "Font ❯ " --lines 15 --width "$(( $(list | awk '{ if (length > m) m = length } END { print m + 0 }') + 20 ))") || exit 0
+        | launcher --dmenu --prompt "Font ❯ " --lines 15 --width "$(( $(list | awk '{ if (length > m) m = length } END { print m + 0 }') + 20 ))") || exit 0
   sel=${sel%  (current)}; [ -n "$sel" ] && set_font "$sel"
 }
 case "${1:-}" in

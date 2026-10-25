@@ -104,6 +104,7 @@ ubuntu_desktop_packages=(
   brightnessctl playerctl pavucontrol grim slurp network-manager-gnome blueman ghostty
   wf-recorder wdisplays wlsunset power-profiles-daemon libnotify-bin libgtk-3-bin chafa qrencode
   libvips-tools
+  libwayland-dev libxkbcommon-dev
 )
 
 stow_dirs=(fish nvim tmux theme)
@@ -443,6 +444,13 @@ done
 # Relative link: stow 2.4 aborts ("Absolute/relative mismatch") when it meets an
 # absolute symlink into the stow dir while scanning the target.
 ln -sfn "$(realpath --relative-to="$HOME" "$DOTFILES_DIR/.XCompose")" ~/.XCompose
+
+# k4, the Odin launcher sway-menu can use instead of fuzzel (Toggle › Launcher), lives in its
+# own repo. Built when it is checked out at ~/repos/k4 and odin is installed.
+if [ -x ~/repos/k4/build.sh ] && have odin; then
+  info "Building k4"
+  ~/repos/k4/build.sh install || warn "k4 build failed; sway-menu keeps using fuzzel"
+fi
 
 # ghostty reads its shader list from a state file starfield-toggle maintains.
 starfield-toggle --ensure 2>/dev/null || warn "could not write ghostty's shader list"

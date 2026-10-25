@@ -38,7 +38,13 @@ PICK_LOG="$HOME/.cache/sway-menu/pick.log"   # every pick and paint step, for di
 plog() { mkdir -p "${PICK_LOG%/*}"; printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >> "$PICK_LOG"; }
 
 # ---------- tiny menu framework: parallel arrays of labels and actions ----------
-fz() { fuzzel --config "$THEME/fuzzel.ini" "$@"; }
+# Launcher: k4 (~/repos/k4, Odin) when chosen and installed, else fuzzel. The choice lives in
+# $STATE/launcher (Toggle › Launcher) and SWAY_MENU_LAUNCHER overrides it.
+LAUNCHER="${SWAY_MENU_LAUNCHER:-$(cat "$STATE/launcher" 2>/dev/null || echo fuzzel)}"
+[ "$LAUNCHER" = k4 ] && ! command -v k4 >/dev/null && LAUNCHER=fuzzel
+fz() { if [ "$LAUNCHER" = k4 ]; then k4 "$@"; else fuzzel --config "$THEME/fuzzel.ini" "$@"; fi; }
+toggle_launcher() { mkdir -p "$STATE"; if [ "$LAUNCHER" = k4 ]; then echo fuzzel; else echo k4; fi > "$STATE/launcher"
+  notify "Launcher" "$(cat "$STATE/launcher")"; }
 # fuzzel's width is a fixed number of columns; size it to the longest row instead (+ padding,
 # + the prompt). Nerd icons are counted as one column; fuzzel draws them double-wide, so pad.
 fit() {  # fit EXTRA LABEL... -> columns
@@ -46,7 +52,7 @@ fit() {  # fit EXTRA LABEL... -> columns
   for l in "$@"; do [ "${#l}" -gt "$max" ] && max=${#l}; done
   local w=$(( max + extra + 6 )); [ "$w" -lt 24 ] && w=24; [ "$w" -gt 110 ] && w=110; printf '%s' "$w"
 }
-fz_img() { fuzzel --config "$THEME/fuzzel-images.ini" "$@"; }   # tall rows with thumbnail icons
+fz_img() { if [ "$LAUNCHER" = k4 ]; then k4 "$@"; else fuzzel --config "$THEME/fuzzel-images.ini" "$@"; fi; }   # tall rows with thumbnail icons
 L=(); A=()
 reset() { L=(); A=(); }
 add() { L+=("$1"); A+=("$2"); }                  # add "icon  Label" 'action'
@@ -154,7 +160,8 @@ leaves_toggle() { local p="${1:-}"
   add "󰌾  ${p}Idle lock ($(onoff pgrep -x swayidle))" toggle_idle
   add "󰍜  ${p}Bar ($(onoff pgrep -x waybar))" toggle_bar
   add "󰂛  ${p}Do not disturb ($(onoff sh -c 'makoctl mode | grep -qx do-not-disturb'))" toggle_dnd
-  add "󰖔  ${p}Starfield ($(starfield-toggle status 2>/dev/null || echo on))" 'starfield-toggle'; }
+  add "󰖔  ${p}Starfield ($(starfield-toggle status 2>/dev/null || echo on))" 'starfield-toggle'
+  command -v k4 >/dev/null && add "󰌧  ${p}Launcher ($LAUNCHER)" toggle_launcher; }
 
 # ---------- Style ----------
 bg_list() { find -L "${WALLPAPER_DIRS[@]}" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) 2>/dev/null | sort -u; }
