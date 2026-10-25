@@ -3,7 +3,7 @@ if not status is-interactive
 end
 
 # Where init.sh puts things that are not in the distro's package manager.
-for p in ~/.local/bin ~/go/bin ~/.cargo/bin /usr/local/go/bin
+for p in ~/.local/bin ~/go/bin ~/.cargo/bin /usr/local/go/bin /snap/bin
     if test -d $p; and not contains $p $PATH
         set -gx PATH $p $PATH
     end

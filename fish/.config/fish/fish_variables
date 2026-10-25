@@ -4,6 +4,8 @@ SETUVAR --export CARAPACE_BRIDGES:zsh\x2cfish\x2cinshellisense
 SETUVAR --export FZF_DEFAULT_OPTS:\x20\x2d\x2dcolor\x3dbg\x2b\x3a\x231a1b26\x2cbg\x3a\x231a1b26\x2cspinner\x3a\x230db9d7\x2chl\x3a\x23bb9af7\x20\x2d\x2dcolor\x3dfg\x3a\x23a9b1d6\x2cheader\x3a\x23bb9af7\x2cinfo\x3a\x23b9f27c\x2cpointer\x3a\x230db9d7\x20\x2d\x2dcolor\x3dmarker\x3a\x230db9d7\x2cfg\x2b\x3a\x23449dab\x2cprompt\x3a\x23b9f27c\x2chl\x2b\x3a\x23bb9af7
 SETUVAR --export --path PICO_SDK_PATH:/home/kr4nk/rp2040/pico\x2dsdk
 SETUVAR REPOS:\x7e/repos
+SETUVAR --export SSH_AGENT_PID:3715
+SETUVAR --export SSH_AUTH_SOCK:/home/kr4nk/\x2ekeychain/QbZDKJwU\x2es
 SETUVAR --export SWAYSOCK:/run/user/1000/sway\x2dipc\x2e1000\x2e1276\x2esock
 SETUVAR --export WAYLAND_DISPLAY:wayland\x2d1
 SETUVAR --export XDG_CURRENT_DESKTOP:sway
