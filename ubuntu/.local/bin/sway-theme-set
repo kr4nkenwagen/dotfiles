@@ -10,6 +10,9 @@
 # ~/.config/sway-theme/*.tpl, so ghostty, qutebrowser, nvim and tmux find the theme
 # at the same path on both machines.
 set -euo pipefail
+# sway launches us with the login environment, which lacks the dirs init.sh installs
+# into (awww, theme-color, bluetui, wiremix, lazygit). Fish adds them for terminals only.
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/go/bin:/usr/local/go/bin:$PATH"
 
 DOTFILES="${DOTFILES_DIR:-$HOME/repos/dotfiles}"
 STATE="${SWAY_THEME_STATE:-$HOME/.local/state/omarchy/current}"

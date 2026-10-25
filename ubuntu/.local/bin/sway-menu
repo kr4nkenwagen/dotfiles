@@ -7,6 +7,7 @@
 #   sway-menu wallpaper | wallpaper-next | wallpaper-random   fuzzel wallpaper picker (thumbnails)
 #   sway-menu wallpaper-restore           repaint the saved wallpaper (sway config runs it at start)
 #   sway-menu thumbs-warm                 build thumbnails for the current theme's wallpapers
+#   sway-menu tui CMD...                  run CMD in the floating terminal (PATH includes ~/.local/bin)
 #   sway-menu wifi                        nmcli Wi-Fi picker (fuzzel)
 #   sway-menu vpn-connect NAME | vpn-pick FortiClient VPN (run in the floating terminal)
 #   sway-menu theme NAME | theme-next | theme-pick   switch the Omarchy-format theme (sway-theme-set)
@@ -17,6 +18,9 @@
 # The top level lists the sections, every action of every section ("Section › Action"),
 # and every installed app, so typing searches all of it. Picking a section opens its submenu.
 set -u
+# sway launches us with the login environment, which lacks the dirs init.sh installs
+# into (awww, theme-color, bluetui, wiremix, lazygit). Fish adds them for terminals only.
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/go/bin:/usr/local/go/bin:$PATH"
 
 SELF=$(readlink -f "$0")
 DOTFILES="${DOTFILES_DIR:-$HOME/repos/dotfiles}"
@@ -666,6 +670,7 @@ case "${1:-}" in
   wallpaper-random) bg_random ;;
   wallpaper-restore) wallpaper_restore ;;
   thumbs-warm) thumbs_warm ;;
+  tui) shift; tui "$@" ;;   # floating terminal with the PATH above (sway binds use this for ~/.local/bin tools)
   thumb-make) mkdir -p "$(dirname "$3")"; thumb_make "${2:?file}" "${3:?out}" ;;
   wifi) wifi_menu ;;
   vpn-connect) vpn_connect "${2:?profile name}" ;;

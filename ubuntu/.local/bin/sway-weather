@@ -11,6 +11,9 @@
 #   sway-weather --clear-location   back to automatic (IP) location
 #   sway-weather --refresh       make waybar re-run this script (signal 8)
 set -u
+# sway launches us with the login environment, which lacks the dirs init.sh installs
+# into (awww, theme-color, bluetui, wiremix, lazygit). Fish adds them for terminals only.
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/go/bin:/usr/local/go/bin:$PATH"
 
 STATE="$HOME/.local/state/sway/weather.json"        # {name, latitude, longitude, unit}
 CACHE="$HOME/.cache/sway-weather.json"              # last successful waybar output
