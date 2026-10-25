@@ -39,6 +39,13 @@ plog() { mkdir -p "${PICK_LOG%/*}"; printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >>
 
 # ---------- tiny menu framework: parallel arrays of labels and actions ----------
 fz() { fuzzel --config "$THEME/fuzzel.ini" "$@"; }
+# fuzzel's width is a fixed number of columns; size it to the longest row instead (+ padding,
+# + the prompt). Nerd icons are counted as one column; fuzzel draws them double-wide, so pad.
+fit() {  # fit EXTRA LABEL... -> columns
+  local extra="$1" max=0 l; shift
+  for l in "$@"; do [ "${#l}" -gt "$max" ] && max=${#l}; done
+  local w=$(( max + extra + 6 )); [ "$w" -lt 24 ] && w=24; [ "$w" -gt 110 ] && w=110; printf '%s' "$w"
+}
 fz_img() { fuzzel --config "$THEME/fuzzel-images.ini" "$@"; }   # tall rows with thumbnail icons
 L=(); A=()
 reset() { L=(); A=(); }
@@ -48,13 +55,13 @@ show() {                                          # show PROMPT [ROWS]: run the 
   [ "$n" -gt 0 ] || return 0
   if [ -n "${SWAY_MENU_DRY_RUN:-}" ]; then for i in "${!L[@]}"; do printf '%s\t%s\n' "${L[$i]}" "${A[$i]}"; done; return 0; fi
   i=$(printf '%s\n' "${L[@]}" | fz --dmenu --index --prompt "$prompt ❯ " \
-        --lines "$(( n < rows ? n : rows ))" --width 60)
+        --lines "$(( n < rows ? n : rows ))" --width "$(fit "${#prompt}" "${L[@]}")")
   [[ "${i:-}" =~ ^[0-9]+$ ]] && [ "$i" -lt "$n" ] || return 0
   eval "${A[$i]}"
 }
 pick() {                                          # pick PROMPT ENTRY... -> prints chosen label (icon stripped)
   local prompt="$1"; shift
-  printf '%s\n' "$@" | fz --dmenu --prompt "$prompt ❯ " --lines "$#" --width 40 \
+  printf '%s\n' "$@" | fz --dmenu --prompt "$prompt ❯ " --lines "$#" --width "$(fit "${#prompt}" "$@")" \
     | sed -E 's/^[^[:alnum:]]*[[:space:]]+//'
 }
 confirm() { [ "$(pick "$1" "󰄬  Yes" "󰅖  No")" = Yes ]; }
@@ -185,11 +192,12 @@ image_pick() {  # image_pick PROMPT CURRENT FILE... -> prints the chosen file
   local -A count=()
   for f in "$@"; do count[${f##*/}]=$(( ${count[${f##*/}]:-0} + 1 )); done
   row_label() { local base=${1##*/} dir=${1%/*}; [ "${count[$base]}" -gt 1 ] && printf '%s/%s' "${dir##*/}" "$base" || printf '%s' "$base"; }
+  local labels=(); for f in "$@"; do labels+=("$(row_label "$f")  (current)"); done
   chosen=$(for f in "$@"; do
       label=$(row_label "$f"); [ "$(readlink -f "$f")" = "$cur" ] && label="$label  (current)"
       t=$(thumb_path "$f")
       if [ -f "$t" ]; then printf '%s\0icon\x1f%s\n' "$label" "$t"; else printf '%s\n' "$label"; fi
-    done | fz_img --dmenu --prompt "$prompt ❯ ")
+    done | fz_img --dmenu --prompt "$prompt ❯ " --width "$(fit $(( ${#prompt} + 5 )) "${labels[@]}")")
   plog "pick: fuzzel returned '${chosen:-}'"
   [ -n "${chosen:-}" ] || return 1
   chosen=${chosen%  (current)}
@@ -215,7 +223,7 @@ theme_pick() { local names=() previews=() n d cur i t
   thumbs_warm "${previews[@]}"
   i=$(for i in "${!names[@]}"; do t=$(thumb_path "${previews[$i]}"); n="$(theme_pretty "${names[$i]}")$([ "${names[$i]}" = "$cur" ] && printf '  (current)')"
         if [ -f "$t" ]; then printf '%s\0icon\x1f%s\n' "$n" "$t"; else printf '%s\n' "$n"; fi
-      done | fz_img --dmenu --index --prompt "Theme ❯ ") || return 0
+      done | fz_img --dmenu --index --prompt "Theme ❯ " --width "$(fit 12 "${names[@]}")") || return 0
   [[ "${i:-}" =~ ^[0-9]+$ ]] && sway-theme-set "${names[$i]}"
 }
 leaves_style() { local p="${1:-}"
@@ -267,7 +275,7 @@ wifi_menu() {  # wifi_menu [rescan]
     ssids+=("$ssid"); secs+=("$sec")
   done < <(wifi_list "${1:-no}")
   local n=${#entries[@]}
-  i=$(printf '%s\n' "${entries[@]}" "󰑓  Rescan" "󰤫  Hidden network…" "󰤭  Disconnect" | fz --dmenu --index --prompt "Wi-Fi ❯ " --lines "$(( n + 3 < 20 ? n + 3 : 20 ))" --width 60)
+  i=$(printf '%s\n' "${entries[@]}" "󰑓  Rescan" "󰤫  Hidden network…" "󰤭  Disconnect" | fz --dmenu --index --prompt "Wi-Fi ❯ " --lines "$(( n + 3 < 20 ? n + 3 : 20 ))" --width "$(fit 8 "${entries[@]}" "󰤫  Hidden network…")")
   [[ "${i:-}" =~ ^[0-9]+$ ]] || return 0
   if [ "$i" -lt "$n" ]; then wifi_connect "${ssids[$i]}" "${secs[$i]}"
   elif [ "$i" -eq "$n" ]; then wifi_menu yes
@@ -593,7 +601,7 @@ leaves_update() { local p="${1:-}"
 show_keybindings() {
   grep -E '^\s*bindsym' "$SWAY_CONFIG" \
     | sed -E 's/^\s*bindsym\s+(--[a-z-]+\s+)*//; s/\$mod/Super/g; s/Mod1/Alt/g; s/\s+exec\s+/  →  /; s/^([^ ]+)\s+/\1  →  /' \
-    | fz --dmenu --prompt "Keybindings ❯ " --lines 25 --width 80 >/dev/null; }
+    | fz --dmenu --prompt "Keybindings ❯ " --lines 25 --width 90 >/dev/null; }
 leaves_learn() { local p="${1:-}"
   add "󰌌  ${p}Keybindings" show_keybindings
   add "󰖟  ${p}Sway wiki" 'bg xdg-open https://github.com/swaywm/sway/wiki'

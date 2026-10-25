@@ -22,7 +22,7 @@ set_font() {
 pick() {
   local cur sel; cur=$(current)
   sel=$(list | sed "s/^\(${cur//\//\\/}\)$/\1  (current)/" \
-        | fuzzel --config "$STATE/theme/fuzzel.ini" --dmenu --prompt "Font ❯ " --lines 15 --width 50) || exit 0
+        | fuzzel --config "$STATE/theme/fuzzel.ini" --dmenu --prompt "Font ❯ " --lines 15 --width "$(( $(list | awk '{ if (length > m) m = length } END { print m + 0 }') + 20 ))") || exit 0
   sel=${sel%  (current)}; [ -n "$sel" ] && set_font "$sel"
 }
 case "${1:-}" in
