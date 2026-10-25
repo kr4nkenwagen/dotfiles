@@ -96,7 +96,7 @@ apply_live() {
   pkill -SIGUSR2 -x ghostty 2>/dev/null || true    # re-reads config incl. the theme file
   command -v theme-sync-tmux >/dev/null && theme-sync-tmux || true
   command -v theme-sync-qutebrowser >/dev/null && theme-sync-qutebrowser || true
-  command -v notify-send >/dev/null && notify-send "Theme" "$(pretty "$name")" -t 2000 || true
+  [ -n "${K4_RUN:-}" ] || { command -v notify-send >/dev/null && notify-send "Theme" "$(pretty "$name")" -t 2000; } || true   # k4 shows it in its footer
 }
 
 set_theme() {

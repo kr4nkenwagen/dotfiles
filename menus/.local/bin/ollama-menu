@@ -7,14 +7,18 @@ part() { printf 'S\tollama\tOllama\tQ\tAsk and chat with local models\t󰚩\nL\t
 
 models() { ollama list 2>/dev/null | awk 'NR > 1 && $1 != "" { print $1 "\t" $3 " " $4 }'; }
 default_model() { printf '%s' "${OLLAMA_MENU_MODEL:-$(models | head -1 | cut -f1)}"; }
-ask_model() { local m="$1" q; q=$(ask "Ask $m") && [ -n "$q" ] || return
-  OLLAMA_Q=$q tui sh -c 'ollama run "$0" "$OLLAMA_Q"; printf "\n[done] press enter to close"; read -r _' "$m"; }
-pull() { local m; m=$(ask "Pull model (e.g. llama3.2)") && [ -n "$m" ] && tui_wait "ollama pull $(printf %q "$m")"; }
+# The question / model name comes from k4's input step ($K4_INPUT); the answer opens in a terminal.
+ask_model() { local m="$1" q="${K4_INPUT:-}"; [ -n "$q" ] || q=$(ask "Ask $m") || return; [ -n "$q" ] || return
+  OLLAMA_Q=$q tui sh -c 'ollama run "$0" "$OLLAMA_Q"; printf "\n[done] press enter to close"; read -r _' "$m"
+  if [ -n "${K4_RUN:-}" ]; then echo k4:close; fi; }
+pull() { local m="${K4_INPUT:-}"; [ -n "$m" ] || m=$(ask "Pull model (e.g. llama3.2)") || return; [ -n "$m" ] || return
+  tui_wait "ollama pull $(printf %q "$m")"
+  if [ -n "${K4_RUN:-}" ]; then echo k4:close; fi; }
 
 section() {
   if ! ollama list >/dev/null 2>&1; then item "Ollama is not running" ':' ""; item "Start it" "tui_wait 'sudo systemctl start ollama'" "sudo"; return; fi
   local m size dm; dm=$(default_model)
-  if [ -n "$dm" ]; then hdr "Ask"; item "Ask $dm…" "ask_model '$dm'"; fi
+  if [ -n "$dm" ]; then hdr "Ask"; stay "Ask $dm…" "ask_model '$dm'" "" "input=Ask $dm|The answer opens in a terminal"; fi
   hdr "Chat"
   while IFS=$'\t' read -r m size; do item "Chat with $m" "tui ollama run '$m'" "$size"; done < <(models)
   local running; running=$(ollama ps 2>/dev/null | awk 'NR > 1 && $1 != "" { print $1 }')
@@ -23,7 +27,7 @@ section() {
     while read -r m; do stay "Unload $m" "ollama stop '$m' && notify Ollama 'unloaded $m'" "in memory"; done <<<"$running"
   fi
   hdr "Models"
-  item "Pull a model…" pull
+  stay "Pull a model…" pull "" "input=Pull model|A name from ollama.com/library, e.g. llama3.2"
   while IFS=$'\t' read -r m size; do stay "Remove $m" "ollama rm '$m' >/dev/null && notify Ollama 'removed $m'" "$size" "confirm=Remove $m?|Frees $size; pull it again to use it."; done < <(models)
 }
 k4_dispatch "$@"

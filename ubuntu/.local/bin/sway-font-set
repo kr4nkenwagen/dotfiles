@@ -21,7 +21,7 @@ set_font() {
   list | grep -qxF -- "$name" || { echo "sway-font-set: '$name' is not an installed Nerd Font Mono family (sway-font-set list)" >&2; exit 1; }
   mkdir -p "$STATE"; printf '%s\n' "$name" > "$FONT_FILE"
   sway-theme-set "$(sway-theme-set current 2>/dev/null || echo tokyo-night)"   # re-render + live reload of every app
-  command -v notify-send >/dev/null && notify-send "Font" "$name" -t 2000 || true
+  [ -n "${K4_RUN:-}" ] || { command -v notify-send >/dev/null && notify-send "Font" "$name" -t 2000; } || true   # k4 shows it in its footer
 }
 pick() {
   local cur sel; cur=$(current)

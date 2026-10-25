@@ -8,12 +8,14 @@
 #   sway-menu wallpaper-restore           repaint the saved wallpaper (sway config runs it at start)
 #   sway-menu thumbs-warm                 build thumbnails for the current theme's wallpapers
 #   sway-menu tui CMD...                  run CMD in the floating terminal (PATH includes ~/.local/bin)
-#   sway-menu wifi                        nmcli Wi-Fi picker (fuzzel)
+#   sway-menu wifi                        Wi-Fi networks (k4: its page, fuzzel: nmcli picker)
 #   sway-menu vpn-connect NAME | vpn-pick FortiClient VPN (run in the floating terminal)
 #   sway-menu theme NAME | theme-next | theme-pick   switch the Omarchy-format theme (sway-theme-set)
 #   sway-menu font [NAME|pick]            switch the desktop font (sway-font-set)
 #   sway-menu background FILE             set the wallpaper (also used by sway-theme-set)
 #   sway-menu display|network|audio|bluetooth|weather   the waybar module menus (omarchy-shell panels)
+#   sway-menu k4-section NAME | k4-page NAME [ARG] | k4-view NAME | k4-run ID   k4 --menu loaders and runner
+#   (with k4 every picker is a page inside the launcher: Wi-Fi, fonts, gaps, scale, pairing, packages…)
 #   sway-menu timezone                     pick a timezone (clock middle click)
 # SWAY_MENU_DRY_RUN=1 prints a menu's entries instead of showing it.
 # The top level lists the sections, every action of every section ("Section › Action"),
@@ -269,6 +271,26 @@ wifi_list() {  # prints "*|-<TAB>ssid<TAB>signal<TAB>security" (never an empty f
     | sort -t$'\t' -k3,3nr
 }
 wifi_prompt() { fz --dmenu --prompt "$1 ❯ " --lines 0 --width 40 ${2:+--password} < /dev/null; }
+# The k4 Wi-Fi page's actions: no pickers; the password comes from $K4_INPUT (k4 asks for it).
+wifi_secured() { [ -n "$1" ] && [ "$1" != "--" ]; }
+wifi_join() {  # wifi_join SSID SECURITY [hidden]
+  local ssid="$1" sec="$2" hidden="${3:-}" pw="${K4_INPUT:-}" out again
+  again="wifi_join $(printf %q "$ssid") $(printf %q "$sec") $hidden"
+  if nmcli -g NAME con show 2>/dev/null | grep -qxF -- "$ssid"; then
+    if [ -n "$pw" ]; then nmcli con mod id "$ssid" wifi-sec.psk "$pw" >/dev/null 2>&1; fi
+    if out=$(nmcli con up id "$ssid" 2>&1); then notify Wi-Fi "Connected to $ssid"; return; fi
+    if wifi_secured "$sec"; then k4ask "$again" "Password for $ssid" "The saved password did not work" password
+    else notify Wi-Fi "$(printf '%s' "$out" | tail -1)"; fi
+    return
+  fi
+  if wifi_secured "$sec" && [ -z "$pw" ]; then k4ask "$again" "Password for $ssid" "$sec network" password; return; fi
+  if out=$(nmcli dev wifi connect "$ssid" ${pw:+password "$pw"} ${hidden:+hidden yes} 2>&1); then notify Wi-Fi "Connected to $ssid"
+  else
+    nmcli con delete id "$ssid" >/dev/null 2>&1   # a failed attempt leaves a profile with the wrong password
+    notify Wi-Fi "$(printf '%s' "$out" | tail -1 | sed 's/^Error: //')"
+  fi; }
+wifi_hidden() { local h="${K4_INPUT:-}"; [ -n "$h" ] || return 0; K4_INPUT="" wifi_join "$h" WPA hidden; }
+wifi_disconnect() { nmcli dev disconnect "$(nmcli -t -f DEVICE,TYPE dev | awk -F: '$2=="wifi"{print $1; exit}')" >/dev/null 2>&1; notify Wi-Fi Disconnected; }
 wifi_connect() {  # wifi_connect SSID SECURITY [hidden]
   local ssid="$1" sec="$2" hidden="${3:-}" pw="" out
   if nmcli -g NAME con show 2>/dev/null | grep -qxF -- "$ssid"; then
@@ -291,7 +313,7 @@ wifi_menu() {  # wifi_menu [rescan]
   if [ "$i" -lt "$n" ]; then wifi_connect "${ssids[$i]}" "${secs[$i]}"
   elif [ "$i" -eq "$n" ]; then wifi_menu yes
   elif [ "$i" -eq $((n + 1)) ]; then local h; h=$(wifi_prompt "Hidden SSID") || return; [ -n "$h" ] && wifi_connect "$h" WPA hidden
-  else nmcli dev disconnect "$(nmcli -t -f DEVICE,TYPE dev | awk -F: '$2=="wifi"{print $1; exit}')" >/dev/null 2>&1; notify "Wi-Fi" "Disconnected"; fi
+  else wifi_disconnect; fi
 }
 
 # ---------- VPN (FortiClient CLI: forticlient vpn list|connect|disconnect|status) ----------
@@ -665,6 +687,13 @@ item() { printf 'A\t%s\t%s\t%s\t%s\t%s\n' "$(k4id "$2")" "$1" "${3:-}" "${4:-}" 
 stay() { item "$1" "$2" "${3:-}" "" "stay${4:+;$4}"; }   # runs in place, the menu stays open (footer shows the result)
 hdr() { printf 'H\t%s\n' "$1"; }
 slider() { item "$1" "$2" "" "" "slider=${3:-0};step=${4:-5}"; }   # slider LABEL ACTION VALUE [STEP]: ← → runs ACTION with $K4_VALUE
+ask_item() { item "$1" "$2" "${3:-}" "" "stay;input=$4"; }   # ask_item LABEL ACTION META 'Prompt|Hint[|password]': k4 asks, ACTION reads $K4_INPUT
+page() { printf 'P\t%s\t%s\t%s\t%q k4-page %s\n' "$1" "$2" "$3" "$SELF" "$1"; }   # page NAME TITLE SUBTITLE: rows from `sway-menu k4-page NAME`
+k4ask() { printf 'k4:input\t%s\t%s\t%s\t%s\n' "$(k4id "$1")" "${2//[$'\t;|']/ }" "${3:-}" "${4:-}"; }   # from a run: ask, then run ACTION with $K4_INPUT
+k4page() { printf 'k4:page\t%s\t%s\t%s\n' "$1" "$2" "$(printf '%q ' "$SELF" k4-page "${@:3}")"; }   # from a run: k4page TITLE SUBTITLE PAGE [ARG...]
+k4rows() {  # stdin LABEL<TAB>ACTION<TAB>META<TAB>FLAGS -> A lines; one perl for long lists (k4id forks per row)
+  if perl -MMIME::Base64 -e1 2>/dev/null; then perl -MMIME::Base64 -F'\t' -lane 'print join("\t", "A", encode_base64($F[1], ""), $F[0], $F[2] // "", "", $F[3] // "")'
+  else local l a m f; while IFS=$'\t' read -r l a m f; do item "$l" "$a" "$m" "" "$f"; done; fi; }
 K4_SECTIONS=(apps learn capture toggle style display network audio bluetooth weather setup vpn bookmarks install update system about)
 k4_meta() { case "$1" in
   apps) echo "Apps|A|Installed applications|󰀻" ;;
@@ -690,6 +719,7 @@ k4_tree() { local s name key desc icon
     IFS='|' read -r name key desc icon <<<"$(k4_meta "$s")"
     printf 'S\t%s\t%s\t%s\t%s\t%s\n' "$s" "$name" "$key" "$desc" "$icon"
     printf 'L\t%q k4-section %s\n' "$SELF" "$s"
+    k4_pages "$s"
   done
   # App integrations (Steam, GitHub, Spotify, Docker, Ollama, Clipboard): the installed ones
   command -v k4-apps >/dev/null && k4-apps parts
@@ -697,25 +727,122 @@ k4_tree() { local s name key desc icon
   printf 'G\twall\tBackground\t%s\t%q k4-view wall\n' "the theme's backgrounds + extras" "$SELF"
   printf 'R\t%q k4-run\n' "$SELF"
 }
-k4_main() { local out
-  out=$(k4_tree | k4 --menu) || return 0
+k4_main() { local out   # k4_main [SECTION|PAGE]: open there
+  out=$(k4_tree | k4 --menu ${1:+--open "$1"}) || return 0
   case "$out" in
     url:*) open_url "${out#url:}" ;;
     *) eval "$(printf '%s' "$out" | base64 -d)" ;;
   esac
 }
+# Items apply in place (stay): the footer says what changed and k4 recolours itself.
 k4_view() { local n d f r t cur
   case "$1" in
-    theme) cur=$(theme_name)
-      while IFS=$'\t' read -r n d; do
-        printf 'I\t%s\t%s\t%s\t%s\n' "$(k4id "sway-theme-set $(printf %q "$n")")" "$(theme_pretty "$n")" "$d/preview.png" "$([ "$n" = "$cur" ] && echo current)"
-      done < <(theme_list) ;;
+    theme) cur=$(theme_name); local -A pal=(); local names=() dirs=()
+      while IFS=$'\t' read -r n d; do names+=("$n"); dirs+=("$d"); done < <(theme_list)
+      while IFS=$'\t' read -r d f; do pal[$d]=$f; done < <(theme_palettes "${dirs[@]}")
+      for i in "${!names[@]}"; do n=${names[$i]}; d=${dirs[$i]}
+        printf 'I\t%s\t%s\t%s\t%s\t%s\n' "$(k4id "sway-theme-set $(printf %q "$n") >/dev/null 2>&1; notify Theme $(printf %q "$(theme_pretty "$n")")")" \
+          "$(theme_pretty "$n")" "$d/preview.png" "$([ "$n" = "$cur" ] && echo current)" "stay${pal[$d]:+;palette=${pal[$d]}}"
+      done ;;
     wall) cur=$(wallpaper)
       while IFS= read -r f; do
         t=$(thumb_path "$f"); [ -f "$t" ] || t=$f
         r=$(readlink -f "$f")   # theme-bg-sync links are named <source>-<file>; show the file's own name
-        printf 'I\t%s\t%s\t%s\t%s\n' "$(k4id "set_background $(printf %q "$f")")" "${r##*/}" "$t" "$([ "$r" = "$cur" ] && echo current)"
+        printf 'I\t%s\t%s\t%s\t%s\t%s\n' "$(k4id "set_background $(printf %q "$f"); notify Background $(printf %q "${r##*/}")")" "${r##*/}" "$t" "$([ "$r" = "$cur" ] && echo current)" stay
       done < <(bg_list) ;;
+  esac; }
+theme_palettes() {  # theme_palettes DIR...: DIR<TAB>bg,fg,red,green,yellow,blue,magenta,cyan from each colors.toml (one awk)
+  local d files=(); for d in "$@"; do [ -f "$d/colors.toml" ] && files+=("$d/colors.toml"); done
+  [ ${#files[@]} -gt 0 ] || return 0
+  awk -F= 'function out(  s, i) { if (f == "") return; s = (c["background"] != "" ? c["background"] : c["color0"]) "," (c["foreground"] != "" ? c["foreground"] : c["color7"])
+             split("red green yellow blue magenta cyan", nm, " ")
+             for (i = 1; i <= 6; i++) s = s "," (c[nm[i]] != "" ? c[nm[i]] : c["color" i]); sub(/\/colors\.toml$/, "", f); print f "\t" s }
+           FNR == 1 { out(); f = FILENAME; split("", c) }
+           { k = $1; gsub(/[ \t]/, "", k); v = $2; gsub(/[ \t"\047]/, "", v); c[k] = v }
+           END { out() }' "${files[@]}"; }
+
+# ---------- k4 pages: the pickers, inside the launcher ----------
+k4_pages() { case "$1" in   # the P/F records of a section (printed after it, so ⌫ and the crumb lead there)
+  style) printf 'F\tfont\tFont\tApplies to sway, waybar, terminal and k4\t%q k4-page font\n' "$SELF"
+         page gaps "Gaps & borders" "Space around windows and their border"
+         page opacity Opacity "Terminal and browser background" ;;
+  display) page scale Scale "The focused output" ;;
+  network) page wifi "Wi-Fi networks" "Enter connects; secured networks ask for the password" ;;
+  bluetooth) page btscan "Scan & pair" "Scanning for 8 s, then Enter pairs" ;;
+  setup) page inputs "Input devices" "Keyboard layout and touchpad"
+         page timezone Timezone "Setting it asks for sudo in a terminal" ;;
+  install) page nerdfonts "Nerd Fonts" "Latest release; installs in the background" ;;
+  esac; }
+k4_page() { local p="$1"; shift
+  case "$p" in
+  wifi) local inuse ssid sig sec meta flags lock n; local -A saved=()
+        while IFS= read -r n; do saved[$n]=1; done < <(nmcli -g NAME con show 2>/dev/null)
+        hdr "Networks · Enter connects"
+        while IFS=$'\t' read -r inuse ssid sig sec; do
+          lock=""; [ -n "$sec" ] && [ "$sec" != "--" ] && lock="  󰌾"
+          meta="$(wifi_bars "$sig") ${sig}%$lock"; flags=stay
+          if [ "$inuse" = '*' ]; then item "$ssid" "notify Wi-Fi $(printf %q "Connected to $ssid")" "connected  $meta" "" "stay;current"; continue; fi
+          if [ -n "${saved[$ssid]:-}" ]; then meta="saved  $meta"
+          elif [ -n "$lock" ]; then flags+=";input=Password for ${ssid//[;|]/ }|$sec network|password"; fi
+          item "$ssid" "wifi_join $(printf %q "$ssid") $(printf %q "$sec")" "$meta" "" "$flags"
+        done < <(wifi_list auto)
+        hdr "More"
+        stay "Rescan" 'nmcli dev wifi rescan >/dev/null 2>&1; sleep 3; notify Wi-Fi Rescanned'
+        ask_item "Connect to hidden…" wifi_hidden "" "Network name|The SSID of the hidden network"
+        stay "Disconnect" wifi_disconnect ;;
+  font) local cur f; cur=$(sway-font-set current 2>/dev/null)
+        while IFS= read -r f; do
+          printf '%s\t%s\t\t%s\n' "$f" "sway-font-set $(printf %q "$f") >/dev/null 2>&1; notify Font $(printf %q "$f")" "stay$([ "$f" = "$cur" ] && echo ';current')"
+        done < <(sway-font-set list) | k4rows ;;
+  gaps) local g row n i o b meta; g=$(gaps_now); g=${g:-5}
+        for row in "None|0|0|1|no gaps · 1 px border" "Small|5|10|2|5 px · 2 px border (default)" "Medium|10|20|2|10 px · 2 px border" "Large|16|32|3|16 px · 3 px border"; do
+          IFS='|' read -r n i o b meta <<<"$row"
+          stay "$n" "gaps_apply $i $o $b; notify $(printf %q "Gaps & borders") $n" "$meta$([ "$g" = "$i" ] && echo '  · current')" "$([ "$g" = "$i" ] && echo current)"
+        done ;;
+  opacity) local cur v; cur=$(opacity_now); cur=${cur:-1.0}
+        for v in 1.0 0.9 0.8 0.7 0.5; do stay "$v" "opacity_set $v" "$([ "$v" = 1.0 ] && echo opaque)$([ "$v" = "$cur" ] && echo '  · current')" "$([ "$v" = "$cur" ] && echo current)"; done ;;
+  scale) local o cur v; o=$(focused_output); [ -n "$o" ] || { hdr "No focused output"; return; }
+        cur=$(swaymsg -t get_outputs | jq -r --arg o "$o" '.[] | select(.name == $o) | .scale')
+        hdr "$o"
+        for v in 1 1.25 1.5 2; do stay "$v×" "scale_set $(printf %q "$o") $v" "$([ "$v" = "$cur" ] && echo current)" "$([ "$v" = "$cur" ] && echo current)"; done ;;
+  btscan) local mac name n=0; local -A known=()
+        if ! bt_powered; then hdr "Bluetooth is off"; stay "Turn on and scan" 'bluetoothctl power on >/dev/null 2>&1; notify Bluetooth on'; return; fi
+        bluetoothctl --timeout 8 scan on >/dev/null 2>&1
+        while IFS=$'\t' read -r mac name; do known[$mac]=1; done < <(bt_devices Paired)
+        hdr "Found · Enter pairs"
+        while IFS=$'\t' read -r mac name; do [ -n "${known[$mac]:-}" ] && continue; n=$((n + 1))
+          stay "$name" "bt_pair $mac $(printf %q "$name")" "$mac"; done < <(bt_devices)
+        [ "$n" -gt 0 ] || hdr "No new devices found"
+        hdr "More"; stay "Scan again" 'notify Bluetooth "Scanning again…"' ;;
+  inputs) local nat kb l n t
+        nat=$(swaymsg -t get_inputs 2>/dev/null | jq -r '[.[] | select(.type == "touchpad") | .libinput.natural_scroll] | first // "n/a"'); kb=$(kb_now)
+        hdr "Keyboard layout"
+        for l in us se; do stay "$l" "kb_set $l" "$([ "$kb" = "$l" ] && echo current)" "$([ "$kb" = "$l" ] && echo current)"; done
+        if [ "$nat" != n/a ]; then hdr "Touchpad"
+          stay "Natural scroll" "swaymsg input type:touchpad natural_scroll $([ "$nat" = enabled ] && echo disabled || echo enabled) >/dev/null; notify $(printf %q "Natural scroll") $([ "$nat" = enabled ] && echo off || echo on)" "$([ "$nat" = enabled ] && echo on || echo off)"; fi
+        hdr "Devices · Enter copies the name"
+        while IFS=$'\t' read -r n t; do stay "$n" "copy_val Device $(printf %q "$n")" "$t"; done < <(swaymsg -t get_inputs 2>/dev/null | jq -r '.[] | "\(.name)\t\(.type)"' | sort -u) ;;
+  timezone) local cur; cur=$(timedatectl show -p Timezone --value 2>/dev/null)
+        timedatectl list-timezones 2>/dev/null | awk -v c="$cur" '{ printf "%s\ttui_wait '\''sudo timedatectl set-timezone %s && echo Timezone: %s'\''\t%s\t%s\n", $0, $0, $0, ($0 == c ? "current" : ""), ($0 == c ? "current" : "") }' | k4rows ;;
+  apt) local q="${1:-}" p; local -A inst=()
+        while IFS= read -r p; do inst[$p]=1; done < <(dpkg-query -W -f '${Package}\n' 2>/dev/null)
+        apt-cache search --names-only -- "$q" 2>/dev/null | awk '{ print length($1) "\t" $0 }' | sort -n | cut -f2- | head -100 \
+          | while IFS= read -r p; do n=${p%% - *}; d=${p#* - }; printf '%s\ttui_wait '\''sudo apt install %s'\''\t%s\t\n' "$n" "$n" "${inst[$n]:+installed · }${d:0:48}"; done | k4rows
+        [ -n "$(apt-cache search --names-only -- "$q" 2>/dev/null | head -1)" ] || hdr "No package matches “$q”" ;;
+  apt-installed) local q="${1:-}"
+        dpkg-query -W -f '${binary:Package}\t${Version}\n' 2>/dev/null | grep -i -- "$q" | head -100 \
+          | awk -F'\t' '{ printf "%s\ttui_wait '\''sudo apt remove %s'\''\t%s\t\n", $1, $1, $2 }' | k4rows ;;
+  flatpak) local q="${1:-}"
+        flatpak search --columns=application,name "$q" 2>/dev/null | head -60 \
+          | awk -F'\t' '$1 ~ /\./ { printf "%s\ttui_wait '\''flatpak install -y flathub %s'\''\t%s\t\n", $2, $1, $1 }' | k4rows ;;
+  nerdfonts) local cache="$HOME/.cache/sway-menu/nerd-fonts.txt" f
+        if [ ! -s "$cache" ] || [ -n "$(find "$cache" -mmin +1440 2>/dev/null)" ]; then mkdir -p "${cache%/*}"
+          curl -fsSL https://api.github.com/repos/ryanoasis/nerd-fonts/releases/latest 2>/dev/null | jq -r '.assets[].name | select(endswith(".tar.xz")) | sub(".tar.xz"; "")' > "$cache.tmp" 2>/dev/null && [ -s "$cache.tmp" ] && mv "$cache.tmp" "$cache"; fi
+        [ -s "$cache" ] || { hdr "Could not reach GitHub"; return; }
+        while IFS= read -r f; do printf '%s\tfont_get %s\t%s\tstay\n' "$f" "$f" "$([ -d "$HOME/.local/share/fonts/nerd-fonts/$f" ] && echo installed)"; done < "$cache" | k4rows ;;
+  places) local l
+        sway-weather --search "${1:-}" 2>/dev/null | while IFS= read -r l; do [ -n "$l" ] || continue
+          printf '%s\t%s\t%s\tstay\n' "${l%% · *}" "sway-weather --set-location $(printf %q "$l") >/dev/null 2>&1; notify Weather $(printf %q "${l%% · *}"); echo k4:back" "${l##* · }"; done | k4rows ;;
   esac; }
 
 # pickers and toggles the design's items need (each runs once; no menu re-open)
@@ -737,8 +864,9 @@ toggle_gaps() { local g; g=$(gaps_now); g=${g:-5}
 gaps_pick() { local i; i=$(pick_index "Gaps & borders" "None · 1 px border" "Small · 2 px border (default)" "Medium · 2 px border" "Large · 3 px border") || return
   case "$i" in 0) gaps_apply 0 0 1 ;; 1) gaps_apply 5 10 2 ;; 2) gaps_apply 10 20 2 ;; 3) gaps_apply 16 32 3 ;; esac; }
 opacity_now() { sed -n 's/^background-opacity = //p' "$HOME/.local/state/omarchy/current/ghostty-opacity.conf" 2>/dev/null || true; }
-opacity_pick() { local levels=(1.0 0.9 0.8 0.7 0.5) i v
-  i=$(pick_index "Opacity (terminal + browser)" "${levels[@]}") && [[ $i =~ ^[0-9]+$ ]] || return; v=${levels[$i]}
+opacity_pick() { local levels=(1.0 0.9 0.8 0.7 0.5) i
+  i=$(pick_index "Opacity (terminal + browser)" "${levels[@]}") && [[ $i =~ ^[0-9]+$ ]] || return; opacity_set "${levels[$i]}"; }
+opacity_set() { local v="$1"
   mkdir -p "$HOME/.local/state/omarchy/current"
   printf 'background-opacity = %s\n' "$v" > "$HOME/.local/state/omarchy/current/ghostty-opacity.conf"
   printf '%s\n' "$v" > "$HOME/.config/qutebrowser/opacity"
@@ -748,9 +876,11 @@ mode_pick() { local o rows=() i; o=$(focused_output); [ -n "$o" ] || return
   i=$(pick_index "Mode ($o)" "${rows[@]}") && [[ $i =~ ^[0-9]+$ ]] || return
   swaymsg output "$o" mode "${rows[$i]}" >/dev/null && { grep -v "^output $o mode" "$STATE/display.conf" 2>/dev/null; echo "output $o mode ${rows[$i]}"; } > "$STATE/display.conf.new" && mv "$STATE/display.conf.new" "$STATE/display.conf"; }
 scale_pick() { local o i levels=(1 1.25 1.5 2); o=$(focused_output); [ -n "$o" ] || return
-  i=$(pick_index "Scale ($o)" "${levels[@]}") && [[ $i =~ ^[0-9]+$ ]] || return
-  swaymsg output "$o" scale "${levels[$i]}" >/dev/null; mkdir -p "$STATE"
-  { grep -v "^output $o scale" "$STATE/display.conf" 2>/dev/null; echo "output $o scale ${levels[$i]}"; } > "$STATE/display.conf.new" && mv "$STATE/display.conf.new" "$STATE/display.conf"; }
+  i=$(pick_index "Scale ($o)" "${levels[@]}") && [[ $i =~ ^[0-9]+$ ]] || return; scale_set "$o" "${levels[$i]}"; }
+scale_set() {  # scale_set OUTPUT SCALE; persisted in ~/.local/state/sway/display.conf
+  local o="$1" v="$2"; swaymsg output "$o" scale "$v" >/dev/null; mkdir -p "$STATE"
+  { grep -v "^output $o scale" "$STATE/display.conf" 2>/dev/null; echo "output $o scale $v"; } > "$STATE/display.conf.new" && mv "$STATE/display.conf.new" "$STATE/display.conf"
+  notify Scale "$o  $v×"; }
 external_outputs() { swaymsg -t get_outputs | jq -r '.[] | select(.name | test("^eDP|^LVDS|^DSI") | not) | "\(.name)\t\(.active)"'; }
 external_state() { external_outputs | awk -F'\t' '$2 == "true" { on = 1 } END { print on ? "on" : (NR ? "off" : "none") }'; }
 toggle_external() { local n a want; want=disable; [ "$(external_state)" = off ] && want=enable
@@ -782,7 +912,10 @@ bt_scan_pick() { local macs=() rows=() mac name i; local -A known=()
   while IFS=$'\t' read -r mac name; do [ -n "${known[$mac]:-}" ] || { macs+=("$mac"); rows+=("$name"); }; done < <(bt_devices)
   [ ${#rows[@]} -gt 0 ] || { notify Bluetooth "No new devices found"; return; }
   i=$(pick_index "Pair" "${rows[@]}") && [[ $i =~ ^[0-9]+$ ]] || return
-  if bluetoothctl pair "${macs[$i]}" >/dev/null 2>&1 && bluetoothctl trust "${macs[$i]}" >/dev/null 2>&1 && bluetoothctl connect "${macs[$i]}" >/dev/null 2>&1; then notify Bluetooth Connected; else notify -u critical Bluetooth "Pairing failed"; fi; }
+  bt_pair "${macs[$i]}" "${rows[$i]}"; }
+bt_pair() {  # bt_pair MAC NAME
+  if bluetoothctl pair "$1" >/dev/null 2>&1 && bluetoothctl trust "$1" >/dev/null 2>&1 && bluetoothctl connect "$1" >/dev/null 2>&1; then notify Bluetooth "Connected to $2"
+  else notify -u critical Bluetooth "Pairing with $2 failed"; fi; }
 weather_location() { local q sel; q=$(fz --dmenu --prompt "Location ❯ " --lines 0 </dev/null) || return; [ -n "$q" ] || return
   sel=$(sway-weather --search "$q" | fz --dmenu --prompt "Pick ❯ " --lines 6) || return; [ -n "$sel" ] && sway-weather --set-location "$sel" && notify Weather "$sel"; }
 input_pick() { local i nat; nat=$(swaymsg -t get_inputs | jq -r '[.[] | select(.type == "touchpad") | .libinput.natural_scroll] | first // "n/a"')
@@ -803,11 +936,27 @@ bookmark_pick() { local urls=() rows=() url title path i
 bookmark_add() { local url title; url=$(fz --dmenu --prompt "URL ❯ " --lines 0 </dev/null) || return; [ -n "$url" ] || return
   title=$(fz --dmenu --prompt "Title ❯ " --lines 0 </dev/null) || return
   printf '%s %s\n' "$url" "${title:-$url}" >> "$QB_BOOKMARKS"; notify Bookmarks "Added ${title:-$url}"; }
-webapp_add() { local name url slug f; name=$(fz --dmenu --prompt "Web app name ❯ " --lines 0 </dev/null) || return; [ -n "$name" ] || return
+webapp_add() { local name url; name=$(fz --dmenu --prompt "Web app name ❯ " --lines 0 </dev/null) || return; [ -n "$name" ] || return
   url=$(fz --dmenu --prompt "URL ❯ " --lines 0 </dev/null) || return; [ -n "$url" ] || return
+  K4_INPUT=$url webapp_create "$name"; }
+webapp_name() { [ -n "${K4_INPUT:-}" ] && k4ask "webapp_create $(printf %q "$K4_INPUT")" "URL for $K4_INPUT" "The page the app opens, e.g. https://…"; }
+webapp_create() {  # webapp_create NAME; the URL is $K4_INPUT
+  local name="$1" url="${K4_INPUT:-}" slug f; [ -n "$url" ] || return 0
+  case "$url" in *://*) ;; *) url="https://$url" ;; esac
   slug=$(printf '%s' "$name" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-'); f="$HOME/.local/share/applications/webapp-$slug.desktop"
   mkdir -p "${f%/*}"; printf '[Desktop Entry]\nType=Application\nName=%s\nExec=qutebrowser --target window %s\nIcon=applications-internet\nCategories=Network;\n' "$name" "$url" > "$f"
   notify "Web app" "$name added to Apps"; }
+# k4 input rows: the typed text arrives as $K4_INPUT, the results open as a page
+pkg_search() { [ -n "${K4_INPUT:-}" ] && k4page Packages "matching “$K4_INPUT” · Enter installs in a terminal" apt "$K4_INPUT"; }
+pkg_installed_search() { [ -n "${K4_INPUT:-}" ] && k4page Installed "matching “$K4_INPUT” · Enter removes in a terminal" apt-installed "$K4_INPUT"; }
+flatpak_search() { command -v flatpak >/dev/null || { notify Flatpak "flatpak is not installed (apt install flatpak)"; return; }
+  [ -n "${K4_INPUT:-}" ] && k4page Flathub "matching “$K4_INPUT” · Enter installs in a terminal" flatpak "$K4_INPUT"; }
+weather_search() { [ -n "${K4_INPUT:-}" ] && k4page Places "for “$K4_INPUT” · Enter sets the location" places "$K4_INPUT"; }
+kb_set() { mkdir -p "$STATE"; echo "$1" > "$STATE/kb-layout"; set_layout "$1"; }
+font_get() {  # font_get NAME: download and install a Nerd Font in the background
+  local d="$HOME/.local/share/fonts/nerd-fonts/$1"
+  bg sh -c 'mkdir -p "$1" && curl -fsSL "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/$2.tar.xz" | tar -xJ -C "$1" && fc-cache -f && notify-send Fonts "Installed $2" || notify-send -u critical Fonts "Could not install $2"' sh "$d" "$1"
+  notify Fonts "Installing $1 in the background"; }
 flatpak_install() { if command -v flatpak >/dev/null; then tui sh -c 'q=$(printf "" | fzf --print-query --prompt "Flatpak search ❯ " | head -1); [ -n "$q" ] && id=$(flatpak search --columns=application,name "$q" | fzf --prompt "Install ❯ " | cut -f1) && [ -n "$id" ] && flatpak install -y flathub "$id"; printf "\n[done] press enter"; read -r _'
   else notify Flatpak "flatpak is not installed (apt install flatpak)"; fi; }
 font_install() { tui sh -c 'f=$(curl -fsSL https://api.github.com/repos/ryanoasis/nerd-fonts/releases/latest | jq -r ".assets[].name | select(endswith(\".tar.xz\")) | sub(\".tar.xz\"; \"\")" | fzf --prompt "Nerd Font ❯ ") && [ -n "$f" ] && mkdir -p "$HOME/.local/share/fonts/nerd-fonts/$f" && curl -fsSL "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/$f.tar.xz" | tar -xJ -C "$HOME/.local/share/fonts/nerd-fonts/$f" && fc-cache -f && echo "Installed $f"; printf "\n[done] press enter"; read -r _'; }
@@ -893,9 +1042,9 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
          stay "Background: next" 'bg_next; w=$(wallpaper); notify Background "${w##*/}"'
          stay "Background: random" 'bg_random; w=$(wallpaper); notify Background "${w##*/}  (random)"'
          hdr "Windows"
-         item "Font" 'sway-font-set pick' "$(sway-font-set current 2>/dev/null | sed 's/ Nerd Font Mono$//')"
-         item "Gaps & borders" gaps_pick
-         item "Opacity" opacity_pick "$(opacity_now)" ;;
+         item "Font" : "$(sway-font-set current 2>/dev/null | sed 's/ Nerd Font Mono$//')" font
+         item "Gaps & borders" : "$(case "$(gaps_now)" in 0) echo None ;; 10) echo Medium ;; 16) echo Large ;; *) echo Small ;; esac)" gaps
+         item "Opacity" : "$(opacity_now)" opacity ;;
   display) local b l n a; b=$(bright_pct)
            if [ -n "$b" ]; then
              hdr "Brightness · ${b}%"
@@ -908,18 +1057,18 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            done < <(swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | [.name, (.active|tostring)] | @tsv')
            hdr "More"
            stay "Night light" 'toggle_night; sleep 0.2; notify "Night light" "$(onoff pgrep -x wlsunset)"' "$(onoff pgrep -x wlsunset)"
-           item "Scale" scale_pick ;;
+           item "Scale" : "$(swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | select(.focused) | .scale')" scale ;;
   network) local dev ip gw dns; dev=$(primary_dev)
            ip=${dev:+$(nmcli -g IP4.ADDRESS dev show "$dev" 2>/dev/null | head -1)}; ip=${ip%%/*}
            gw=${dev:+$(nmcli -g IP4.GATEWAY dev show "$dev" 2>/dev/null)}
            dns=${dev:+$(nmcli -g IP4.DNS dev show "$dev" 2>/dev/null | head -1)}
            hdr "Wi-Fi"
            stay "Wi-Fi power" wifi_power_toggle "$([ "$(nmcli radio wifi 2>/dev/null)" = enabled ] && echo on || echo off)"
-           item "Wi-Fi networks" wifi_menu "$(wifi_ssid)"
+           item "Wi-Fi networks" : "$(wifi_ssid)" wifi
            stay "Wi-Fi band" band_cycle "$(band_now)"
            command -v qrencode >/dev/null && item "Share Wi-Fi (QR code)" "wifi_qr $(printf %q "$(active_wifi_con)") $(printf %q "$(wifi_ssid)")"
            stay "Forget network" forget_active_wifi "" "$(printf 'confirm=Forget %s?|You will need the password to connect again.' "$(wifi_ssid)")"
-           item "Connect to hidden…" hidden_wifi
+           ask_item "Connect to hidden…" wifi_hidden "" "Network name|The SSID of the hidden network"
            hdr "Connection · Enter copies"
            stay "IP address" "copy_val 'IP address' $(printf %q "$ip")" "$ip"
            stay "Gateway" "copy_val Gateway $(printf %q "$gw")" "$gw"
@@ -951,7 +1100,7 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
              hdr "Devices · Enter connects"
              while IFS=$'\t' read -r mac name; do stay "$name" "bt_dev_toggle $mac $(printf %q "$name")" "$([ -n "${conn[$mac]:-}" ] && echo connected || echo disconnected)"; done < <(bt_devices Paired)
              hdr "Manage"
-             item "Scan & pair…" bt_scan_pick
+             item "Scan & pair…" : "" btscan
              while IFS=$'\t' read -r mac name; do stay "Forget $name" "bluetoothctl remove $mac >/dev/null; notify Bluetooth $(printf %q "Forgot $name")" "" "$(printf 'confirm=Forget %s?|Pair it again to use it.' "$name")"; done < <(bt_devices Paired)
              item "Blueman" 'bg blueman-manager' ;;
   weather) local k sum loc; local -A row=()
@@ -962,7 +1111,8 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            item "Today" 'notify -t 20000 Weather "$(sway-weather --report day)"' "${row[today]:-—}"
            item "Tomorrow" 'notify -t 20000 Weather "$(sway-weather --report week)"' "${row[tomorrow]:-—}"
            hdr "Settings"
-           if [ "$loc" != Automatic ] || [ -n "$(weather_saved)" ]; then stay "Location" location_cycle "$loc"; else item "Location" weather_location "$loc"; fi
+           if [ "$loc" != Automatic ] || [ -n "$(weather_saved)" ]; then stay "Location" location_cycle "$loc"; fi
+           ask_item "Set location…" weather_search "$([ "$loc" = Automatic ] && [ -z "$(weather_saved)" ] && echo "$loc")" "Location|A city or place name"
            stay "Units" 'sway-weather --toggle-units; sway-weather >/dev/null; notify Units "$([ "$(sway-weather --unit)" = metric ] && echo °C || echo °F)"' "$([ "$(sway-weather --unit)" = metric ] && echo °C || echo °F)"
            stay "Refresh" 'rm -f "$HOME/.cache/sway-weather.json"; sway-weather >/dev/null; sway-weather --refresh; notify Weather refreshed' ;;
   setup) stay "Power profile" pp_cycle "$(pp_now)"
@@ -974,7 +1124,8 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
          item "Display" : "" "" "jump=display"
          hdr "Config"
          item "Keybindings" show_keybindings
-         item "Input devices" input_pick
+         item "Input devices" : "$(kb_now)" inputs
+         item "Timezone" : "$(timedatectl show -p Timezone --value 2>/dev/null)" timezone
          item "Default apps" 'tui nvim "$HOME/.config/mimeapps.list"'
          item "Autostart" "tui nvim +/^#\\ Autostart $(printf %q "$SWAY_CONFIG")"
          item "Edit sway config" "tui nvim $(printf %q "$SWAY_CONFIG")"
@@ -994,12 +1145,12 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
   bookmarks) local url title path n=0
              while IFS=$'\t' read -r url title path; do [ -n "$url" ] && { item "${path:+$path › }$title" "open_url $(printf %q "$url")"; n=$((n+1)); }; done < <(bookmarks_list)
              [ "$n" -gt 0 ] || item "No managed bookmarks found" ':' ;;
-  install) item "Package" "tui $(printf %q "$SELF") pkg-install" apt
-           item "Flatpak" flatpak_install
-           item "Web app" webapp_add
-           item "Font" font_install
+  install) ask_item "Package" pkg_search apt "Search packages|Names in apt · Enter on a result installs it in a terminal"
+           ask_item "Flatpak" flatpak_search Flathub "Search Flathub|Enter on a result installs it in a terminal"
+           ask_item "Web app" webapp_name "" "Web app name|Shown in Apps · the URL comes next"
+           item "Font" : "Nerd Fonts" nerdfonts
            hdr "Remove"
-           item "Remove package…" "tui $(printf %q "$SELF") pkg-remove" apt ;;
+           ask_item "Remove package…" pkg_installed_search apt "Remove which package|Filters the installed packages" ;;
   update) item "System packages" "tui_wait 'sudo apt update && sudo apt full-upgrade'" apt
           item "Update dotfiles" "tui_wait \"cd $(printf %q "$DOTFILES") && git pull --ff-only && bash init.sh\"" "git pull" ;;
   system) item "Lock" lock swaylock
@@ -1052,17 +1203,19 @@ case "${1:-}" in
   thumbs-warm) thumbs_warm ;;
   tui) shift; tui "$@" ;;   # floating terminal with the PATH above (sway binds use this for ~/.local/bin tools)
   thumb-make) mkdir -p "$(dirname "$3")"; thumb_make "${2:?file}" "${3:?out}" ;;
-  wifi) wifi_menu ;;
+  wifi) if [ "$LAUNCHER" = k4 ]; then k4_main wifi; else wifi_menu; fi ;;
   vpn-connect) vpn_connect "${2:?profile name}" ;;
   vpn-pick) vpn_pick ;;
   theme) sway-theme-set "${2:?theme name}" ;;
   theme-next) sway-theme-set next ;;
   theme-pick) theme_pick ;;
-  font) sway-font-set "${2:-pick}" ;;
+  font) if [ "${2:-pick}" = pick ] && [ "$LAUNCHER" = k4 ]; then k4_main font; else sway-font-set "${2:-pick}"; fi ;;
   background) set_background "${2:?image path}" ;;
-  display|network|audio|bluetooth|weather) submenu "$1" ;;
-  timezone) tz_menu ;;
+  display|network|audio|bluetooth|weather) if [ "$LAUNCHER" = k4 ]; then k4_main "$1"; else submenu "$1"; fi ;;
+  timezone) if [ "$LAUNCHER" = k4 ]; then k4_main timezone; else tz_menu; fi ;;
   k4-section) k4_section "${2:?section}" ;;
+  k4-page) shift; k4_page "${1:?page}" "${@:2}" ;;
+  k4-tree) k4_tree ;;   # the tree k4 --menu reads (dry runs: sway-menu k4-tree | k4 --menu --dry-run x.png)
   k4-run) export K4_RUN=1; eval "$(printf '%s' "${2:?id}" | base64 -d)" ;;
   k4-view) k4_view "${2:?view}" ;;
   "") main_menu ;;
