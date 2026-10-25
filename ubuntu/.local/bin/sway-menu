@@ -172,11 +172,17 @@ wallpaper_picker() { local f; mapfile -t list < <(bg_list)
   if [ -n "${SWAY_MENU_DRY_RUN:-}" ]; then thumbs_warm "${list[@]}"; for f in "${list[@]}"; do printf '%s\t%s\n' "$f" "$(thumb_path "$f")"; done; return; fi
   f=$(image_pick Background "$(wallpaper)" "${list[@]}") || return 0; [ -n "$f" ] && set_background "$f"; }
 # Themes: sway-theme-set lists "name<TAB>dir"; the picker shows each theme's preview.png.
-theme_name() { sway-theme-set current 2>/dev/null; }
-theme_pretty() { printf '%s' "$1" | sed -E 's/(^|-)([a-z])/\1\u\2/g; s/-/ /g'; }
+theme_name() { cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null; }
+theme_list() {  # name<TAB>dir, like `sway-theme-set list` but without the fork; user themes shadow repo themes
+  local -A seen=(); local d t n
+  for d in "$HOME/.config/omarchy/themes" "$DOTFILES/themes"; do
+    for t in "$d"/*/; do n=$(basename "$t"); [ -f "$t/colors.toml" ] && [ -z "${seen[$n]:-}" ] && { seen[$n]=1; printf '%s\t%s\n' "$n" "${t%/}"; }; done
+  done | sort
+}
+theme_pretty() { local w out=""; for w in ${1//-/ }; do out+="${w^} "; done; printf '%s' "${out% }"; }   # no fork: the top level calls this per theme
 theme_pick() { local names=() previews=() n d cur i t
   cur=$(theme_name)
-  while IFS=$'\t' read -r n d; do names+=("$n"); previews+=("$d/preview.png"); done < <(sway-theme-set list 2>/dev/null)
+  while IFS=$'\t' read -r n d; do names+=("$n"); previews+=("$d/preview.png"); done < <(theme_list)
   [ ${#names[@]} -gt 0 ] || return 0
   thumbs_warm "${previews[@]}"
   i=$(for i in "${!names[@]}"; do t=$(thumb_path "${previews[$i]}"); n="$(theme_pretty "${names[$i]}")$([ "${names[$i]}" = "$cur" ] && printf '  (current)')"
@@ -189,7 +195,7 @@ leaves_style() { local p="${1:-}" d n cur; cur=$(theme_name)
   add "󰸌  ${p}Theme: next" 'sway-theme-set next'
   while IFS=$'\t' read -r n d; do
     add "󰸌  ${p}Theme: $(theme_pretty "$n")$([ "$n" = "$cur" ] && printf '  (current)')" "sway-theme-set $(printf %q "$n")"
-  done < <(sway-theme-set list 2>/dev/null)
+  done < <(theme_list)
   add "󰸉  ${p}Background picker (thumbnails)" wallpaper_picker
   add "󰸉  ${p}Background: next" bg_next
   add "󰸉  ${p}Background: random" bg_random; }
@@ -582,11 +588,16 @@ apps_add() {
     add "󰀻  App: $name" "bg gtk-launch $(printf %q "$id")"
   done < <(apps_list)
 }
-apps_list() {
+apps_list() {  # cached in ~/.cache/sway-menu/apps.tsv until any applications dir changes
   local dirs=("$HOME/.local/share/applications" /usr/local/share/applications /usr/share/applications /var/lib/flatpak/exports/share/applications /var/lib/snapd/desktop/applications)
-  local d files=()
-  for d in "${dirs[@]}"; do [ -d "$d" ] && files+=("$d"/*.desktop); done
+  local d files=() cache="$HOME/.cache/sway-menu/apps.tsv" fresh=1
+  for d in "${dirs[@]}"; do [ -d "$d" ] || continue; files+=("$d"/*.desktop); [ "$d" -nt "$cache" ] && fresh=0; done
   [ ${#files[@]} -gt 0 ] || return 0
+  if [ "$fresh" = 1 ] && [ -s "$cache" ]; then cat "$cache"; return; fi
+  mkdir -p "$(dirname "$cache")"
+  apps_scan "${files[@]}" | tee "$cache"
+}
+apps_scan() {
   awk '
     FNR == 1 { flush(); sec = ""; name = ""; skip = 0; n = split(FILENAME, parts, "/"); id = parts[n]; sub(/\.desktop$/, "", id) }
     /^\[/ { sec = $0; next }
@@ -597,11 +608,16 @@ apps_list() {
     /^OnlyShowIn=/ { skip = 1 }
     END { flush() }
     function flush() { if (name != "" && !skip && !(id in seen)) { seen[id] = 1; printf "%s\t%s\n", name, id } }
-  ' "${files[@]}" 2>/dev/null | sort -f -t $'\t' -k1,1
+  ' "$@" 2>/dev/null | sort -f -t $'\t' -k1,1
 }
 
 # ---------- menus ----------
 sections=(learn capture toggle style display network audio bluetooth weather setup vpn bookmarks install update system)
+# Sections whose rows are cheap to build (no device/network queries); only these are searchable
+# from the top level. The others show as a section row and build their rows when opened, so
+# the menu appears instantly instead of waiting on nmcli, wpctl, bluetoothctl, forticlient,
+# powerprofilesctl, the weather cache and the Chrome bookmark parser.
+fast_sections=(learn capture style install update system)
 section_icon() { case "$1" in learn) echo 󰧑;; capture) echo 󰄀;; toggle) echo 󰔎;; style) echo 󰸌;; display) echo 󰍹;; network) echo 󰤨;; audio) echo 󰕾;; bluetooth) echo 󰂯;; weather) echo 󰖐;; setup) echo 󰒓;; vpn) echo 󰖂;; bookmarks) echo 󰃀;; install) echo 󰏖;; update) echo 󰚰;; system) echo 󰐥;; esac; }
 section_title() { case "$1" in vpn) printf VPN;; *) printf '%s' "${1^}";; esac; }
 submenu() {                                       # submenu SECTION
@@ -616,7 +632,7 @@ main_menu() {
   local top=${#L[@]}
   # Leaves and apps come after the sections. Showing only $top rows keeps them out of
   # sight until you type; fuzzel still filters across all of them.
-  for s in "${sections[@]}"; do "leaves_$s" "$(section_title "$s") › "; done
+  for s in "${fast_sections[@]}"; do "leaves_$s" "$(section_title "$s") › "; done
   apps_add
   show Menu "$top"
 }
