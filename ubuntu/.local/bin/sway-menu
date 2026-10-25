@@ -68,7 +68,7 @@ lock() { swaylock -f -C "$THEME/swaylock.conf" -i "$(wallpaper)" -s fill; }
 # awww (ex-swww) paints with a transition when installed; otherwise sway's own swaybg.
 bg_tool() { command -v awww || command -v swww || true; }
 apply_bg() {  # apply_bg FILE
-  local t; t=$(bg_tool)
+  local t; t=$(bg_tool); plog "apply_bg: $1 tool=${t:-swaybg}"
   if [ -n "$t" ]; then
     if ! "$t" query >/dev/null 2>&1; then
       "${t}-daemon" >/dev/null 2>&1 & disown
@@ -79,13 +79,14 @@ apply_bg() {  # apply_bg FILE
       # session) would stay on top of awww's surface and the picture would never change.
       pkill -x swaybg 2>/dev/null || true
     else
-      swaymsg output '*' bg "$1" fill >/dev/null
+      plog "apply_bg: $t img failed, falling back to swaymsg"
+      swaymsg output '*' bg "$1" fill >/dev/null || plog "apply_bg: swaymsg failed"
     fi
   else
-    swaymsg output '*' bg "$1" fill >/dev/null
+    swaymsg output '*' bg "$1" fill >/dev/null || plog "apply_bg: swaymsg failed"
   fi
 }
-set_background() { local f; f=$(readlink -f "$1"); [ -f "$f" ] || return
+set_background() { local f; f=$(readlink -f "$1"); [ -f "$f" ] || { plog "set_background: not a file: $1"; return; }
   mkdir -p "$(dirname "$BG_LINK")"; ln -nsf "$f" "$BG_LINK"; apply_bg "$f"; }
 wallpaper_restore() { rm -f "$STATE/background.conf"; apply_bg "$(wallpaper)"; }   # background.conf: older versions persisted the choice there
 idle() {
@@ -160,16 +161,27 @@ thumbs_warm() {  # thumbs_warm [FILE...]: missing thumbnails for the given (defa
   # drop thumbnails older than 60 days that nothing listed (cache hygiene)
   find "$THUMBS" -type f -mtime +60 -delete 2>/dev/null
 }
-image_pick() {  # image_pick PROMPT CURRENT FILE... -> prints the chosen file; rows = "name\0icon\x1fthumb"
-  local prompt="$1" cur="$2"; shift 2; local f t i n=$#
+PICK_LOG="$HOME/.cache/sway-menu/pick.log"
+plog() { mkdir -p "${PICK_LOG%/*}"; printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >> "$PICK_LOG"; }
+image_pick() {  # image_pick PROMPT CURRENT FILE... -> prints the chosen file
+  # Rows are "label\0icon\x1fthumb"; fuzzel prints the chosen label, which is mapped back
+  # to the file (labels are unique), so nothing depends on --index semantics.
+  local prompt="$1" cur="$2"; shift 2; local f t label chosen n=$#
   [ "$n" -gt 0 ] || return 1
   thumbs_warm "$@"
-  i=$(for f in "$@"; do t=$(thumb_path "$f"); n=$(basename "$f"); n="${n%.*}"
-        [ "$(readlink -f "$f")" = "$cur" ] && n="$n  (current)"
-        if [ -f "$t" ]; then printf '%s\0icon\x1f%s\n' "$n" "$t"; else printf '%s\n' "$n"; fi
-      done | fz_img --dmenu --index --prompt "$prompt ❯ ") || return 1
-  [[ "${i:-}" =~ ^[0-9]+$ ]] || return 1
-  shift "$i"; printf '%s' "$1"
+  local -A count=()
+  for f in "$@"; do count[${f##*/}]=$(( ${count[${f##*/}]:-0} + 1 )); done
+  row_label() { local base=${1##*/} dir=${1%/*}; [ "${count[$base]}" -gt 1 ] && printf '%s/%s' "${dir##*/}" "$base" || printf '%s' "$base"; }
+  chosen=$(for f in "$@"; do
+      label=$(row_label "$f"); [ "$(readlink -f "$f")" = "$cur" ] && label="$label  (current)"
+      t=$(thumb_path "$f")
+      if [ -f "$t" ]; then printf '%s\0icon\x1f%s\n' "$label" "$t"; else printf '%s\n' "$label"; fi
+    done | fz_img --dmenu --prompt "$prompt ❯ ")
+  plog "pick: fuzzel returned '${chosen:-}'"
+  [ -n "${chosen:-}" ] || return 1
+  chosen=${chosen%  (current)}
+  for f in "$@"; do [ "$(row_label "$f")" = "$chosen" ] && { printf '%s' "$f"; return 0; }; done
+  plog "pick: no file matches '$chosen'"; return 1
 }
 wallpaper_picker() { local f; mapfile -t list < <(bg_list)
   if [ -n "${SWAY_MENU_DRY_RUN:-}" ]; then thumbs_warm "${list[@]}"; for f in "${list[@]}"; do printf '%s\t%s\n' "$f" "$(thumb_path "$f")"; done; return; fi
