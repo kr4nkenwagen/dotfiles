@@ -11,6 +11,8 @@
 #   sway-weather --clear-location   back to automatic (IP) location
 #   sway-weather --refresh       make waybar re-run this script (signal 8)
 #   sway-weather --report now|day|week   plain text: current, next 24 hours, 7-day forecast
+#   sway-weather --rows          now/today/tomorrow<TAB>summary, from the last fetch (menu rows)
+#   sway-weather --location      the location name, or "Automatic"
 set -u
 # sway launches us with the login environment, which lacks the dirs init.sh installs
 # into (awww, theme-color, bluetui, wiremix, lazygit). Fish adds them for terminals only.
@@ -72,6 +74,7 @@ fetch() {  # writes $CACHE and prints it; returns 1 on failure
   url="https://api.open-meteo.com/v1/forecast?latitude=$la&longitude=$lo&daily=weather_code,temperature_2m_max,temperature_2m_min&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code,is_day&forecast_days=4&timezone=auto"
   if [ "$u" = imperial ]; then url="$url&temperature_unit=fahrenheit&wind_speed_unit=mph"; tunit="°F"; wunit="mph"; fi
   j=$("${CURL[@]}" "$url") || return 1
+  mkdir -p "$(dirname "$CACHE")"; printf '%s' "$j" > "$CACHE.raw"   # for --rows
 
   local temp feels hum wind code isday icon desc
   IFS=$'\t' read -r temp feels hum wind code isday < <(printf '%s' "$j" | jq -r '.current | [(.temperature_2m|round), (.apparent_temperature|round), .relative_humidity_2m, (.wind_speed_10m|round), .weather_code, .is_day] | @tsv') || return 1
@@ -134,6 +137,12 @@ report() {  # report now|day|week
 case "${1:-}" in
   "")               output ;;
   --report)         report "${2:-now}" ;;
+  --rows)           [ -f "$CACHE.raw" ] || fetch >/dev/null
+                    jq -r '(.current | ["now", (.temperature_2m|round|tostring) + "°", .weather_code, .is_day]),
+                           (.daily | ["today", ((.temperature_2m_min[0]|round|tostring) + "° / " + (.temperature_2m_max[0]|round|tostring) + "°"), .weather_code[0], 1],
+                                     ["tomorrow", ((.temperature_2m_min[1]|round|tostring) + "° / " + (.temperature_2m_max[1]|round|tostring) + "°"), .weather_code[1], 1]) | @tsv' "$CACHE.raw" 2>/dev/null \
+                    | while IFS=$'\t' read -r k temp code day; do IFS=$'\t' read -r icon desc < <(wmo "$code" "$day"); printf '%s\t%s %s  %s\n' "$k" "$icon" "$temp" "$desc"; done ;;
+  --location)       n=$(jqs '.latitude // empty' "$STATE"); if [ -n "$n" ]; then jqs '.name' "$STATE"; else echo Automatic; fi ;;
   --tooltip)        { [ -f "$CACHE" ] || fetch >/dev/null; jq -r '.tooltip' "$CACHE" 2>/dev/null; } ;;
   --unit)           unit ;;
   --toggle-units)   if [ "$(unit)" = metric ]; then state_set '.unit = "imperial"'; else state_set '.unit = "metric"'; fi; rm -f "$CACHE"; refresh ;;

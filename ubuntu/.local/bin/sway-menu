@@ -71,7 +71,10 @@ pick() {                                          # pick PROMPT ENTRY... -> prin
     | sed -E 's/^[^[:alnum:]]*[[:space:]]+//'
 }
 confirm() { [ "$(pick "$1" "󰄬  Yes" "󰅖  No")" = Yes ]; }
-notify() { command -v notify-send >/dev/null && notify-send "$@"; }
+notify() {  # inside `k4-run` the message is printed: k4 shows the last line in its footer
+  if [ -n "${K4_RUN:-}" ]; then local a=() x skip=; for x in "$@"; do if [ -n "$skip" ]; then skip=; continue; fi; case "$x" in -t|-u) skip=1 ;; -*) ;; *) a+=("$x") ;; esac; done
+    local IFS=$'\x1f'; printf '%s\n' "${a[*]}" | tr '\n' ' ' | sed 's/\x1f/  /g; s/ *$//'; echo
+  else command -v notify-send >/dev/null && notify-send "$@"; fi; }
 tui() {  # floating terminal (matches the TUI.float window rule in the sway config)
   if command -v ghostty >/dev/null; then ghostty --class=TUI.float -e "$@" >/dev/null 2>&1 & disown
   else xdg-terminal-exec "$@" >/dev/null 2>&1 & disown; fi
@@ -658,23 +661,25 @@ apps_scan() {
 # `sway-menu k4-section NAME` in the background, and prints the chosen action's id: the
 # shell action base64-encoded (or url:<url> from its web search), which runs here.
 k4id() { printf '%s' "$1" | base64 -w0; }
-item() { printf 'A\t%s\t%s\t%s\t%s\n' "$(k4id "$2")" "$1" "${3:-}" "${4:-}"; }   # item LABEL ACTION [META] [VIEW]
+item() { printf 'A\t%s\t%s\t%s\t%s\t%s\n' "$(k4id "$2")" "$1" "${3:-}" "${4:-}" "${5:-}"; }   # item LABEL ACTION [META] [VIEW] [FLAGS]
+stay() { item "$1" "$2" "${3:-}" "" "stay${4:+;$4}"; }   # runs in place, the menu stays open (footer shows the result)
+hdr() { printf 'H\t%s\n' "$1"; }
 K4_SECTIONS=(apps learn capture toggle style display network audio bluetooth weather setup vpn bookmarks install update system about)
 k4_meta() { case "$1" in
-  apps) echo "Apps|A|Launch and manage applications|󰀻" ;;
-  learn) echo "Learn|L|Docs and cheat sheets, offline first|󰧑" ;;
+  apps) echo "Apps|A|Installed applications|󰀻" ;;
+  learn) echo "Learn|L|Reference links, opened in the browser|󰧑" ;;
   capture) echo "Capture|C|Screenshots, recordings and color picking|󰄀" ;;
   toggle) echo "Toggle|T|Flip things on and off|󰔎" ;;
-  style) echo "Style|S|Theme, wallpaper and window decoration|󰸌" ;;
-  display) echo "Display|D|Outputs, modes and scaling|󰍹" ;;
-  network) echo "Network|N|Wi-Fi, ethernet and connections|󰤨" ;;
-  audio) echo "Audio|O|Devices and levels via PipeWire|󰕾" ;;
-  bluetooth) echo "Bluetooth|B|Pair and connect devices|󰂯" ;;
-  weather) echo "Weather|W|Forecast for your location|󰖐" ;;
-  setup) echo "Setup|E|Configure the desktop|󰒓" ;;
-  vpn) echo "VPN|V|Private connections|󰖂" ;;
-  bookmarks) echo "Bookmarks|K|Saved links, opened in your browser|󰃀" ;;
-  install) echo "Install|I|Add software to the system|󰏖" ;;
+  style) echo "Style|S|Theme, background and window decoration|󰸌" ;;
+  display) echo "Display|D|Brightness, outputs and night light|󰍹" ;;
+  network) echo "Network|N|Wi-Fi, addresses and DNS|󰤨" ;;
+  audio) echo "Audio|O|Levels, devices and streams via PipeWire|󰕾" ;;
+  bluetooth) echo "Bluetooth|B|Pair, connect and forget devices|󰂯" ;;
+  weather) echo "Weather|W|One fetch, shown as rows|󰖐" ;;
+  setup) echo "Setup|E|Configure the machine|󰒓" ;;
+  vpn) echo "VPN|V|FortiClient profiles|󰖂" ;;
+  bookmarks) echo "Bookmarks|K|From managed Chrome · read-only|󰃀" ;;
+  install) echo "Install|I|Add or remove software|󰏖" ;;
   update) echo "Update|U|Keep everything current|󰚰" ;;
   system) echo "System|Y|Session and power|󰐥" ;;
   about) echo "About|H|This machine and this launcher|󰋽" ;;
@@ -686,7 +691,8 @@ k4_tree() { local s name key desc icon
     printf 'L\t%q k4-section %s\n' "$SELF" "$s"
   done
   printf 'V\ttheme\tTheme\tApplies to sway, waybar, terminal and k4\t%q k4-view theme\n' "$SELF"
-  printf 'V\twall\tWallpaper\t%s\t%q k4-view wall\n' "the theme's backgrounds + extras" "$SELF"
+  printf 'V\twall\tBackground\t%s\t%q k4-view wall\n' "the theme's backgrounds + extras" "$SELF"
+  printf 'R\t%q k4-run\n' "$SELF"
 }
 k4_main() { local out
   out=$(k4_tree | k4 --menu) || return 0
@@ -803,89 +809,204 @@ flatpak_install() { if command -v flatpak >/dev/null; then tui sh -c 'q=$(printf
   else notify Flatpak "flatpak is not installed (apt install flatpak)"; fi; }
 font_install() { tui sh -c 'f=$(curl -fsSL https://api.github.com/repos/ryanoasis/nerd-fonts/releases/latest | jq -r ".assets[].name | select(endswith(\".tar.xz\")) | sub(\".tar.xz\"; \"\")" | fzf --prompt "Nerd Font ❯ ") && [ -n "$f" ] && mkdir -p "$HOME/.local/share/fonts/nerd-fonts/$f" && curl -fsSL "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/$f.tar.xz" | tar -xJ -C "$HOME/.local/share/fonts/nerd-fonts/$f" && fc-cache -f && echo "Installed $f"; printf "\n[done] press enter"; read -r _'; }
 
+# helpers for the design's in-place rows (toggles, cycles, levels, radios, copies)
+bright_to() { brightnessctl set "$1" >/dev/null 2>&1; notify Brightness "$(bright_pct)%"; }
+vol_to() { wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ "$1" >/dev/null; notify Volume "$(vol_pct @DEFAULT_AUDIO_SINK@)"; }
+vol_num() { wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | awk '{ printf "%d", $2 * 100 + 0.5 }'; }
+out_muted() { wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | grep -q MUTED && echo muted || echo off; }
+output_toggle() {  # output_toggle NAME: never the last active output
+  local active n; active=$(swaymsg -t get_outputs | jq -r --arg n "$1" '.[] | select(.name == $n) | .active')
+  n=$(swaymsg -t get_outputs | jq '[.[] | select(.active)] | length')
+  if [ "$active" = true ]; then
+    if [ "$n" -le 1 ]; then notify Display "Cannot disable the last active display"; else swaymsg output "$1" disable >/dev/null; notify Display "$1 disabled"; fi
+  else swaymsg output "$1" enable >/dev/null; notify Display "$1 enabled"; fi; }
+wifi_power_toggle() { if [ "$(nmcli radio wifi)" = enabled ]; then nmcli radio wifi off; else nmcli radio wifi on; fi; notify "Wi-Fi power" "$(nmcli radio wifi | sed 's/enabled/on/; s/disabled/off/')"; }
+active_wifi_con() { nmcli -t -f NAME,TYPE con show --active 2>/dev/null | awk -F: '$2 == "802-11-wireless" { print $1; exit }'; }
+band_name() { case "$1" in a) echo "5 GHz" ;; bg) echo "2.4 GHz" ;; *) echo Auto ;; esac; }
+band_now() { local c; c=$(active_wifi_con); [ -n "$c" ] && band_name "$(nmcli -g 802-11-wireless.band con show "$c" 2>/dev/null)" || echo Auto; }
+band_cycle() { local c b; c=$(active_wifi_con); [ -n "$c" ] || { notify "Wi-Fi band" "No Wi-Fi connection"; return; }
+  b=$(nmcli -g 802-11-wireless.band con show "$c"); case "$b" in "") b=bg ;; bg) b=a ;; *) b="" ;; esac
+  nmcli con mod "$c" 802-11-wireless.band "$b" >/dev/null && nmcli con up "$c" >/dev/null 2>&1; notify "Wi-Fi band" "$(band_name "$b")"; }
+forget_active_wifi() { local c; c=$(active_wifi_con); [ -n "$c" ] || { notify Wi-Fi "Not connected"; return; }; nmcli con delete "$c" >/dev/null && notify Wi-Fi "Forgot $c"; }
+copy_val() { printf '%s' "$2" | wl-copy; notify "Copied  $1" "$2"; }
+DNS_NAMES=(Automatic Cloudflare Google Quad9); DNS_SERVERS=("" "1.1.1.1 1.0.0.1" "8.8.8.8 8.8.4.4" "9.9.9.9 149.112.112.112")
+dns_now() { local c d i; d=$(primary_dev); c=${d:+$(active_con "$d")}; [ -n "$c" ] || { echo Automatic; return; }
+  d=$(nmcli -g ipv4.dns con show "$c" 2>/dev/null | tr ',' ' '); for i in "${!DNS_SERVERS[@]}"; do [ "$d" = "${DNS_SERVERS[$i]}" ] && { echo "${DNS_NAMES[$i]}"; return; }; done; [ -z "$d" ] && echo Automatic || echo "Custom"; }
+dns_cycle() { local c d i cur=0; d=$(primary_dev); c=${d:+$(active_con "$d")}; [ -n "$c" ] || { notify DNS "No connection"; return; }
+  for i in "${!DNS_NAMES[@]}"; do [ "$(dns_now)" = "${DNS_NAMES[$i]}" ] && cur=$i; done; i=$(( (cur + 1) % ${#DNS_NAMES[@]} ))
+  if [ -z "${DNS_SERVERS[$i]}" ]; then nmcli con mod "$c" ipv4.dns "" ipv4.ignore-auto-dns no; else nmcli con mod "$c" ipv4.dns "${DNS_SERVERS[$i]}" ipv4.ignore-auto-dns yes; fi
+  nmcli con up "$c" >/dev/null 2>&1; notify "DNS provider" "${DNS_NAMES[$i]}"; }
+ping_both() { local gw r1 r2; gw=$(nmcli -g IP4.GATEWAY dev show "$(primary_dev)" 2>/dev/null)
+  r1=$(ping -c1 -W1 "$gw" 2>/dev/null | awk -F'time=' '/time=/ { print $2 }'); r2=$(ping -c1 -W1 1.1.1.1 2>/dev/null | awk -F'time=' '/time=/ { print $2 }')
+  notify Ping "gateway ${r1:-timeout} · 1.1.1.1 ${r2:-timeout}"; }
+bt_power_toggle() { if bt_powered; then bluetoothctl power off >/dev/null; else bluetoothctl power on >/dev/null; fi; notify Bluetooth "$(bt_powered && echo on || echo off)"; }
+bt_dev_toggle() { if bluetoothctl info "$1" 2>/dev/null | grep -q "Connected: yes"; then bluetoothctl disconnect "$1" >/dev/null; notify "$2" disconnected
+  elif bluetoothctl connect "$1" >/dev/null 2>&1; then notify "$2" connected; else notify "$2" "could not connect"; fi; }
+weather_saved() { jq -r '.saved_name // empty' "$HOME/.local/state/sway/weather.json" 2>/dev/null; }
+location_cycle() { local st="$HOME/.local/state/sway/weather.json" n
+  if [ "$(sway-weather --location)" = Automatic ]; then
+    jq '.name = .saved_name | .latitude = .saved_latitude | .longitude = .saved_longitude' "$st" > "$st.tmp" && mv "$st.tmp" "$st"
+  else
+    jq '.saved_name = .name | .saved_latitude = .latitude | .saved_longitude = .longitude | del(.name, .latitude, .longitude)' "$st" > "$st.tmp" && mv "$st.tmp" "$st"
+  fi
+  rm -f "$HOME/.cache/sway-weather.json" "$HOME/.cache/sway-weather.json.raw"; sway-weather >/dev/null; sway-weather --refresh; notify Location "$(sway-weather --location)"; }
+PP=(balanced performance power-saver); PP_NAMES=(Balanced Performance "Power saver")
+pp_now() { local c i; c=$(powerprofilesctl get 2>/dev/null); for i in "${!PP[@]}"; do [ "$c" = "${PP[$i]}" ] && { echo "${PP_NAMES[$i]}"; return; }; done; echo "${c:-?}"; }
+pp_cycle() { local c i n=0; c=$(powerprofilesctl get 2>/dev/null); for i in "${!PP[@]}"; do [ "$c" = "${PP[$i]}" ] && n=$(( (i + 1) % 3 )); done
+  powerprofilesctl set "${PP[$n]}" && notify "Power profile" "${PP_NAMES[$n]}"; }
+kb_now() { cat "$STATE/kb-layout" 2>/dev/null || echo us; }
+kb_cycle() { local n; [ "$(kb_now)" = us ] && n=se || n=us; mkdir -p "$STATE"; echo "$n" > "$STATE/kb-layout"; set_layout "$n"; }
+vpn_connected_name() { forticlient vpn status 2>/dev/null | grep -i -m1 "profile\|name" | awk -F': *' '{ print $2 }'; }
+vpn_profile_toggle() { if [ "$(vpn_state)" = on ]; then forticlient vpn disconnect >/dev/null 2>&1; notify VPN Disconnected
+  else bg forticlient vpn connect "$1"; notify VPN "Connecting to $1 (FortiClient asks for the login)"; fi; }
+
+K4_CONFIRM_LOGOUT='confirm=Log out?|Closes every window and ends the sway session.'
+K4_CONFIRM_REBOOT='confirm=Reboot now?|Unsaved work in open apps will be lost.'
+K4_CONFIRM_SHUTDOWN='confirm=Shut down now?|Unsaved work in open apps will be lost.'
+
 k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
   case "$s" in
-  apps) item "Launch app…" app_pick
-        item "Running windows" window_pick swaymsg
-        item "Scratchpad" 'swaymsg scratchpad show >/dev/null'
-        item "Kill focused app" 'swaymsg kill >/dev/null' "Super+X" ;;
-  learn) item "Sway keybindings" show_keybindings
-         item "man sway(5)" 'tui man 5 sway'
-         item "Arch Wiki" 'open_url https://wiki.archlinux.org'
-         item "Neovim tutor" 'tui nvim +Tutor'
-         item "Shell cheat sheet" "tui sh -c 'curl -s cheat.sh/fish | less -R'" ;;
+  apps) local n id
+        while IFS=$'\t' read -r n id; do item "$n" "bg gtk-launch $(printf %q "$id")" "" "" app; done < <(apps_list) ;;
+  learn) item "Sway wiki" 'open_url https://github.com/swaywm/sway/wiki'
+         item "Dotfiles repo" 'open_url https://github.com/kr4nkenwagen/dotfiles' ;;
   capture) item "Screenshot region" shot_region "grim + slurp"
            item "Screenshot window" shot_window
            item "Screenshot output" shot
            item "Record region" 'record_toggle region' "$([ "$rec" = Stop ] && echo recording || echo wf-recorder)"
            item "Record output" record_toggle "$([ "$rec" = Stop ] && echo recording)"
            item "Pick color" color_picker ;;
-  toggle) item "Waybar" toggle_bar "$(onoff pgrep -x waybar)"
-          item "Idle inhibitor" toggle_idle "$(pgrep -x swayidle >/dev/null && echo off || echo on)"
-          item "Night light" toggle_night "$(onoff pgrep -x wlsunset)"
-          item "Do not disturb" toggle_dnd "$(onoff sh -c 'makoctl mode | grep -qx do-not-disturb')"
-          item "Gaps" toggle_gaps "$([ "$(gaps_now)" = 0 ] && echo off || echo on)"
-          item "Floating (focused)" 'swaymsg floating toggle >/dev/null' "$(floating_state)" ;;
+  toggle) stay "Waybar" 'toggle_bar; notify Waybar "$(onoff pgrep -x waybar)"' "$(onoff pgrep -x waybar)"
+          stay "Starfield" 'starfield-toggle >/dev/null; notify Starfield "$(starfield-toggle status)"' "$(starfield-toggle status 2>/dev/null || echo on)"
+          stay "Launcher" toggle_launcher "$([ "$LAUNCHER" = k4 ] && echo on || echo off)"
+          stay "Idle lock" toggle_idle "$(onoff pgrep -x swayidle)"
+          stay "Do not disturb" 'toggle_dnd; notify "Do not disturb" "$(onoff sh -c "makoctl mode | grep -qx do-not-disturb")"' "$(onoff sh -c 'makoctl mode | grep -qx do-not-disturb')" ;;
   style) local w; w=$(wallpaper)
+         hdr "Theme"
          item "Theme" : "$(theme_pretty "$(theme_name)")" theme
-         item "Wallpaper" : "${w##*/}" wall
+         stay "Theme: next" 'sway-theme-set next >/dev/null 2>&1; notify Theme "$(theme_pretty "$(theme_name)")"'
+         hdr "Background"
+         item "Background" : "${w##*/}" wall
+         stay "Background: next" 'bg_next; w=$(wallpaper); notify Background "${w##*/}"'
+         stay "Background: random" 'bg_random; w=$(wallpaper); notify Background "${w##*/}  (random)"'
+         hdr "Windows"
          item "Font" 'sway-font-set pick' "$(sway-font-set current 2>/dev/null | sed 's/ Nerd Font Mono$//')"
          item "Gaps & borders" gaps_pick
          item "Opacity" opacity_pick "$(opacity_now)" ;;
-  display) item "Arrange outputs" 'bg wdisplays' wdisplays
-           item "Resolution & refresh" mode_pick
-           item "Scale" scale_pick
-           item "Mirror" mirror_output
-           item "Disable external" toggle_external "$(external_state)" ;;
-  network) item "Wi-Fi networks" wifi_menu "$(wifi_ssid)"
+  display) local b l n a; b=$(bright_pct)
+           if [ -n "$b" ]; then
+             hdr "Brightness · ${b}%"
+             stay "Brightness up" 'bright_to 10%+'; stay "Brightness down" 'bright_to 10%-'
+             for l in 25 50 75 100; do stay "Brightness $l%" "bright_to $l%" "$([ "$b" = "$l" ] && echo current)"; done
+           fi
+           hdr "Outputs"
+           while IFS=$'\t' read -r n a; do
+             stay "$n  $([[ $n =~ ^(eDP|LVDS|DSI) ]] && echo built-in || echo external)" "output_toggle $(printf %q "$n")" "$([ "$a" = true ] && echo enabled || echo disabled)"
+           done < <(swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | [.name, (.active|tostring)] | @tsv')
+           hdr "More"
+           stay "Night light" 'toggle_night; sleep 0.2; notify "Night light" "$(onoff pgrep -x wlsunset)"' "$(onoff pgrep -x wlsunset)"
+           item "Scale" scale_pick ;;
+  network) local dev ip gw dns; dev=$(primary_dev)
+           ip=${dev:+$(nmcli -g IP4.ADDRESS dev show "$dev" 2>/dev/null | head -1)}; ip=${ip%%/*}
+           gw=${dev:+$(nmcli -g IP4.GATEWAY dev show "$dev" 2>/dev/null)}
+           dns=${dev:+$(nmcli -g IP4.DNS dev show "$dev" 2>/dev/null | head -1)}
+           hdr "Wi-Fi"
+           stay "Wi-Fi power" wifi_power_toggle "$([ "$(nmcli radio wifi 2>/dev/null)" = enabled ] && echo on || echo off)"
+           item "Wi-Fi networks" wifi_menu "$(wifi_ssid)"
+           stay "Wi-Fi band" band_cycle "$(band_now)"
+           command -v qrencode >/dev/null && item "Share Wi-Fi (QR code)" "wifi_qr $(printf %q "$(active_wifi_con)") $(printf %q "$(wifi_ssid)")"
+           stay "Forget network" forget_active_wifi "" "$(printf 'confirm=Forget %s?|You will need the password to connect again.' "$(wifi_ssid)")"
            item "Connect to hidden…" hidden_wifi
-           item "Ethernet" eth_toggle "$(eth_state)"
-           item "Airplane mode" airplane_toggle "$(airplane_state)"
+           hdr "Connection · Enter copies"
+           stay "IP address" "copy_val 'IP address' $(printf %q "$ip")" "$ip"
+           stay "Gateway" "copy_val Gateway $(printf %q "$gw")" "$gw"
+           stay "DNS" "copy_val DNS $(printf %q "$dns")" "$dns"
+           stay "Ping" ping_both
+           hdr "DNS"
+           stay "DNS provider" dns_cycle "$(dns_now)"
+           hdr "More"
+           stay "Ethernet" eth_toggle "$(eth_state)"
            item "Open nmtui" 'tui nmtui' ;;
-  audio) item "Output device" 'dev_pick Sinks "Output device"' "$(default_name Sinks)"
-         item "Input device" 'dev_pick Sources "Input device"' "$(default_name Sources)"
-         item "Volume" volume_pick "$(vol_pct @DEFAULT_AUDIO_SINK@)"
-         item "Mute microphone" 'wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle' "$(mic_muted)"
-         item "Open mixer" "tui sh -c 'command -v wiremix >/dev/null && exec wiremix || exec pavucontrol'" ;;
-  bluetooth) item "Power" "bluetoothctl power $(bt_powered && echo off || echo on) >/dev/null" "$(bt_powered && echo on || echo off)"
-             item "Paired devices" bt_paired_pick "$(bt_devices Paired | wc -l)"
+  audio) local v l id def name vol; v=$(vol_num)
+         hdr "Volume · ${v}%"
+         stay "Volume up" 'vol_to 5%+'; stay "Volume down" 'vol_to 5%-'
+         for l in 25 50 75 100; do stay "Volume $l%" "vol_to $l%" "$([ "$v" = "$l" ] && echo current)"; done
+         stay "Mute output" 'wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle; notify Output "$(out_muted)"' "$(out_muted)"
+         stay "Mute microphone" 'wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle; notify Microphone "$(mic_muted | sed s/on/muted/)"' "$(mic_muted | sed 's/on/muted/')"
+         hdr "Output device"
+         while IFS=$'\t' read -r id def name vol; do stay "$name" "wpctl set-default $id; notify Output $(printf %q "$name")" "$([ "$def" = '*' ] && echo current)"; done < <(wp_list Sinks)
+         hdr "Input device"
+         while IFS=$'\t' read -r id def name vol; do stay "$name" "wpctl set-default $id; notify Input $(printf %q "$name")" "$([ "$def" = '*' ] && echo current)"; done < <(wp_list Sources)
+         hdr "Streams · Enter mutes"
+         while IFS=$'\t' read -r id def name vol; do stay "$name" "wpctl set-mute $id toggle; notify $(printf %q "$name") toggled" "$([[ $vol == *MUTED* ]] && echo muted || echo playing)"; done < <(wp_list Streams)
+         hdr "More"
+         item "pavucontrol" 'bg pavucontrol' ;;
+  bluetooth) local mac name; local -A conn=()
+             while IFS=$'\t' read -r mac name; do conn[$mac]=1; done < <(bt_devices Connected)
+             stay "Bluetooth power" bt_power_toggle "$(bt_powered && echo on || echo off)"
+             hdr "Devices · Enter connects"
+             while IFS=$'\t' read -r mac name; do stay "$name" "bt_dev_toggle $mac $(printf %q "$name")" "$([ -n "${conn[$mac]:-}" ] && echo connected || echo disconnected)"; done < <(bt_devices Paired)
+             hdr "Manage"
              item "Scan & pair…" bt_scan_pick
-             item "Open bluetui" 'tui bluetui' ;;
-  weather) item "Right now" 'notify Weather "$(sway-weather --report now)"'
-           item "Next 24 hours" 'notify -t 20000 Weather "$(sway-weather --report day)"'
-           item "7-day forecast" 'notify -t 20000 Weather "$(sway-weather --report week)"'
-           item "Change location…" weather_location ;;
-  setup) item "Keybindings" show_keybindings
+             while IFS=$'\t' read -r mac name; do stay "Forget $name" "bluetoothctl remove $mac >/dev/null; notify Bluetooth $(printf %q "Forgot $name")" "" "$(printf 'confirm=Forget %s?|Pair it again to use it.' "$name")"; done < <(bt_devices Paired)
+             item "Blueman" 'bg blueman-manager' ;;
+  weather) local k sum loc; local -A row=()
+           while IFS=$'\t' read -r k sum; do row[$k]=$sum; done < <(sway-weather --rows 2>/dev/null)
+           loc=$(sway-weather --location 2>/dev/null)
+           hdr "Forecast"
+           item "Now" 'notify Weather "$(sway-weather --report now)"' "${row[now]:-—}"
+           item "Today" 'notify -t 20000 Weather "$(sway-weather --report day)"' "${row[today]:-—}"
+           item "Tomorrow" 'notify -t 20000 Weather "$(sway-weather --report week)"' "${row[tomorrow]:-—}"
+           hdr "Settings"
+           if [ "$loc" != Automatic ] || [ -n "$(weather_saved)" ]; then stay "Location" location_cycle "$loc"; else item "Location" weather_location "$loc"; fi
+           stay "Units" 'sway-weather --toggle-units; sway-weather >/dev/null; notify Units "$([ "$(sway-weather --unit)" = metric ] && echo °C || echo °F)"' "$([ "$(sway-weather --unit)" = metric ] && echo °C || echo °F)"
+           stay "Refresh" 'rm -f "$HOME/.cache/sway-weather.json"; sway-weather >/dev/null; sway-weather --refresh; notify Weather refreshed' ;;
+  setup) stay "Power profile" pp_cycle "$(pp_now)"
+         stay "Keyboard layout" kb_cycle "$(kb_now)"
+         hdr "Go to"
+         item "Audio" : "" "" "jump=audio"
+         item "Network" : "" "" "jump=network"
+         item "Bluetooth" : "" "" "jump=bluetooth"
+         item "Display" : "" "" "jump=display"
+         hdr "Config"
+         item "Keybindings" show_keybindings
          item "Input devices" input_pick
          item "Default apps" 'tui nvim "$HOME/.config/mimeapps.list"'
          item "Autostart" "tui nvim +/^#\\ Autostart $(printf %q "$SWAY_CONFIG")"
          item "Edit sway config" "tui nvim $(printf %q "$SWAY_CONFIG")"
          item "Reload sway" 'swaymsg reload >/dev/null' "Super+Ctrl+R" ;;
-  vpn) item "Connect…" vpn_connect_pick
-       item "Disconnect" 'forticlient vpn disconnect >/dev/null 2>&1; notify VPN Disconnected'
-       item "Status" vpn_status "$(command -v forticlient >/dev/null && vpn_state || echo 'not installed')"
+  vpn) local n on
+       if command -v forticlient >/dev/null; then
+         on=$(vpn_state)
+         hdr "Profiles · Enter connects"
+         while IFS= read -r n; do [ -n "$n" ] && stay "Connect: $n" "vpn_profile_toggle $(printf %q "$n")" "$([ "$on" = on ] && echo connected)"; done < <(vpn_profiles)
+       fi
+       hdr "More"
+       item "Connect in terminal" "tui $(printf %q "$SELF") vpn-pick"
+       item "FortiClient GUI" vpn_gui
+       stay "Disconnect" 'forticlient vpn disconnect >/dev/null 2>&1; notify VPN Disconnected'
+       item "Status" vpn_status "$(command -v forticlient >/dev/null && vpn_state | sed 's/on/connected/; s/off/disconnected/' || echo 'not installed')"
        item "Add profile…" vpn_gui ;;
-  bookmarks) item "Open bookmark…" bookmark_pick
-             item "Add bookmark" bookmark_add
-             item "Edit bookmarks" "tui nvim $(printf %q "$QB_BOOKMARKS")" ;;
+  bookmarks) local url title path n=0
+             while IFS=$'\t' read -r url title path; do [ -n "$url" ] && { item "${path:+$path › }$title" "open_url $(printf %q "$url")"; n=$((n+1)); }; done < <(bookmarks_list)
+             [ "$n" -gt 0 ] || item "No managed bookmarks found" ':' ;;
   install) item "Package" "tui $(printf %q "$SELF") pkg-install" apt
-           item "AUR package" 'notify Install "The AUR is Arch-only; use Package (apt) here"' yay
            item "Flatpak" flatpak_install
            item "Web app" webapp_add
-           item "Font" font_install ;;
+           item "Font" font_install
+           hdr "Remove"
+           item "Remove package…" "tui $(printf %q "$SELF") pkg-remove" apt ;;
   update) item "System packages" "tui_wait 'sudo apt update && sudo apt full-upgrade'" apt
-          item "Firmware" "tui_wait 'fwupdmgr refresh; fwupdmgr update'" fwupd
-          item "Mirror list" 'command -v software-properties-gtk >/dev/null && bg software-properties-gtk || notify Update "Mirrors: Software & Updates (software-properties-gtk)"'
-          item "Kestrel" "tui_wait 'cd ~/repos/k4 && git pull --ff-only; ./build.sh install'" ;;
+          item "Update dotfiles" "tui_wait \"cd $(printf %q "$DOTFILES") && git pull --ff-only && bash init.sh\"" "git pull" ;;
   system) item "Lock" lock swaylock
           item "Suspend" 'systemctl suspend'
-          item "Log out" 'swaymsg exit'
-          item "Reboot" 'systemctl reboot'
-          item "Shut down" 'systemctl poweroff' ;;
+          item "Log out" 'swaymsg exit' "" "" "$K4_CONFIRM_LOGOUT"
+          item "Reboot" 'systemctl reboot' "" "" "$K4_CONFIRM_REBOOT"
+          item "Shut down" 'systemctl poweroff' "" "" "$K4_CONFIRM_SHUTDOWN" ;;
   about) item "System info" about
          item "Hardware" "tui_wait 'lscpu | head -20; echo; free -h; echo; lsblk'"
          item "Disk usage" "tui_wait 'command -v duf >/dev/null && duf || df -h'"
-         item "Kestrel version" 'notify k4 "$(k4 --version)"' ;;
+         stay "Kestrel version" 'notify k4 "$(k4 --version)"' ;;
   esac; }
 
 # ---------- menus ----------
@@ -938,6 +1059,7 @@ case "${1:-}" in
   display|network|audio|bluetooth|weather) submenu "$1" ;;
   timezone) tz_menu ;;
   k4-section) k4_section "${2:?section}" ;;
+  k4-run) K4_RUN=1; eval "$(printf '%s' "${2:?id}" | base64 -d)" ;;
   k4-view) k4_view "${2:?view}" ;;
   "") main_menu ;;
   *) echo "usage: sway-menu [lock|idle|pkg-install|pkg-remove|wallpaper|wifi|vpn-connect NAME|vpn-pick|theme NAME|theme-next|theme-pick|background FILE|display|network|audio|bluetooth|weather|timezone]" >&2; exit 2 ;;
