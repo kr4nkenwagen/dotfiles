@@ -156,12 +156,16 @@ bg_next() { local cur list; cur=$(wallpaper); mapfile -t list < <(bg_list); [ ${
   set_background "$next"; }
 bg_random() { local f; f=$(bg_list | shuf -n1); [ -n "$f" ] && set_background "$f"; }
 # Thumbnails (PNG, the only raster fuzzel loads) cached by path+size+mtime, like omarchy-menu-images.
-thumb_path() { printf '%s/%s.png' "$THUMBS" "$(printf '%s:%s' "$1" "$(stat -c '%s:%Y' "$1" 2>/dev/null)" | md5sum | cut -c1-32)"; }
+# Square: fuzzel reserves a square icon slot the height of the row, so a 16:9 thumbnail would
+# run under the text.
+THUMB_PX=256
+thumb_path() { printf '%s/%s.png' "$THUMBS" "$(printf 'sq%s:%s:%s' "$THUMB_PX" "$1" "$(stat -c '%s:%Y' "$1" 2>/dev/null)" | md5sum | cut -c1-32)"; }
 thumb_make() {  # thumb_make FILE OUT
-  if command -v vipsthumbnail >/dev/null; then vipsthumbnail "$1" --size 480x270 --smartcrop centre -o "$2[strip]" 2>/dev/null
-  elif command -v magick >/dev/null; then magick "$1" -thumbnail 480x270^ -gravity center -extent 480x270 "$2" 2>/dev/null
-  elif command -v convert >/dev/null; then convert "$1" -thumbnail 480x270^ -gravity center -extent 480x270 "$2" 2>/dev/null
-  elif command -v ffmpeg >/dev/null; then ffmpeg -loglevel error -y -i "$1" -vf 'scale=480:270:force_original_aspect_ratio=increase,crop=480:270' -frames:v 1 "$2" 2>/dev/null
+  local px=$THUMB_PX
+  if command -v vipsthumbnail >/dev/null; then vipsthumbnail "$1" --size "${px}x${px}" --smartcrop centre -o "$2[strip]" 2>/dev/null
+  elif command -v magick >/dev/null; then magick "$1" -thumbnail "${px}x${px}^" -gravity center -extent "${px}x${px}" "$2" 2>/dev/null
+  elif command -v convert >/dev/null; then convert "$1" -thumbnail "${px}x${px}^" -gravity center -extent "${px}x${px}" "$2" 2>/dev/null
+  elif command -v ffmpeg >/dev/null; then ffmpeg -loglevel error -y -i "$1" -vf "scale=${px}:${px}:force_original_aspect_ratio=increase,crop=${px}:${px}" -frames:v 1 "$2" 2>/dev/null
   else return 1; fi
 }
 thumbs_warm() {  # thumbs_warm [FILE...]: missing thumbnails for the given (default: current) wallpapers, in parallel

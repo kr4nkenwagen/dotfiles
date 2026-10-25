@@ -1,17 +1,17 @@
 # fuzzel for the wallpaper and theme pickers: tall rows so the per-entry thumbnails
-# (dmenu icons, PNG) are readable, and a large preview once the match list is short.
-# Rendered by sway-theme-set next to fuzzel.ini.
+# (square PNGs, dmenu icons) are readable. The large preview that fuzzel draws when few
+# rows match is off: it overlaps the list. Rendered by sway-theme-set next to fuzzel.ini.
 [main]
 font={{ font }}:size=12
-line-height=42
+line-height=40
 prompt="❯ "
 icons-enabled=yes
-image-size-ratio=0.6
+image-size-ratio=0
 lines=10
 width=70
 horizontal-pad=16
 vertical-pad=8
-inner-pad=8
+inner-pad=10
 
 [colors]
 background={{ background_strip }}ee
