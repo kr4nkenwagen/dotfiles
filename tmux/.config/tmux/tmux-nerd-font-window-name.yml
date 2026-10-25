@@ -1,0 +1,10 @@
+# Window names in the status bar: Nerd Font icon + program (tmux-nerd-font-window-name).
+config:
+  fallback-icon: "󰆍"   # generic terminal when the program has no icon
+  show-name: true
+  always-show-fallback-name: true
+  icon-position: "left"
+
+icons:
+  claude: "󰚩"
+  sway-menu: "󰍜"
