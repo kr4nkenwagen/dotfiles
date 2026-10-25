@@ -24,7 +24,7 @@ SHOTS="$HOME/Pictures/Screenshots"
 RECS="$HOME/Videos/Recordings"
 THEME="$HOME/.local/state/omarchy/current/theme"   # rendered by sway-theme-set
 DEFAULT_WALLPAPER="$DOTFILES/wallpapers/neon-city.png"
-WALLPAPER_DIRS=("$THEME/backgrounds" "$DOTFILES/wallpapers" "$HOME/repos/cool-wallpapers/tokyonight")  # cloned by init.sh
+WALLPAPER_DIRS=("$THEME/backgrounds" "$HOME/.config/omarchy/backgrounds/$(cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null)" "$DOTFILES/wallpapers")  # theme + extras from theme-bg-sync
 
 # ---------- tiny menu framework: parallel arrays of labels and actions ----------
 fz() { fuzzel --config "$THEME/fuzzel.ini" "$@"; }

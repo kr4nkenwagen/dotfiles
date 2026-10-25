@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# theme-bg-sync: fetch extra wallpapers per theme and expose them to Omarchy and the
+# Ubuntu/Sway profile through ~/.config/omarchy/backgrounds/<theme>/.
+#   theme-bg-sync             sync every source in themes/backgrounds.tsv
+#   theme-bg-sync THEME...    only those themes
+#   theme-bg-sync --list      show the manifest and how many backgrounds each theme has
+# Repos are cloned shallow and sparse (only the listed dirs) into ~/.local/share/wallpapers,
+# one clone per repo; every image >= 20 KB is symlinked into the theme's backgrounds dir.
+# Only symlinks into the store are managed: files you drop into a backgrounds dir stay.
+set -u
+
+DOTFILES="${DOTFILES_DIR:-$HOME/repos/dotfiles}"
+MANIFEST="${THEME_BG_MANIFEST:-$DOTFILES/themes/backgrounds.tsv}"
+STORE="$HOME/.local/share/wallpapers"
+OUT="$HOME/.config/omarchy/backgrounds"
+MIN_KB=20   # wordmarks and logos are under 15 KB; dithered 4K PNGs start around 23 KB
+
+warn() { printf 'theme-bg-sync: %s\n' "$1" >&2; }
+[ -f "$MANIFEST" ] || { warn "no manifest at $MANIFEST"; exit 1; }
+LIST=0; [ "${1:-}" = --list ] && { LIST=1; shift; }
+
+repo_dir() {  # URL -> store dir: host-owner-repo
+  local u="${1%/}"; u="${u%.git}"; u="${u#*://}"; u="${u#git@}"; u="${u/://}"
+  printf '%s/%s' "$STORE" "${u//\//-}"
+}
+short_name() { local n; n=$(basename "$(repo_dir "$1")"); printf '%s' "${n#*-}"; }   # owner-repo
+
+# manifest -> parallel arrays (filtered by the theme names given as arguments)
+T=(); U=(); B=(); D=()
+while IFS=$'\t' read -r theme url branch dirs _; do
+  [ -n "$theme" ] && [ "${theme:0:1}" != "#" ] || continue
+  [ -n "${url:-}" ] && [ -n "${dirs:-}" ] || { warn "bad manifest line for '$theme'"; continue; }
+  if [ $# -gt 0 ] && [[ " $* " != *" $theme "* ]]; then continue; fi
+  [ "${branch:-}" = "-" ] && branch=""
+  T+=("$theme"); U+=("$url"); B+=("${branch:-}"); D+=("${dirs//,/ }")
+done < <(grep -v '^[[:space:]]*$' "$MANIFEST")
+
+if [ "$LIST" = 1 ]; then
+  for i in "${!T[@]}"; do
+    n=$(find "$OUT/${T[$i]}" -maxdepth 1 -type l -name "$(short_name "${U[$i]}")-*" 2>/dev/null | wc -l)
+    printf '%-17s %-62s %-45s %s linked\n' "${T[$i]}" "${U[$i]}" "${D[$i]}" "$n"
+  done
+  exit 0
+fi
+
+# 1. one clone per repo with the union of its dirs
+declare -A REPO_DIRS=() REPO_BRANCH=() REPO_OK=()
+for i in "${!U[@]}"; do
+  REPO_DIRS[${U[$i]}]+=" ${D[$i]}"; REPO_BRANCH[${U[$i]}]="${B[$i]}"
+done
+sync_repo() {  # sync_repo URL BRANCH "dir dir ..."
+  local url=$1 branch=$2 dirs=$3 d; d=$(repo_dir "$url")
+  mkdir -p "$STORE"
+  if [ ! -d "$d/.git" ]; then
+    rm -rf "$d"
+    if [[ " $dirs " == *" . "* ]]; then
+      # shellcheck disable=SC2086
+      git clone -q --depth 1 ${branch:+--branch "$branch"} "$url" "$d" || { warn "clone failed: $url"; return 1; }
+    else
+      # shellcheck disable=SC2086
+      git clone -q --depth 1 --filter=blob:none --sparse ${branch:+--branch "$branch"} "$url" "$d" || { warn "clone failed: $url"; return 1; }
+      # shellcheck disable=SC2086
+      git -C "$d" sparse-checkout set $dirs 2>/dev/null || warn "sparse-checkout failed: $url"
+    fi
+  else
+    # shellcheck disable=SC2086
+    [[ " $dirs " == *" . "* ]] || git -C "$d" sparse-checkout set $dirs 2>/dev/null
+    git -C "$d" pull -q --ff-only --depth 1 2>/dev/null || warn "pull failed, keeping current files: $url"
+  fi
+}
+for url in "${!REPO_DIRS[@]}"; do
+  printf ':: %s\n' "$url"
+  sync_repo "$url" "${REPO_BRANCH[$url]}" "${REPO_DIRS[$url]}" && REPO_OK[$url]=1
+done
+
+# 2. rebuild the per-theme link dirs (managed symlinks only)
+declare -A SEEN=()
+for i in "${!T[@]}"; do
+  theme=${T[$i]}
+  if [ -z "${SEEN[$theme]:-}" ]; then
+    SEEN[$theme]=1
+    [ -L "$OUT/$theme" ] && rm -f "$OUT/$theme"   # an older init.sh linked the whole dir elsewhere
+    mkdir -p "$OUT/$theme"
+    while IFS= read -r l; do
+      t=$(readlink "$l"); if [[ $t == "$STORE"/* ]] || [ ! -e "$l" ]; then rm -f "$l"; fi
+    done < <(find "$OUT/$theme" -maxdepth 1 -type l)
+  fi
+  [ -n "${REPO_OK[${U[$i]}]:-}" ] || continue
+  d=$(repo_dir "${U[$i]}"); short=$(short_name "${U[$i]}")
+  for sub in ${D[$i]}; do
+    [ -d "$d/$sub" ] || { warn "${U[$i]}: no directory '$sub'"; continue; }
+    while IFS= read -r f; do
+      ln -sfn "$f" "$OUT/$theme/$short-$(basename "$f")"
+    done < <(find "$d/$sub" -type f -size +"${MIN_KB}k" ! -path '*/thumbs/*' \
+               \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \))
+  done
+done
+for theme in "${!SEEN[@]}"; do
+  printf '%s: %s backgrounds\n' "$theme" "$(find -L "$OUT/$theme" -maxdepth 1 -type f | wc -l)"
+done | sort
+
+# Omarchy's picker caches thumbnails; warm it in the background.
+if command -v omarchy-theme-bg-cache >/dev/null 2>&1; then (omarchy-theme-bg-cache >/dev/null 2>&1 &); fi
+exit 0

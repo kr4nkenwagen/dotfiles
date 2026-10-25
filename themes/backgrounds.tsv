@@ -1,0 +1,37 @@
+# Extra wallpapers per theme, fetched by theme-bg-sync (theme stow package) into
+# ~/.local/share/wallpapers and linked into ~/.config/omarchy/backgrounds/<theme>/,
+# the per-theme user directory both Omarchy and sway-theme-set read.
+# Images are cloned at install time, never committed here. Remove a line to drop a source.
+# theme	url	branch(- = default)	dirs (comma separated, . = whole repo)	# licence / note
+catppuccin	https://github.com/imanubdesigner/wallppuccin	-	wallpapers	# none, credits artists; Mocha recolours 4K
+catppuccin-latte	https://github.com/ryanyogan/omarchy-catppuccin-latte-theme	-	backgrounds	# MIT
+nord	https://codeberg.org/juna-lab/Nord-Wallpapers	-	wallpapers	# MIT; live mirror of the archived Gurjaka set
+gruvbox	https://github.com/AngelJumbo/gruvbox-wallpapers	-	wallpapers/minimalistic,wallpapers/mix	# none
+rose-pine	https://github.com/rose-pine/wallpapers	-	illustration,photography,generative,miscellaneous	# CC0
+kanagawa	https://github.com/philikarus/Kanagawa-wallpapers	-	wallpapers/landscape	# none
+everforest	https://github.com/Georgvwt/Everforest-Walls	-	Everforest-Wallpapers	# none
+tokyo-night	https://github.com/atraxsrc/cool-wallpapers	-	tokyonight	# GPL-2
+tokyo-night	https://codeberg.org/juna-lab/TokyoNight-Wallpapers	-	wallpapers	# GPL-3
+osaka-jade	https://github.com/atraxsrc/cool-wallpapers	-	omarchy/shades-of-jade	# MIT
+osaka-jade	https://github.com/viniciusapl97/wallpapers	-	osaka-jade	# none
+matte-black	https://github.com/codegik/omarchy-elysian-matte-theme	-	backgrounds	# none, credits artists
+matte-black	https://github.com/mayaanhafeez/wallpapers	-	matte-black	# none
+ristretto	https://github.com/craigderington/omarchy-cortado-darkly-theme	-	backgrounds	# MIT
+ristretto	https://github.com/viniciusapl97/wallpapers	-	ristretto	# none
+ethereal	https://github.com/bjarneo/omarchy-ethereal-nebula-theme	-	backgrounds	# none; videos skipped
+miasma	https://github.com/OldJobobo/omarchy-miasma-theme	-	backgrounds	# none; upstream, 3x what Omarchy ships
+solitude	https://github.com/HANCORE-linux/omarchy-solitude-theme	-	backgrounds	# MIT; upstream
+solitude	https://github.com/PhyAMR/omarchy-atlas-solitude	-	backgrounds	# MIT
+flexoki-light	https://github.com/krishna4a6av/Wallpapers	-	Flexoki	# 'feel free to use'; mixed resolutions
+hackerman	https://github.com/BVisagie/omarchy-matrix-theme	-	backgrounds	# MIT
+hackerman	https://github.com/CerealThriller/omarchy-the-matrix-theme	-	backgrounds	# free to use (README)
+last-horizon	https://github.com/CaptainVirgil/omarchy-expanse-theme	-	backgrounds	# MIT
+lumon	https://github.com/OldJobobo/omarchy-lumon-theme	-	backgrounds	# none; upstream
+retro-82	https://github.com/OldJobobo/omarchy-retro-82-theme	-	backgrounds,old-backgrounds	# none; upstream
+vantablack	https://github.com/KigoJomo/omarchy-ceres-theme	-	backgrounds	# MIT
+vantablack	https://github.com/FrenzyExists/wallpapers	-	Monochrome	# MIT
+white	https://github.com/atraxsrc/cool-wallpapers	-	omarchy/white-gold,omarchy/harbor	# MIT
+white	https://github.com/hellwigio/omarchy-sequoia-light-theme	-	backgrounds	# MIT
+kr4nkengine	https://github.com/limehawk/omarchy-amber-oled-theme	-	backgrounds	# MIT; amber on black, 132 dithered 4K PNGs
+kr4nkengine	https://github.com/atraxsrc/cool-wallpapers	-	omarchy/black-gold	# MIT
+# lupine: nothing beyond what Omarchy ships (bjarneo/omarchy-lupine-theme is a subset)

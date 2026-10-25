@@ -17,7 +17,7 @@ THEME_DIRS=("$HOME/.config/omarchy/themes" "$DOTFILES/themes")   # first match w
 TEMPLATES="${SWAY_THEME_TEMPLATES:-$HOME/.config/sway-theme}"
 CURRENT="$STATE/theme"
 NEXT="$STATE/next-theme"
-EXTRA_BACKGROUNDS="$HOME/repos/cool-wallpapers/tokyonight"       # for tokyo-night, cloned by init.sh
+USER_BACKGROUNDS="$HOME/.config/omarchy/backgrounds"              # per-theme extras, filled by theme-bg-sync
 
 die() { printf 'sway-theme-set: %s\n' "$1" >&2; exit 1; }
 snake() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr ' _' '--'; }
@@ -65,10 +65,8 @@ stage() {  # stage DIR: copy the theme and render the templates into $NEXT
   done
 }
 
-backgrounds() {  # one path per line, sorted
-  local dirs=("$CURRENT/backgrounds")
-  [ "$1" = tokyo-night ] && dirs+=("$EXTRA_BACKGROUNDS")
-  find -L "${dirs[@]}" -maxdepth 1 -type f \
+backgrounds() {  # backgrounds THEME: one path per line, sorted (theme's own + the user dir, like Omarchy)
+  find -L "$CURRENT/backgrounds" "$USER_BACKGROUNDS/$1" -maxdepth 1 -type f \
     \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp' \) 2>/dev/null | sort
 }
 
