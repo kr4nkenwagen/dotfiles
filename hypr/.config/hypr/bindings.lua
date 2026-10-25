@@ -119,3 +119,5 @@ o.bind("SUPER + ALT + SPACE", "Omarchy menu", "omarchy-menu toggle root")
 
 -- Steam in the k4 launcher (steam-menu, menus stow package): games with cover art, status, store.
 o.bind("SUPER + CTRL + G", "Steam", "steam-menu")
+-- Every app integration (Steam, GitHub, Spotify, Docker, Ollama, Clipboard) in one k4 menu.
+o.bind("SUPER + CTRL + M", "Apps (k4)", "k4-apps")

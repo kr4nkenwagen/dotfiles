@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# spotify-menu: Spotify in the k4 launcher through its MPRIS D-Bus interface (busctl; no
+# playerctl or Spotify login needed): now playing, play/pause/next/previous, shuffle,
+# repeat, copy the track link, search.
+K4_NAME=spotify-menu
+. "$HOME/.local/share/k4/lib.sh"
+available() { command -v spotify >/dev/null; }
+part() { printf 'S\tspotify\tSpotify\tM\tNow playing and playback\t󰓇\nL\tspotify-menu section\n'; }
+
+DEST=org.mpris.MediaPlayer2.spotify
+OBJ=/org/mpris/MediaPlayer2
+P=org.mpris.MediaPlayer2.Player
+running() { busctl --user status "$DEST" >/dev/null 2>&1; }
+prop() { busctl --user -j get-property "$DEST" "$OBJ" "$P" "$1" 2>/dev/null | jq -r '.data'; }
+call() { busctl --user call "$DEST" "$OBJ" "$P" "$@" >/dev/null 2>&1; }
+meta() { busctl --user -j get-property "$DEST" "$OBJ" "$P" Metadata 2>/dev/null | jq -r --arg k "$1" '.data[$k].data | if type == "array" then join(", ") else (. // "") | tostring end'; }
+focus() {  # bring the Spotify window forward
+  if [ -n "${SWAYSOCK:-}" ]; then swaymsg '[class="Spotify"] focus' >/dev/null 2>&1
+  elif command -v hyprctl >/dev/null; then hyprctl dispatch focuswindow 'class:^(Spotify|spotify)$' >/dev/null 2>&1; fi; }
+toggle_shuffle() { local s; [ "$(prop Shuffle)" = true ] && s=false || s=true
+  busctl --user set-property "$DEST" "$OBJ" "$P" Shuffle b "$s"; notify Shuffle "$([ $s = true ] && echo on || echo off)"; }
+cycle_loop() { local l; case "$(prop LoopStatus)" in None) l=Playlist ;; Playlist) l=Track ;; *) l=None ;; esac
+  busctl --user set-property "$DEST" "$OBJ" "$P" LoopStatus s "$l"; notify Repeat "$l"; }
+now() { local t a; t=$(meta xesam:title); a=$(meta xesam:artist); printf '%s' "${t:-—}${a:+ — $a}"; }
+search() { local q; q=$(ask "Search Spotify") && [ -n "$q" ] && bg xdg-open "spotify:search:$(printf '%s' "$q" | jq -sRr @uri)"; }
+
+section() {
+  if ! running; then hdr "Spotify"; item "Open Spotify" 'bg spotify' "not running"; item "Search Spotify…" search; return; fi
+  local st; st=$(prop PlaybackStatus)
+  hdr "Now playing"
+  stay "$(now)" 'copy "track link" "$(meta xesam:url)"' "$(meta xesam:album)"
+  hdr "Playback"
+  stay "$([ "$st" = Playing ] && echo Pause || echo Play)" 'call PlayPause; sleep 0.2; notify Spotify "$(prop PlaybackStatus)"' "$st"
+  stay "Next" 'call Next; sleep 0.4; notify Next "$(now)"'
+  stay "Previous" 'call Previous; sleep 0.4; notify Previous "$(now)"'
+  stay "Shuffle" toggle_shuffle "$([ "$(prop Shuffle)" = true ] && echo on || echo off)"
+  stay "Repeat" cycle_loop "$(prop LoopStatus)"
+  hdr "More"
+  item "Show Spotify" focus
+  item "Search Spotify…" search
+}
+k4_dispatch "$@"

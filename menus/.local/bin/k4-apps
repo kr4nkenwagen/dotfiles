@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# k4-apps: every installed app integration (Steam, GitHub, Docker, Spotify, Ollama,
+# Clipboard) in one k4 menu. Omarchy: Super+Ctrl+M.
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/snap/bin:$PATH"
+INTEGRATIONS=(steam-menu gh-menu spotify-menu docker-menu ollama-menu clipse-menu)
+tree() { local s; for s in "${INTEGRATIONS[@]}"; do command -v "$s" >/dev/null && "$s" available && "$s" part; done; printf 'R\tk4-exec\n'; }
+case "${1:-}" in
+  tree) tree ;;
+  parts) for s in "${INTEGRATIONS[@]}"; do command -v "$s" >/dev/null && "$s" available && "$s" part; done ;;
+  "") out=$(tree | k4 --menu) || exit 0
+      case "$out" in url:*) setsid -f xdg-open "${out#url:}" >/dev/null 2>&1 ;; *) k4-exec "$out" ;; esac ;;
+  *) echo "usage: k4-apps [tree|parts]" >&2; exit 2 ;;
+esac

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# docker-menu: Docker containers in the k4 launcher: start/stop, logs, prune, lazydocker.
+K4_NAME=docker-menu
+. "$HOME/.local/share/k4/lib.sh"
+available() { command -v docker >/dev/null; }
+part() { printf 'S\tdocker\tDocker\tX\tContainers, logs and cleanup\t󰡨\nL\tdocker-menu section\n'; }
+
+section() {
+  local err; err=$(docker info --format '{{.ServerVersion}}' 2>&1 >/dev/null)
+  if [ -n "$err" ]; then
+    case "$err" in
+      *"permission denied"*)
+        item "No access to the Docker socket" "notify Docker 'Add yourself to the docker group: sudo usermod -aG docker \$USER, then log in again'" "needs docker group"
+        item "Add me to the docker group" "tui_wait 'sudo usermod -aG docker \"\$USER\" && echo Log out and back in for it to apply.'" "sudo" ;;
+      *) item "Docker is not running" ':' ""
+         item "Start Docker" "tui_wait 'sudo systemctl start docker'" "sudo" ;;
+    esac
+    return
+  fi
+  local name state status image n=0
+  hdr "Containers · Enter starts or stops"
+  while IFS=$'\t' read -r name state status image; do
+    if [ "$state" = running ]; then stay "$name" "docker stop '$name' >/dev/null && notify '$name' stopped" "running · $image"
+    else stay "$name" "docker start '$name' >/dev/null && notify '$name' started" "$state · $image"; fi
+    n=$((n+1))
+  done < <(docker ps -a --format '{{.Names}}\t{{.State}}\t{{.Status}}\t{{.Image}}')
+  [ $n -gt 0 ] || item "No containers" ':'
+  if docker ps -q | grep -q .; then
+    hdr "Logs"
+    while read -r name; do item "Logs: $name" "tui docker logs -f --tail 200 '$name'"; done < <(docker ps --format '{{.Names}}')
+  fi
+  hdr "More"
+  command -v lazydocker >/dev/null && item "lazydocker" 'tui lazydocker'
+  stay "Prune stopped containers and dangling images" 'notify Docker "$(docker system prune -f 2>&1 | tail -1)"' "$(docker images -q | wc -l) images" "confirm=Prune Docker?|Removes stopped containers, unused networks and dangling images."
+}
+k4_dispatch "$@"

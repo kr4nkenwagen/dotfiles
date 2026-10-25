@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# clipse-menu: clipse's clipboard history in the k4 launcher: Enter copies an entry back,
+# pinned entries first, clear the history.
+K4_NAME=clipse-menu
+. "$HOME/.local/share/k4/lib.sh"
+available() { command -v clipse >/dev/null; }
+part() { printf 'S\tclipboard\tClipboard\tP\tHistory from clipse\t󰅌\nL\tclipse-menu section\n'; }
+
+HIST="$HOME/.config/clipse/clipboard_history.json"
+copy_entry() {  # copy_entry RECORDED: the entry with that timestamp back onto the clipboard
+  local file val
+  file=$(jq -r --arg r "$1" '.clipboardHistory[] | select(.recorded == $r) | .filePath' "$HIST")
+  if [ -n "$file" ] && [ "$file" != null ] && [ -f "$file" ]; then wl-copy < "$file"; notify Copied image; return; fi
+  val=$(jq -r --arg r "$1" '.clipboardHistory[] | select(.recorded == $r) | .value' "$HIST")
+  printf '%s' "$val" | wl-copy; notify Copied "$(printf '%s' "$val" | tr '\n\t' '  ' | cut -c1-60)"; }
+ago() { local s=$(( $(date +%s) - $(date -d "${1%.*}" +%s 2>/dev/null || date +%s) ))
+  if [ $s -lt 3600 ]; then echo "$(( s / 60 )) min ago"; elif [ $s -lt 86400 ]; then echo "$(( s / 3600 )) h ago"; else echo "$(( s / 86400 )) d ago"; fi; }
+rows() {  # rows true|false: pinned or not, newest first: recorded<TAB>label
+  jq -r --argjson p "$1" '.clipboardHistory[] | select(.pinned == $p) |
+    (if .filePath != "null" and .filePath != null then "Image  \(.filePath | split("/") | last)" else (.value | gsub("[\\s]+"; " ") | ltrimstr(" ") | rtrimstr(" ") | .[0:80]) end) as $l |
+    select($l != "") | "\(.recorded)\t\($l)"' "$HIST" 2>/dev/null; }
+
+section() {
+  [ -f "$HIST" ] || { item "No clipboard history yet" ':' "is clipse -listen running?"; return; }
+  local r label n=0
+  if [ -n "$(rows true)" ]; then
+    hdr "Pinned"
+    while IFS=$'\t' read -r r label; do stay "$label" "copy_entry '$r'" "pinned"; done < <(rows true)
+  fi
+  hdr "Recent · Enter copies"
+  while IFS=$'\t' read -r r label; do stay "$label" "copy_entry '$r'" "$(ago "$r")"; n=$((n+1)); done < <(rows false | head -60)
+  [ $n -gt 0 ] || item "History is empty" ':'
+  pgrep -x clipse >/dev/null || item "clipse is not recording" "bg clipse -listen; notify clipse 'listening'" "start it"
+  hdr "Manage"
+  item "Open clipse" 'tui clipse'
+  stay "Clear history" 'clipse -clear && notify Clipboard "history cleared (pinned kept)"' "keeps pinned" "confirm=Clear the clipboard history?|Pinned entries stay."
+}
+k4_dispatch "$@"

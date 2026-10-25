@@ -1,0 +1,5 @@
+#!/bin/sh
+# k4-exec ID: run a k4 action id from the *-menu scripts (base64 of a shell command).
+# k4 uses it as the runner (R) for in-place rows; K4_RUN makes messages go to k4's footer.
+export K4_RUN=1
+eval "$(printf '%s' "${1:?id}" | base64 -d)"
