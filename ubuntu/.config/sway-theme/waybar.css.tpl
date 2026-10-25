@@ -1,16 +1,29 @@
-/* Rendered by sway-theme-set from the current theme; waybar is started with -s on this file. */
-@define-color bg     {{ background }};
-@define-color fg     {{ foreground }};
-@define-color blue   {{ accent }};
-@define-color gray   {{ muted }};
-@define-color green  {{ green }};
-@define-color yellow {{ yellow }};
-@define-color red    {{ red }};
+/* Rendered by sway-theme-set from the current theme; waybar is started with -s on this file.
+   Each module gets its own palette colour so the bar reads at a glance:
+   workspaces accent · clock foreground · audio magenta · network cyan ·
+   bluetooth blue · battery green/yellow/red by state. */
+@define-color bg        {{ background }};
+@define-color bg_light  {{ lighter_background }};
+@define-color fg        {{ foreground }};
+@define-color fg_bright {{ bright_foreground }};
+@define-color fg_dim    {{ dark_foreground }};
+@define-color accent    {{ accent }};
+@define-color selection {{ selection }};
+@define-color muted     {{ muted }};
+@define-color red       {{ red }};
+@define-color orange    {{ orange }};
+@define-color yellow    {{ yellow }};
+@define-color green     {{ green }};
+@define-color cyan      {{ cyan }};
+@define-color blue      {{ blue }};
+@define-color magenta   {{ magenta }};
 
 * {
   font-family: "Terminess Nerd Font Mono", monospace;
   font-size: 13px;
   min-height: 0;
+  border: none;
+  border-radius: 0;
 }
 
 window#waybar {
@@ -18,53 +31,77 @@ window#waybar {
   color: @fg;
 }
 
+/* Workspaces: the focused one is a pill in the accent colour, like the tmux window pill. */
+#workspaces {
+  margin: 3px 6px;
+}
 #workspaces button {
-  padding: 0 6px;
-  color: @gray;
+  padding: 0 8px;
+  margin: 0 2px;
+  color: @fg_dim;
   background: transparent;
-  border: none;
-  border-radius: 0;
+  border-radius: 10px;
 }
-
+#workspaces button:hover {
+  color: @fg_bright;
+  background: @selection;
+  box-shadow: none;
+  text-shadow: none;
+}
 #workspaces button.focused {
-  color: @blue;
+  color: @bg;
+  background: @accent;
+  font-weight: bold;
 }
-
 #workspaces button.urgent {
-  color: @red;
+  color: @bg;
+  background: @red;
 }
 
-#clock,
+#clock {
+  color: @fg_bright;
+  font-weight: bold;
+  padding: 0 10px;
+}
+
+/* Right side: one colour per module, dimmed when inactive. */
 #tray,
 #wireplumber,
 #network,
 #bluetooth,
 #battery {
   padding: 0 8px;
+  margin: 3px 0;
 }
+#tray > .passive { -gtk-icon-effect: dim; }
+#tray > .needs-attention { -gtk-icon-effect: highlight; }
 
-#wireplumber.muted,
-#network.disconnected {
-  color: @gray;
-}
+#wireplumber { color: @magenta; }
+#wireplumber.muted { color: @muted; }
 
-#battery.charging {
-  color: @green;
-}
+#network { color: @cyan; }
+#network.disconnected { color: @muted; }
 
-#battery.warning:not(.charging) {
-  color: @yellow;
-}
+#bluetooth { color: @blue; }
+#bluetooth.connected { color: @blue; font-weight: bold; }
+#bluetooth.off, #bluetooth.disabled { color: @muted; }
 
+#battery { color: @green; }
+#battery.charging, #battery.plugged { color: @green; }
+#battery.warning:not(.charging) { color: @yellow; }
 #battery.critical:not(.charging) {
   color: @red;
+  animation: blink 1s steps(2) infinite;
+}
+@keyframes blink {
+  to { color: @muted; }
 }
 
 tooltip {
   background: @bg;
-  border: 1px solid @blue;
+  border: 1px solid @accent;
+  border-radius: 6px;
 }
-
 tooltip label {
   color: @fg;
 }

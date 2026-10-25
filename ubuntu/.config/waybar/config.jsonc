@@ -1,4 +1,4 @@
-// Minimal waybar for the Ubuntu profile. Tokyo Night colours live in style.css.
+// Minimal waybar for the Ubuntu profile. Colours come from the theme: sway-theme-set renders waybar.css.
 {
   "layer": "top",
   "position": "top",
