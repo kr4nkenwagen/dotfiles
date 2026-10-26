@@ -152,3 +152,17 @@ hl.unbind("SUPER + CTRL + V")
 o.bind("SUPER + CTRL + V", "Clipboard (k4)", "clipse-menu")
 hl.unbind("SUPER + CTRL + C")
 o.bind("SUPER + CTRL + C", "Capture (k4)", "sway-menu capture")
+
+-- Notifications through k4 (k4-notify; it replaces Omarchy's notification service): Super+N the
+-- centre, and Omarchy's comma keys on k4's service.
+o.bind("SUPER + N", "Notifications (k4)", "k4-notify center")
+hl.unbind("SUPER + comma")
+o.bind("SUPER + comma", "Dismiss last notification", "k4-notify dismiss")
+hl.unbind("SUPER + SHIFT + comma")
+o.bind("SUPER + SHIFT + comma", "Dismiss all notifications", "k4-notify clear")
+hl.unbind("SUPER + CTRL + comma")
+o.bind("SUPER + CTRL + comma", "Do not disturb", "k4-notify dnd")
+hl.unbind("SUPER + ALT + comma")
+o.bind("SUPER + ALT + comma", "Invoke last notification", "k4 --notify-ctl invoke-last")
+hl.unbind("SUPER + SHIFT + ALT + comma")
+o.bind("SUPER + SHIFT + ALT + comma", "Notification history", "k4-notify center")

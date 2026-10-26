@@ -1921,6 +1921,11 @@ if [ -n "$OMARCHY" ]; then
       *) k4_page_base "$@" ;;
     esac; }
 fi
+# Do not disturb through k4's notification service when it runs (k4-notify), else the platform's
+eval "$(declare -f dnd_on | sed '1s/^dnd_on/wm_dnd_on/')"; eval "$(declare -f toggle_dnd | sed '1s/^toggle_dnd/wm_toggle_dnd/')"
+k4_notify_up() { command -v k4 >/dev/null && k4 --notify-ctl status >/dev/null 2>&1; }
+dnd_on() { if k4_notify_up; then [ "$(k4 --notify-ctl status | cut -f2)" = 1 ]; else wm_dnd_on; fi; }
+toggle_dnd() { if k4_notify_up; then k4 --notify-ctl "dnd toggle" >/dev/null; else wm_toggle_dnd; fi; }
 
 case "${1:-}" in
   lock) lock ;;

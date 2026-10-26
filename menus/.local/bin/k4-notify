@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# k4-notify: k4's notifications (the Kestrel design): the service that shows popups and keeps
+# the history (k4 --notifyd, in place of Omarchy's or mako), and the centre (k4 --notify-center).
+#   k4-notify daemon            start the service unless it runs
+#   k4-notify center            the centre at the top right (again: closes it; from a bar click: under it)
+#   k4-notify dnd [on|off|toggle]   do not disturb
+#   k4-notify dismiss | clear   the newest popup | everything
+#   k4-notify status            "unread<TAB>dnd" (exit 1 when the service is not running)
+export PATH="$HOME/.local/bin:$PATH"
+case "${1:-center}" in
+  daemon) k4 --notify-ctl status >/dev/null 2>&1 && exit 0
+          exec k4 --notifyd ;;
+  center) pkill -f '^k4 --notify-center' && exit 0
+          popup=()
+          [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && popup=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,right,${K4_BAR_POS:-top}")
+          exec k4 --notify-center "${popup[@]}" ;;
+  dnd) exec k4 --notify-ctl "dnd ${2:-toggle}" ;;
+  dismiss) exec k4 --notify-ctl dismiss-popups ;;
+  clear) exec k4 --notify-ctl clear ;;
+  status) exec k4 --notify-ctl status ;;
+  *) echo "usage: k4-notify daemon|center|dnd [on|off|toggle]|dismiss|clear|status" >&2; exit 2 ;;
+esac

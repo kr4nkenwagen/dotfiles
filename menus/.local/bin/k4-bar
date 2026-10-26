@@ -43,7 +43,15 @@ status() {
     [ -n "$t" ] || { out; return; }
     if [ "$st" = Playing ]; then out icon 󰝚 icon_tone accent text "$t" text2 "$a" tooltip "$t — $a"
     else out icon 󰏤 text "$t" text2 "$a" class dim tooltip "Paused · $t — $a"; fi ;;
-  dnd)
+  dnd)  # k4's notifications: the bell with the unread count (crossed out with do not disturb)
+    local st n d
+    if st=$(k4 --notify-ctl status 2>/dev/null); then
+      n=${st%%$'\t'*}; d=${st##*$'\t'}
+      if [ "$d" = 1 ]; then out icon 󰂛 icon_tone dim text "$([ "$n" -gt 0 ] && echo "$n")" class dim tooltip "Do not disturb · $n notifications · right click turns it off"
+      elif [ "$n" -gt 0 ]; then out icon 󰂚 icon_tone accent text "$n" text_tone accent tooltip "$n notifications · Super+N"
+      else out icon 󰂜 icon_tone dim tooltip "No notifications · Super+N"; fi
+      return
+    fi
     if [ -n "$OMARCHY" ]; then case "$(omarchy-shell notifications isDnd 2>/dev/null)" in on|true) ;; *) out; return ;; esac
     else makoctl mode 2>/dev/null | grep -qx do-not-disturb || { out; return; }; fi
     out icon 󰍶 tooltip "Do not disturb · click turns it off" ;;
@@ -180,7 +188,7 @@ spec() {
   m window left window - 0 - - - - - - -
   m clock center clock "%H:%M;%a %d %b|%Y-%m-%d %H:%M:%S;w%V" 0 - "$p calendar" - - - - "px=10;next=~/.cache/k4/cal/today.tsv"
   m media center exec "$SELF status media --follow" 0 - "$p spotify" - "playerctl play-pause" "playerctl previous" "playerctl next" "maxw=200;maxw2=140;compact"
-  m dnd right exec "$SELF status dnd" 2 - "$c toggle_dnd" - - - - "px=5"
+  m dnd right exec "$SELF status dnd" 1 - "k4-notify center" "$c toggle_dnd" - - - - "px=5"
   m night right exec "$SELF status night" 3 - "$c toggle_night" - - - - "px=5"
   m rec right exec "$SELF status rec" 1 - "$c record_toggle" - - - - "px=5"
   m awake right exec "$SELF status awake" 3 - "$c toggle_idle" - - - - "px=5"

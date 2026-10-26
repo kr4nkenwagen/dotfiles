@@ -54,7 +54,8 @@ exec dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY SWAYSO
 # exec_always so a reload restarts the bar and picks up config changes.
 # The status bar: k4's (k4-bar, one per output) unless Toggle › Status bar picked Waybar or k4 is missing
 exec_always sh -c 'pkill -x waybar; pkill -f "^k4 --bar"; sleep 0.3; if [ "$(cat ~/.local/state/sway/bar 2>/dev/null || echo k4)" = k4 ] && command -v k4 >/dev/null; then exec ~/.local/bin/k4-bar; else exec waybar -c $theme/waybar.jsonc -s $theme/waybar.css; fi'
-exec mako -c $theme/mako.ini
+# notifications: k4's (k4-notify: popups, the Super+N centre), mako without k4
+exec sh -c 'command -v k4 >/dev/null && exec ~/.local/bin/k4-notify daemon || exec mako -c $theme/mako.ini'
 exec lxpolkit
 exec nm-applet
 exec blueman-applet
@@ -76,6 +77,10 @@ bindsym $mod+Shift+v exec $tui clipse
 bindsym $mod+Ctrl+e exec ~/.local/bin/emoji-menu   # emoji picker (k4), as Omarchy's Super+Ctrl+E
 bindsym $mod+Ctrl+v exec ~/.local/bin/clipse-menu  # clipboard history (k4 + clipse), as on Omarchy
 bindsym $mod+Ctrl+c exec ~/.local/bin/sway-menu capture   # k4's Capture menu, as on Omarchy
+bindsym $mod+n exec ~/.local/bin/k4-notify center     # k4's notification centre (k4-notify replaces mako)
+bindsym $mod+comma exec ~/.local/bin/k4-notify dismiss
+bindsym $mod+Shift+comma exec ~/.local/bin/k4-notify clear
+bindsym $mod+Ctrl+comma exec ~/.local/bin/k4-notify dnd
 bindsym $mod+Shift+g exec $menu_sys tui sh -c 'cd "$(~/scripts/get_last_tmux_pwd.sh)" && exec lazygit'
 bindsym $mod+Shift+f exec $menu_sys tui sh -c 'command -v wiremix >/dev/null && exec wiremix || exec pavucontrol'
 bindsym $mod+Shift+q exec $menu_sys tui bluetui
