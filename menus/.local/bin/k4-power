@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# k4-power: the system menu (k4 --power, the Kestrel design's System menu): lock, suspend,
+# hibernate, log out, reboot, shut down. Super+Esc opens it; Super+Esc again closes it.
+export PATH="$HOME/.local/bin:$PATH"
+pkill -f '^k4 --power' && exit 0
+exec sway-menu power

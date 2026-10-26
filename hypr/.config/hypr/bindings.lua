@@ -140,3 +140,8 @@ o.bind("XF86MonBrightnessDown", "Brightness down", "k4-osd brightness down", { l
 -- Super+Tab: k4's overview of every workspace (it was "next workspace"; Super+Tab again closes it).
 hl.unbind("SUPER + TAB")
 o.bind("SUPER + TAB", "Overview (k4)", "k4-overview")
+
+-- Super+Esc: k4's system menu (lock, suspend, hibernate, log out, reboot, shut down) in place of
+-- Omarchy's; Super+Esc again closes it.
+hl.unbind("SUPER + ESCAPE")
+o.bind("SUPER + ESCAPE", "System menu (k4)", "k4-power")

@@ -799,6 +799,57 @@ k4_tree() { local s name key desc icon
   printf 'G\twall\tBackground\t%s\t%q k4-view wall\n' "the theme's backgrounds + extras" "$SELF"
   printf 'R\t%q k4-run\n' "$SELF"
 }
+# ---------- the system menu (k4 --power, Super+Esc): lock, suspend, hibernate, log out, reboot, shut down ----------
+power_uptime() { local s; s=$(cut -d. -f1 /proc/uptime 2>/dev/null) || return
+  if [ "$s" -ge 86400 ]; then printf 'up %d d %d h' $((s / 86400)) $((s % 86400 / 3600))
+  elif [ "$s" -ge 3600 ]; then printf 'up %d h %d min' $((s / 3600)) $((s % 3600 / 60))
+  else printf 'up %d min' $((s / 60)); fi; }
+power_battery() { local b; for b in /sys/class/power_supply/BAT*; do [ -r "$b/capacity" ] && { printf '%s %s' "$(cat "$b/capacity")" "$(cat "$b/status" 2>/dev/null)"; return; }; done; }
+power_hibernate_ok() {  # hibernation works: Omarchy's own check; else swap (not zram) at least as big as RAM
+  if [ -n "$OMARCHY" ] && command -v omarchy-hibernation-available >/dev/null; then omarchy-hibernation-available; return; fi
+  grep -qw disk /sys/power/state 2>/dev/null || return 1
+  local swap mem; swap=$(awk '!/Filename|zram/ {s += $3} END {print s+0}' /proc/swaps); mem=$(awk '/^MemTotal/ {print $2}' /proc/meminfo)
+  [ "${swap:-0}" -ge "${mem:-1}" ]; }
+power_windows() { if [ "$WM" = hyprland ]; then hyprctl -j clients 2>/dev/null | jq 'length'
+  else swaymsg -t get_tree 2>/dev/null | jq '[recurse(.nodes[]?, .floating_nodes[]?) | select(.pid != null and (.type == "con" or .type == "floating_con"))] | length'; fi; }
+power_inhibitor() {  # what blocks shutdown now (logind's block-mode inhibitors), "who (why)"
+  busctl call --json=short org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager ListInhibitors 2>/dev/null \
+    | jq -r '[.data[0][] | select(.[3] == "block" and (.[0] | test("shutdown")))] | first | select(.) | "\(.[1]) (\(.[2]))"' 2>/dev/null; }
+power_tiles() { local bat pct st info mem n inh lockc
+  bat=$(power_battery); pct=${bat%% *}; st=${bat#* }
+  info=$(power_uptime); [ -n "$bat" ] && info="$info · battery $pct%"
+  printf 'H\t%s@%s\t%s\n' "$USER" "$(cat /etc/hostname 2>/dev/null || hostname)" "$info"
+  lockc=swaylock; [ -n "$OMARCHY" ] && lockc=omarchy-system-lock
+  printf 'T\tlock\tLock\tL\t\t%s\tBlanks the screen behind the lock. Everything keeps running.\n' "$lockc"
+  local sus=() low=""
+  [ -n "$bat" ] && [ "$st" = Discharging ] && [ "$pct" -le 10 ] && power_hibernate_ok && low=1
+  if [ -n "$OMARCHY" ] && omarchy-toggle-enabled suspend-off 2>/dev/null; then sus+=("off=turned off|Suspend is turned off in Omarchy (Setup › System Sleep).")
+  elif [ -n "$low" ]; then sus+=("warn=Suspend · battery $pct%|Battery is low. Hibernate is safer: suspend may run flat before you are back."); fi
+  printf 'T\tsuspend\tSuspend\tS\t󰒲\tsystemctl suspend\tSleeps to RAM and locks first. Wakes in about a second; uses a little battery.%s\n' "$(printf '\t%s' "${sus[@]}")"
+  if power_hibernate_ok; then printf 'T\thibernate\tHibernate\tH\t󰤁\tsystemctl hibernate\tWrites memory to swap and powers off. Uses no battery; resumes where you left off.\n'
+  else mem=$(awk '/^MemTotal/ {printf "%d", $2 / 1048576 + 0.5}' /proc/meminfo)
+    printf 'T\thibernate\tHibernate\tH\t󰤁\tsystemctl hibernate\tWrites memory to swap and powers off.\toff=no swap|No swap big enough for %s GB of RAM.%s\n' "$mem" "$([ -n "$OMARCHY" ] && echo ' Set it up with omarchy-hibernation-setup.')"; fi
+  local ex=wm_exit; [ -n "$OMARCHY" ] && ex=omarchy-system-logout || ex="swaymsg exit"
+  local rb="systemctl reboot" po="systemctl poweroff"; [ -n "$OMARCHY" ] && rb=omarchy-system-reboot po=omarchy-system-shutdown
+  printf 'T\tlogout\tLog out\tE\t󰍃\t%s\tEnds the session and returns to the login screen.\task=Log out?|Every window closes and the session ends.\n' "$ex"
+  printf 'T\treboot\tReboot\tR\t󰜉\t%s\tRestarts the machine.\task=Reboot now?|Unsaved work in open apps will be lost.\tblock\n' "$rb"
+  printf 'T\tpoweroff\tShut down\tP\t󰐥\t%s\tTurns the machine off.\task=Shut down now?|Unsaved work in open apps will be lost.\tblock\n' "$po"
+  n=$(power_windows); [ "${n:-0}" -gt 0 ] && printf 'A\t%s open · they close first, unsaved work is lost\n' "$([ "$n" = 1 ] && echo "1 window" || echo "$n windows")"
+  inh=$(power_inhibitor); [ -n "$inh" ] && printf 'I\t%s\n' "$inh"
+  return 0; }
+power_menu() { local out
+  out=$(power_tiles | k4 --power) || return 0
+  case "$out" in
+    lock) lock ;;
+    suspend) systemctl suspend ;;
+    hibernate) systemctl hibernate ;;
+    logout) wm_exit ;;
+    reboot) sys_reboot ;;
+    poweroff) sys_poweroff ;;
+    reboot!) systemctl reboot -i ;;      # Force: past the inhibitor
+    poweroff!) systemctl poweroff -i ;;
+  esac; }
+
 k4_main() { local out popup=()   # k4_main [SECTION|PAGE]: open there (under a bar module when the k4 bar ran us)
   # from a bar module: under it; a page alone in the popup frame (the menu button: the launcher)
   if [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ]; then
@@ -1874,6 +1925,8 @@ fi
 case "${1:-}" in
   lock) lock ;;
   bar-start) bar_start ;;
+  power) power_menu ;;   # the system menu (k4 --power; Super+Esc via k4-power)
+  power-tiles) power_tiles ;;   # what k4 --power reads (dry runs: sway-menu power-tiles | k4 --power --dry-run x.png)
   call) case "${2:-}" in toggle_night|toggle_idle|toggle_dnd|record_toggle|kb_cycle) "$2" ;; *) echo "sway-menu call: not callable: ${2:-}" >&2; exit 2 ;; esac ;;   # the k4 bar's indicator clicks   # the status bar picked in Toggle › Status bar (Hyprland autostart runs it)
   idle) idle ;;
   pkg-install) pkg_install ;;
