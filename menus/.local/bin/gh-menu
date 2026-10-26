@@ -51,8 +51,10 @@ fetch() {
     elif command -v sway-menu >/dev/null; then item "Open the Network menu" "bg sway-menu network; close_k4"; fi
     item "Open github.com" "open_url https://github.com; close_k4" "opens browser"; return 1
   fi
-  local rev mine iss notif ref title url draft repo reason chip
-  rev=$(prs --review-requested=@me); mine=$(prs --author=@me); iss=$(issues); notif=$(notifications)
+  local rev mine iss notif ref title url draft repo reason chip t
+  # the four queries at once: about 1 s instead of 4
+  t=$(mktemp -d); prs --review-requested=@me > "$t/rev" & prs --author=@me > "$t/mine" & issues > "$t/iss" & notifications > "$t/notif" & wait
+  rev=$(<"$t/rev"); mine=$(<"$t/mine"); iss=$(<"$t/iss"); notif=$(<"$t/notif"); rm -rf "$t"
   count() { [ -n "$1" ] && printf '%s\n' "$1" | grep -c . || echo 0; }
   local nr nm ni nn; nr=$(count "$rev"); nm=$(count "$mine"); ni=$(count "$iss"); nn=$(count "$notif")
   desc "$login · fetched when the menu opened" "$(( nr + nm + ni + nn )) items" "Search PRs and issues…"

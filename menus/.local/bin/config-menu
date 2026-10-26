@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# config-menu: the config files of the apps in ~/.config, in the k4 launcher; Enter opens one
+# in $EDITOR (in a terminal, unless it is a GUI editor). Apps with one file open it directly,
+# the rest open a page of their files. Files stowed from the dotfiles say so.
+#   config-menu            open k4 inside the Config section
+#   config-menu section    the section's lines (the Sway menu's Config section loads these)
+#   config-menu files APP  the page of APP's files
+K4_NAME=config-menu K4_ID=config K4_TITLE=Config K4_KEY=F K4_ICON= K4_DESC="Config files in ~/.config, opened in \$EDITOR"
+. "$HOME/.local/share/k4/lib.sh"
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}"
+DOTFILES="${DOTFILES_DIR:-$HOME/repos/dotfiles}"
+available() { [ -d "$CONF" ]; }
+summary() { echo "$(ls "$CONF" | wc -l) apps"; }
+
+# Text files only: by extension, or (no extension) when file(1) says so. Caches, browser
+# profiles (Default, Profile N, headless), git and node_modules are skipped.
+TEXT_EXT='conf|config|cfg|ini|toml|yaml|yml|json|jsonc|json5|lua|py|sh|bash|zsh|fish|kdl|rasi|css|scss|less|xml|desktop|list|theme|vim|el|rc|ron|txt|md|properties|tpl|nix|tmux|kbd|keys|layout|ts|js|qml|service|target|timer|env|dirs|rules|xkb|cson|plist'
+scan() {  # scan [DIR]: relative paths of the text config files under DIR (default: all of ~/.config)
+  ( cd "$CONF/${1:-}" 2>/dev/null || exit 0
+    find -L . -maxdepth 5 \( -type d \( -iname '*cache*' -o -name node_modules -o -name .git -o -name 'Local Storage' -o -name IndexedDB \
+      -o -name 'Session Storage' -o -name blob_storage -o -name Crashpad -o -name logs -o -name workspaceStorage -o -name globalStorage \
+      -o -name 'Service Worker' -o -name extensions -o -name databases -o -name shared_proto_db -o -name __pycache__ \
+      -o -name Default -o -name 'Profile *' -o -name 'Guest Profile' -o -name 'System Profile' -o -name '*-headless' -o -name 'Safe Browsing' \
+      -o -name WidevineCdm -o -name OptimizationHints -o -name 'Crash Reports' -o -name 'component_crx*' -o -name storage -o -name Partitions \) -prune \) \
+      -o -type f -size -1024k -print 2>/dev/null | sed 's|^\./||' | sort > "${TMPDIR:-/tmp}/config-menu.$$"
+    grep -iE "\.($TEXT_EXT)$" "${TMPDIR:-/tmp}/config-menu.$$"
+    grep -vE '\.[A-Za-z0-9_-]+$' "${TMPDIR:-/tmp}/config-menu.$$" | while IFS= read -r f; do printf '%s\0' "$f"; done \
+      | xargs -0r file -N --mime-encoding -- 2>/dev/null | awk -F': ' '$NF !~ /binary/ { sub(/: [^:]*$/, ""); print }'
+    rm -f "${TMPDIR:-/tmp}/config-menu.$$" ) | sort -u \
+  | awk '{ p[NR] = $0 } $0 ~ /(^|\/)Local State$/ { r = $0; sub(/\/?Local State$/, "", r); root[r] = 1 }
+         END { for (i = 1; i <= NR; i++) { keep = 1   # a Chromium-family root (has "Local State"): only its own files
+                 for (r in root) { pre = (r == "" ? "" : r "/"); if (index(p[i], pre) == 1 && index(substr(p[i], length(pre) + 1), "/")) keep = 0 }
+                 if (keep) print p[i] } }'; }
+
+open_cmd() {  # the action that opens FILE in $EDITOR
+  local ed="${EDITOR:-nvim}"
+  case "${ed%% *}" in
+    code|codium|zed|zeditor|gedit|gnome-text-editor|kate|kwrite|subl|gvim|mousepad|xed) printf 'bg sh -c %q sh %q' "$ed \"\$1\"" "$1" ;;
+    *) printf 'term_edit %q' "$1" ;;
+  esac; }
+term_edit() {  # a normal (not floating) terminal running $EDITOR on the file
+  local ed="${EDITOR:-nvim}"
+  if command -v ghostty >/dev/null; then bg ghostty -e sh -c "$ed \"\$1\"" sh "$1"
+  else bg xdg-terminal-exec sh -c "$ed \"\$1\"" sh "$1"; fi; }
+meta_of() {  # "dotfiles · 2 d ago": stowed from the dotfiles repo, and when it last changed
+  local f="$CONF/$1" r; r=$(readlink -f "$f")
+  printf '%s%s' "$([[ $r == "$DOTFILES"/* ]] && echo "dotfiles · ")" "$(ago "$(stat -L -c %Y "$f" 2>/dev/null || echo 0)")"; }
+file_row() { item "$2" "$(open_cmd "$CONF/$1")" "$(meta_of "$1")" "" "${3:-}"; }   # file_row PATH LABEL [FLAGS]
+files_page() {  # from Enter on an app: its files as a page
+  printf 'k4:page\t%s\t%s\t%s\n' "$1" "~/.config/$1 · Enter opens in ${EDITOR%% *}" "config-menu files $(printf %q "$1")"; }
+
+section() {
+  local list app n first top=() apps=() ; local -A count=() one=()
+  mapfile -t list < <(scan)
+  for f in "${list[@]}"; do
+    if [[ $f == */* ]]; then app=${f%%/*}; count[$app]=$(( ${count[$app]:-0} + 1 )); one[$app]=$f
+    else top+=("$f"); fi
+  done
+  mapfile -t apps < <(printf '%s\n' "${!count[@]}" | sort -f)
+  desc "Config files in ~/.config · Enter opens in ${EDITOR%% *}" "$(plural "${#apps[@]}" apps)" "Search configs…"
+  hints "↑↓" Move "↵" Open "⌫" Back
+  hdr "Apps" "${#apps[@]}"
+  [ ${#apps[@]} -gt 0 ] || empty "No config files found"
+  for app in "${apps[@]}"; do
+    [ -z "$app" ] && continue
+    if [ "${count[$app]}" -eq 1 ]; then file_row "${one[$app]}" "$app" "sub=  ${one[$app]#*/}"
+    else stay "$app" "files_page $(printf %q "$app")" "$(plural "${count[$app]}" files)" "mark=»"; fi
+  done
+  if [ ${#top[@]} -gt 0 ]; then hdr "Files" "${#top[@]}"
+    for f in "${top[@]}"; do file_row "$f" "$f"; done; fi
+}
+files() {  # the page: APP's files, the main config first
+  local app="$1" f rows=()
+  mapfile -t rows < <(scan "$app")
+  desc "~/.config/$app · Enter opens in ${EDITOR%% *}" "$(plural "${#rows[@]}" files)" "Filter files…"
+  hints "↑↓" Move "↵" "Open in editor" "⌫" Back
+  [ ${#rows[@]} -gt 0 ] || { empty "No text files in ~/.config/$app"; return; }
+  for f in "${rows[@]}"; do [[ $f != */* ]] && file_row "$app/$f" "$f"; done
+  local dir=""
+  for f in "${rows[@]}"; do [[ $f == */* ]] || continue
+    [ "${f%/*}" != "$dir" ] && { dir=${f%/*}; hdr "$dir"; }
+    file_row "$app/$f" "${f##*/}"; done
+}
+case "${1:-}" in
+  files) files "${2:?app}" ;;
+  *) k4_dispatch "$@" ;;
+esac

@@ -52,12 +52,14 @@ ask() {  # ask PROMPT [password] -> typed text on stdout (outside k4)
   if command -v k4 >/dev/null; then k4 --prompt-only "$1 ❯ " ${2:+--password}
   else fuzzel --dmenu --prompt "$1 ❯ " --lines 0 ${2:+--password} </dev/null; fi; }
 ago() {  # ago EPOCH -> "3 min ago", "2 h ago", "yesterday", "5 d ago", "3 w ago", "2 mo ago", "1 y ago"
-  local s=$(( $(date +%s) - ${1:-0} ))
+  local s=$(( ${EPOCHSECONDS:-$(date +%s)} - ${1:-0} ))
   if [ "$s" -lt 60 ]; then echo "just now"; elif [ "$s" -lt 3600 ]; then echo "$(( s / 60 )) min ago"
   elif [ "$s" -lt 86400 ]; then echo "$(( s / 3600 )) h ago"; elif [ "$s" -lt 172800 ]; then echo yesterday
   elif [ "$s" -lt 1209600 ]; then echo "$(( s / 86400 )) d ago"; elif [ "$s" -lt 5184000 ]; then echo "$(( s / 604800 )) w ago"
   elif [ "$s" -lt 31536000 ]; then echo "$(( s / 2592000 )) mo ago"; else echo "$(( s / 31536000 )) y ago"; fi; }
-plural() { [ "$1" = 1 ] && printf '1 %s' "$(printf '%s' "$2" | sed 's/ies$/y/; t; s/s$//')" || printf '%s %s' "$1" "$2"; }   # plural 1 models -> "1 model"
+plural() {  # plural 1 models -> "1 model", 2 entries -> "2 entries" (no forks)
+  if [ "$1" = 1 ]; then case "$2" in *ies) printf '1 %sy' "${2%ies}" ;; *s) printf '1 %s' "${2%s}" ;; *) printf '1 %s' "$2" ;; esac
+  else printf '%s %s' "$1" "$2"; fi; }
 thousands() { printf '%s' "$1" | sed ':a;s/\B[0-9]\{3\}\>/ &/;ta'; }   # 12182 -> "12 182"
 install_cmd() {  # install_cmd ARCH_PKG APT_PKG [OTHER]: the command for this machine
   if command -v pacman >/dev/null; then

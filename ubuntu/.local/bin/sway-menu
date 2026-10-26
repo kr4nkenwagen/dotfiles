@@ -696,7 +696,7 @@ k4page() { printf 'k4:page\t%s\t%s\t%s\n' "$1" "$2" "$(printf '%q ' "$SELF" k4-p
 k4rows() {  # stdin LABEL<TAB>ACTION<TAB>META<TAB>FLAGS -> A lines; one perl for long lists (k4id forks per row)
   if perl -MMIME::Base64 -e1 2>/dev/null; then perl -MMIME::Base64 -F'\t' -lane 'print join("\t", "A", encode_base64($F[1], ""), $F[0], $F[2] // "", "", $F[3] // "")'
   else local l a m f; while IFS=$'\t' read -r l a m f; do item "$l" "$a" "$m" "" "$f"; done; fi; }
-K4_SECTIONS=(apps learn capture toggle style display network audio bluetooth weather setup vpn bookmarks install update system about)
+K4_SECTIONS=(apps learn capture toggle style display network audio bluetooth weather setup config vpn bookmarks install update system about)
 k4_meta() { case "$1" in
   apps) echo "Apps|A|Installed applications|󰀻" ;;
   learn) echo "Learn|L|Reference links, opened in the browser|󰧑" ;;
@@ -709,6 +709,7 @@ k4_meta() { case "$1" in
   bluetooth) echo "Bluetooth|B|Pair, connect and forget devices|󰂯" ;;
   weather) echo "Weather|W|One fetch, shown as rows|󰖐" ;;
   setup) echo "Setup|E|Configure the machine|󰒓" ;;
+  config) echo "Config|F|Config files in ~/.config, opened in \$EDITOR|" ;;
   vpn) echo "VPN|V|FortiClient profiles|󰖂" ;;
   bookmarks) echo "Bookmarks|K|From managed Chrome · read-only|󰃀" ;;
   install) echo "Install|I|Add or remove software|󰏖" ;;
@@ -1173,6 +1174,7 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
           item "Log out" 'swaymsg exit' "" "" "$K4_CONFIRM_LOGOUT"
           item "Reboot" 'systemctl reboot' "" "" "$K4_CONFIRM_REBOOT"
           item "Shut down" 'systemctl poweroff' "" "" "$K4_CONFIRM_SHUTDOWN" ;;
+  config) if command -v config-menu >/dev/null; then config-menu section; else hdr "config-menu is not installed (stow menus)"; fi ;;   # menus/.local/bin/config-menu
   about) item "System info" about
          item "Hardware" "tui_wait 'lscpu | head -20; echo; free -h; echo; lsblk'"
          item "Disk usage" "tui_wait 'command -v duf >/dev/null && duf || df -h'"
