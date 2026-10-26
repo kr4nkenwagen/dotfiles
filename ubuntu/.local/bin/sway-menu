@@ -1055,6 +1055,75 @@ vpn_connected_name() { forticlient vpn status 2>/dev/null | grep -i -m1 "profile
 vpn_profile_toggle() { if [ "$(vpn_state)" = on ]; then forticlient vpn disconnect >/dev/null 2>&1; notify VPN Disconnected
   else bg forticlient vpn connect "$1"; notify VPN "Connecting to $1 (FortiClient asks for the login)"; fi; }
 
+# ---------- Audio: Omarchy's audio panel in k4 (pactl over PipeWire) ----------
+# Output and input: a level slider (Space mutes) and the devices (Enter makes one the
+# default and moves the playing apps onto it); every application's stream with its own
+# slider to 150% (Space mutes). On Omarchy the level goes through its DSP-aware helpers.
+audio_sink() { if command -v omarchy-audio-output-sink >/dev/null; then omarchy-audio-output-sink; else pactl get-default-sink; fi; }
+audio_level() {  # audio_level sink|source NAME: "percent<TAB>yes|no"
+  printf '%s\t%s\n' "$(pactl "get-$1-volume" "$2" 2>/dev/null | awk 'NR == 1 { for (i = 1; i <= NF; i++) if ($i ~ /%$/) { sub("%", "", $i); print $i; exit } }')" \
+    "$(pactl "get-$1-mute" "$2" 2>/dev/null | awk '{ print $2 }')"; }
+audio_set() {  # audio_set sink|source|sink-input TARGET: $K4_VALUE is a level, or on/off for mute
+  case "${K4_VALUE:-}" in
+    on|off) pactl "set-$1-mute" "$2" "$([ "$K4_VALUE" = on ] && echo 1 || echo 0)"; notify "${3:-Audio}" "$([ "$K4_VALUE" = on ] && echo muted || echo unmuted)" ;;
+    *) pactl "set-$1-volume" "$2" "${K4_VALUE}%"; notify "${3:-Audio}" "${K4_VALUE}%" ;;
+  esac; }
+audio_default() {  # audio_default sink|source INDEX NAME LABEL: default + move the playing streams
+  if [ "$1" = sink ] && command -v omarchy-audio-output-set-default >/dev/null; then omarchy-audio-output-set-default "$2" "$3"
+  elif [ "$1" = source ] && command -v omarchy-audio-input-set-default >/dev/null; then omarchy-audio-input-set-default "$2" "$3"
+  else
+    pactl "set-default-$1" "$3"
+    if [ "$1" = sink ]; then   # application streams only (a DSP chain's own stream must stay put)
+      pactl -f json list sink-inputs 2>/dev/null | jq -r '.[] | select(.properties."application.name" != null and .properties."application.name" != "EasyEffects") | .index' \
+        | while read -r i; do pactl move-sink-input "$i" "$3" 2>/dev/null; done
+    else pactl list short source-outputs 2>/dev/null | awk '{ print $1 }' | while read -r i; do pactl move-source-output "$i" "$3" 2>/dev/null; done; fi
+  fi
+  notify "$([ "$1" = sink ] && echo Output || echo Input)" "$4"; }
+audio_rows() {
+  local def lvl pct mute idx name desc on sinks sources streams
+  sinks=$(pactl -f json list sinks 2>/dev/null | jq -r '.[] | select((.ports | length == 0) or ([.ports[]? | .availability != "not available"] | any))
+    | [.index, .name, (.description // .name)] | @tsv')
+  sources=$(pactl -f json list sources 2>/dev/null | jq -r '.[] | select(.monitor_source == "" or .monitor_source == null) | select((.name | endswith(".monitor")) | not)
+    | [.index, .name, (.description // .name)] | @tsv')
+  streams=$(pactl -f json list sink-inputs 2>/dev/null | jq -r '.[] | select(.properties."application.name" != null and .properties."application.name" != "EasyEffects")
+    | (.properties."application.name") as $app | (.properties."media.name" // "") as $m
+    | [.index, ($app + (if $m != "" and ($m | ascii_downcase) != ($app | ascii_downcase) and ($m | test("^(Playback|playback|audio stream|Audio Stream|AudioStream|WEBRTC VoiceEngine)$") | not) then " · " + $m else "" end)),
+       (.volume | to_entries[0].value.value_percent | sub("%"; "")), (if .mute then "yes" else "no" end)] | @tsv')
+  desc "Output, input and every application's level" "" "Search audio…"
+  # output
+  def=$(audio_sink); IFS=$'\t' read -r pct mute < <(audio_level sink "$def")
+  on=$([ "$mute" = yes ] && echo on || echo off)
+  hdr "Output · ${pct:-0}%$([ "$mute" = yes ] && echo ' · muted')"
+  item "Volume" "audio_set sink $(printf %q "$def") Output" "" "" "slider=${pct:-0};max=150;step=5;toggle=$on;mark=$([ "$mute" = yes ] && echo 󰝟 || echo 󰕾)$([ "$mute" = yes ] && echo ';dim')"
+  def=$(pactl get-default-sink 2>/dev/null)
+  while IFS=$'\t' read -r idx name desc; do [ -n "$idx" ] || continue
+    stay "$desc" "audio_default sink $idx $(printf %q "$name") $(printf %q "$desc")" "$([ "$name" = "$def" ] && echo current)" \
+      "$([ "$name" = "$def" ] && echo 'mark=●;markc=accent' || echo 'mark=○')"
+  done <<<"$sinks"
+  # input
+  def=$(pactl get-default-source 2>/dev/null)
+  if [ -n "$sources" ]; then
+    IFS=$'\t' read -r pct mute < <(audio_level source "$def")
+    hdr "Input · ${pct:-0}%$([ "$mute" = yes ] && echo ' · muted')"
+    item "Microphone" "audio_set source $(printf %q "$def") Microphone" "" "" "slider=${pct:-0};max=150;step=5;toggle=$([ "$mute" = yes ] && echo on || echo off);mark=$([ "$mute" = yes ] && echo 󰍭 || echo 󰍬)$([ "$mute" = yes ] && echo ';dim')"
+    while IFS=$'\t' read -r idx name desc; do [ -n "$idx" ] || continue
+      stay "$desc" "audio_default source $idx $(printf %q "$name") $(printf %q "$desc")" "$([ "$name" = "$def" ] && echo current)" \
+        "$([ "$name" = "$def" ] && echo 'mark=●;markc=accent' || echo 'mark=○')"
+    done <<<"$sources"
+  fi
+  # applications
+  local n=0; [ -n "$streams" ] && n=$(printf '%s\n' "$streams" | grep -c .)
+  hdr "Applications · ← → level, Space mutes" "$n"
+  [ "$n" -gt 0 ] || printf 'E\t%s\n' "No application is playing audio"
+  while IFS=$'\t' read -r idx name pct mute; do [ -n "$idx" ] || continue
+    item "$name" "audio_set sink-input $idx $(printf %q "$name")" "" "" "slider=$pct;max=150;step=5;toggle=$([ "$mute" = yes ] && echo on || echo off);mark=$([ "$mute" = yes ] && echo 󰝟 || echo 󰕾)$([ "$mute" = yes ] && echo ';dim')"
+  done <<<"$streams"
+  hdr "More"
+  if command -v wiremix >/dev/null; then item "Open wiremix" 'tui wiremix'; fi
+  command -v pavucontrol >/dev/null && item "pavucontrol" 'bg pavucontrol'
+  stay "Restart audio" 'if command -v omarchy-restart-audio >/dev/null; then omarchy-restart-audio >/dev/null 2>&1; else systemctl --user restart pipewire pipewire-pulse wireplumber; fi; sleep 1; notify Audio restarted' "" "confirm=Restart audio?|Restarts PipeWire. Playing apps may stutter for a moment."
+}
+
 K4_CONFIRM_LOGOUT='confirm=Log out?|Closes every window and ends the sway session.'
 K4_CONFIRM_REBOOT='confirm=Reboot now?|Unsaved work in open apps will be lost.'
 K4_CONFIRM_SHUTDOWN='confirm=Shut down now?|Unsaved work in open apps will be lost.'
@@ -1136,19 +1205,16 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            hdr "More"
            stay "Ethernet" eth_toggle "$(eth_state)"
            item "Open nmtui" 'tui nmtui' ;;
-  audio) local v l id def name vol; v=$(vol_num)
+  audio) if command -v pactl >/dev/null && pactl info >/dev/null 2>&1; then audio_rows; return; fi
+         # without pactl: wpctl only (no per-app levels)
+         local v l id def name vol; v=$(vol_num)
          hdr "Volume · ${v}%"
          slider "Volume" 'vol_to "${K4_VALUE}%"' "$v"
-         slider "Microphone" 'wpctl set-volume -l 1 @DEFAULT_AUDIO_SOURCE@ "${K4_VALUE}%"; notify Microphone "$(vol_pct @DEFAULT_AUDIO_SOURCE@)"' "$(wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | awk '{ printf "%d", $2 * 100 + 0.5 }')"
-         for l in 25 50 75 100; do stay "Volume $l%" "vol_to $l%" "$([ "$v" = "$l" ] && echo current)"; done
          tog "Mute output" 'wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle; notify Output "$(out_muted)"' "$([ "$(out_muted)" = muted ] && echo on || echo off)" "$(out_muted)"
-         tog "Mute microphone" 'wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle; notify Microphone "$(mic_muted | sed s/on/muted/)"' "$(mic_muted)" "$(mic_muted | sed 's/on/muted/')"
          hdr "Output device"
          while IFS=$'\t' read -r id def name vol; do stay "$name" "wpctl set-default $id; notify Output $(printf %q "$name")" "$([ "$def" = '*' ] && echo current)"; done < <(wp_list Sinks)
          hdr "Input device"
          while IFS=$'\t' read -r id def name vol; do stay "$name" "wpctl set-default $id; notify Input $(printf %q "$name")" "$([ "$def" = '*' ] && echo current)"; done < <(wp_list Sources)
-         hdr "Streams · Enter mutes"
-         while IFS=$'\t' read -r id def name vol; do tog "$name" "wpctl set-mute $id toggle; notify $(printf %q "$name") toggled" "$([[ $vol == *MUTED* ]] && echo on || echo off)" "$([[ $vol == *MUTED* ]] && echo muted || echo playing)"; done < <(wp_list Streams)
          hdr "More"
          item "pavucontrol" 'bg pavucontrol' ;;
   bluetooth) local mac name; local -A conn=()
