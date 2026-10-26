@@ -74,6 +74,8 @@ bindsym $mod+Shift+t exec $tui btop
 bindsym $mod+Shift+e exec $tui ranger
 bindsym $mod+Shift+v exec $tui clipse
 bindsym $mod+Ctrl+e exec ~/.local/bin/emoji-menu   # emoji picker (k4), as Omarchy's Super+Ctrl+E
+bindsym $mod+Ctrl+v exec ~/.local/bin/clipse-menu  # clipboard history (k4 + clipse), as on Omarchy
+bindsym $mod+Ctrl+c exec ~/.local/bin/sway-menu capture   # k4's Capture menu, as on Omarchy
 bindsym $mod+Shift+g exec $menu_sys tui sh -c 'cd "$(~/scripts/get_last_tmux_pwd.sh)" && exec lazygit'
 bindsym $mod+Shift+f exec $menu_sys tui sh -c 'command -v wiremix >/dev/null && exec wiremix || exec pavucontrol'
 bindsym $mod+Shift+q exec $menu_sys tui bluetui

@@ -1953,7 +1953,7 @@ case "${1:-}" in
   background) set_background "${2:?image path}" ;;
   display|network|audio|bluetooth|weather) if [ "$LAUNCHER" = k4 ]; then k4_main "$1"; else submenu "$1"; fi ;;
   menu) main_menu ;;                                    # the k4 bar's menu button
-  calendar|battery|toggle|update|system|apps|bt) k4_main "$1" ;; # the k4 bar's popups
+  calendar|battery|toggle|update|system|apps|bt|capture) k4_main "$1" ;; # the k4 bar's popups; capture: Super+Ctrl+C
   kb-next) kb_cycle ;;
   timezone) if [ "$LAUNCHER" = k4 ]; then k4_main timezone; else tz_menu; fi ;;
   k4-section) k4_section "${2:?section}" ;;
