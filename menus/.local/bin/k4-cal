@@ -13,7 +13,9 @@
 
 Google needs an OAuth client of your own (one time): Google Cloud Console › APIs & Services ›
 enable the Google Calendar API › Credentials › Create credentials › OAuth client ID ›
-Desktop app › Download JSON, saved as ~/.config/k4/google-client.json. Sign-in uses the
+Desktop app › Download JSON (Google asks for a consent screen first: External, add yourself
+as a test user). k4-cal connect takes the newest ~/Downloads/client_secret*.json to
+~/.config/k4/google-client.json, or opens those pages when there is none. Sign-in uses the
 browser with a loopback redirect; the refresh token lives in the Secret Service keyring
 (secret-tool). Events are cached in ~/.cache/k4/cal (K4_CAL_DIR), so the popup opens at once
 and works offline; adds, replies and deletes made offline wait in a queue.
@@ -70,6 +72,25 @@ def client():
     return c.get("installed") or c.get("web") or c
 
 
+def have_client():
+    """The OAuth client: ~/.config/k4/google-client.json, else the newest client_secret*.json
+    in Downloads (what the Cloud Console saves), copied there."""
+    if os.path.exists(CLIENT): return True
+    dl = os.path.join(HOME, "Downloads")
+    try: found = [os.path.join(dl, n) for n in os.listdir(dl) if n.startswith("client_secret") and n.endswith(".json")]
+    except OSError: found = []
+    for f in sorted(found, key=os.path.getmtime, reverse=True):
+        try:
+            with open(f) as fh: c = json.load(fh)
+        except (OSError, ValueError): continue
+        if "client_id" in (c.get("installed") or c.get("web") or c):
+            os.makedirs(os.path.dirname(CLIENT), exist_ok=True)
+            fd = os.open(CLIENT, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as out: json.dump(c, out)
+            return True
+    return False
+
+
 def access_token():
     try:
         with open(TOKEN_CACHE) as f: t = json.load(f)
@@ -108,8 +129,11 @@ def q(s): return urllib.parse.quote(s, safe="")
 # ---------- connect ----------
 
 def connect():
-    if not os.path.exists(CLIENT):
-        say("Google needs your OAuth client first: see k4-cal --help (~/.config/k4/google-client.json)")
+    if not have_client():
+        for url in ("https://console.cloud.google.com/apis/library/calendar-json.googleapis.com",
+                    "https://console.cloud.google.com/apis/credentials"):
+            subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        say("Google Cloud  · enable the API, create an OAuth client (Desktop app), download its JSON, then ↵ again")
         return
     c = client()
     verifier = base64.urlsafe_b64encode(secrets.token_bytes(48)).rstrip(b"=").decode()
@@ -288,7 +312,8 @@ def k4():
     cals = load("cals.json", [])
     st = load("state.json", {})
     connected = bool(refresh_token())
-    if not connected: print("CS\tnone\tnot connected")
+    if not connected and not os.environ.get("K4_CAL_DIR") and not have_client(): print("CS\tsetup\tnot set up")
+    elif not connected: print("CS\tnone\tnot connected")
     elif st.get("offline"): print("CS\toffline\toffline · cached %s" % time.strftime("%H:%M", time.localtime(st.get("synced", 0))))
     elif st.get("synced"): print("CS\tok\tsynced %s" % time.strftime("%H:%M", time.localtime(st["synced"])))
     else: print("CS\tsync\t↻ syncing…")
