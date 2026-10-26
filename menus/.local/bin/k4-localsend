@@ -1,0 +1,700 @@
+#!/usr/bin/env python3
+"""k4-localsend: LocalSend for k4 (the Kestrel design's Share): send to and receive from phones and
+computers on the local network running LocalSend, without the LocalSend app.
+
+  k4-localsend daemon            the service: discovery (multicast 224.0.0.167:53317), an HTTPS
+                                 server on 53317 that receives, sending; cards through k4's
+                                 notification service
+  k4-localsend ctl CMD [ARGS…]   a command to the service (k4 --send, the bar, scripts):
+      devices · scan · send MODE TARGETS PAYLOAD · job · cancel · detach · clear
+      vis [on|off|toggle] · status · bar · trusted · untrust FP · act …
+
+Protocol: LocalSend v2 (https://github.com/localsend/protocol). Received files go to
+~/Downloads/LocalSend; settings (alias, visible, trusted devices) live in
+~/.config/k4/localsend.json; the TLS certificate in ~/.local/share/k4/localsend.
+"""
+import base64, hashlib, http.client, http.server, json, os, secrets, shutil, socket, ssl, struct
+import subprocess, sys, threading, time, urllib.parse
+
+PORT = int(os.environ.get("K4_LOCALSEND_PORT") or 53317)   # HTTP; discovery is always on UDP 53317
+UDP = 53317
+GROUP = "224.0.0.167"
+HOME = os.path.expanduser("~")
+RUN = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+SOCK = os.environ.get("K4_LOCALSEND_SOCK") or os.path.join(RUN, "k4-localsend.sock")
+NOTIFY_SOCK = os.environ.get("K4_NOTIFY_SOCK") or os.path.join(RUN, "k4-notify.sock")
+CONF = os.path.join(HOME, ".config/k4/localsend.json")
+DATA = os.path.join(HOME, ".local/share/k4/localsend")
+ICONS = {"mobile": "󰄜", "tablet": "󰓶", "laptop": "󰌢", "desktop": "󰍹", "server": "󰒋", "headless": "󰒋", "web": "󰖟"}
+SELF = os.path.realpath(__file__)
+
+lock = threading.RLock()
+
+
+DEBUG = bool(os.environ.get("K4_LOCALSEND_DEBUG"))
+
+
+def debug(*a):
+    if DEBUG:
+        import traceback
+        sys.stderr.write("k4-localsend: %s\n" % " ".join(map(str, a)))
+        traceback.print_exc()
+
+
+def human(b):
+    b = float(b)
+    if b >= 1e9: return "%.2f GB" % (b / 1e9)
+    if b >= 1e6: return "%.1f MB" % (b / 1e6)
+    return "%d KB" % max(1, round(b / 1e3))
+
+
+def field(s):
+    return ("" if s is None else str(s)).replace("\t", " ").replace("\n", " ")
+
+
+# ---------- settings and identity ----------
+
+def load_conf():
+    try:
+        with open(CONF) as f: c = json.load(f)
+    except (OSError, ValueError): c = {}
+    c.setdefault("alias", socket.gethostname())
+    c.setdefault("visible", True)
+    c.setdefault("trusted", {})
+    c.setdefault("dir", os.path.join(HOME, "Downloads/LocalSend"))
+    return c
+
+
+def save_conf(c):
+    os.makedirs(os.path.dirname(CONF), exist_ok=True)
+    tmp = CONF + ".tmp"
+    with open(tmp, "w") as f: json.dump(c, f, indent=1)
+    os.replace(tmp, CONF)
+
+
+def cert():
+    os.makedirs(DATA, exist_ok=True)
+    crt, key = os.path.join(DATA, "cert.pem"), os.path.join(DATA, "key.pem")
+    if not (os.path.exists(crt) and os.path.exists(key)):
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "3650", "-subj", "/CN=k4-localsend",
+                        "-keyout", key, "-out", crt], check=True, capture_output=True)
+        os.chmod(key, 0o600)
+    with open(crt) as f: pem = f.read()
+    der = ssl.PEM_cert_to_DER_cert(pem)
+    return crt, key, hashlib.sha256(der).hexdigest().upper()
+
+
+# ---------- the service ----------
+
+class Service:
+    def __init__(self):
+        self.conf = load_conf()
+        self.crt, self.key, self.fp = cert()
+        self.devices = {}       # fingerprint -> device dict (+ ip, seen)
+        self.sessions = {}      # receiving: session id -> dict
+        self.prompts = {}       # waiting for the user: session id -> {event, answer}
+        self.texts = {}         # received texts by card: note id -> text
+        self.job = None         # sending
+        self.recv_state = None  # for the bar: (kind, label, pct)
+
+    def info(self, announce=False):
+        return {"alias": self.conf["alias"], "version": "2.1", "deviceModel": "k4", "deviceType": "desktop",
+                "fingerprint": self.fp, "port": PORT, "protocol": "https", "download": False, "announce": announce}
+
+    # --- notifications: k4's service (post), else notify-send ---
+    def post(self, nid, title, body="", progress=-1, timeout=-1, tag="", icon="", quote="", actions=(), urgency=1, image=""):
+        acts = ",".join("%s:%s" % (k, l) for k, l in actions)
+        cmd = "env K4_LOCALSEND_SOCK=%s %s act card" % (SOCK, SELF)   # the card's buttons: KEY and the card's id follow
+        line = "\t".join(map(field, ["post", nid or 0, "LocalSend", title, body, urgency, progress, timeout, tag, icon, quote, acts, cmd, image]))
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(2)
+            s.connect(NOTIFY_SOCK)
+            s.sendall((line + "\n").encode())
+            s.shutdown(socket.SHUT_WR)
+            out = b""
+            while True:
+                b = s.recv(4096)
+                if not b: break
+                out += b
+            s.close()
+            return int(out.decode().strip() or 0)
+        except (OSError, ValueError):
+            args = ["notify-send", "-a", "LocalSend", "-p"] + (["-r", str(nid)] if nid else []) + (["-h", "int:value:%d" % progress] if progress >= 0 else [])
+            try: return int(subprocess.run(args + [title, body or quote], capture_output=True, text=True, timeout=5).stdout.strip() or 0)
+            except (OSError, ValueError, subprocess.SubprocessError): return 0
+
+    def close_card(self, nid):
+        if not nid: return
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(2); s.connect(NOTIFY_SOCK); s.sendall(b"close %d\n" % nid); s.shutdown(socket.SHUT_WR); s.recv(64); s.close()
+        except OSError: pass
+
+    def seen(self, d, ip):
+        fp = d.get("fingerprint")
+        if not fp or fp == self.fp: return
+        with lock:
+            dev = dict(d)
+            dev["ip"] = ip
+            dev["seen"] = time.time()
+            dev.setdefault("port", PORT)
+            dev.setdefault("protocol", "https")
+            self.devices[fp] = dev
+
+    # --- discovery ---
+    def udp_loop(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try: s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except (AttributeError, OSError): pass
+        s.bind(("", UDP))
+        s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack("4sl", socket.inet_aton(GROUP), socket.INADDR_ANY))
+        while True:
+            try:
+                data, (ip, _) = s.recvfrom(65536)
+                d = json.loads(data.decode())
+            except (OSError, ValueError, UnicodeDecodeError):
+                continue
+            if d.get("fingerprint") == self.fp: continue
+            self.seen(d, ip)
+            if d.get("announce", d.get("announcement")) and self.conf["visible"]:
+                threading.Thread(target=self.answer, args=(d, ip), daemon=True).start()
+
+    def answer(self, d, ip):  # an announcement: register with it over HTTP, else answer on the group
+        try:
+            self.request(d, ip, "POST", "/api/localsend/v2/register", self.info(), timeout=3)
+        except Exception:
+            self.announce(False)
+
+    def announce(self, flag=True):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+            s.sendto(json.dumps(self.info(flag)).encode(), (GROUP, UDP))
+            s.close()
+        except OSError:
+            pass
+
+    def scan(self):
+        for _ in range(3):
+            self.announce(True)
+            time.sleep(0.6)
+
+    # --- talking to another device ---
+    def conn(self, d, ip, timeout):
+        port = int(d.get("port") or PORT)
+        if (d.get("protocol") or "https") == "https":
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            return http.client.HTTPSConnection(ip, port, timeout=timeout, context=ctx)
+        return http.client.HTTPConnection(ip, port, timeout=timeout)
+
+    def request(self, d, ip, method, path, body=None, timeout=10):
+        c = self.conn(d, ip, timeout)
+        data = json.dumps(body).encode() if body is not None else None
+        c.request(method, path, body=data, headers={"Content-Type": "application/json"} if data else {})
+        r = c.getresponse()
+        out = r.read()
+        c.close()
+        if r.status == 200 and out:
+            try:
+                j = json.loads(out)
+                if path.endswith("/register"): self.seen(j, ip)
+                return r.status, j
+            except ValueError:
+                pass
+        return r.status, None
+
+    # --- sending ---
+    def start_send(self, mode, targets, payload):
+        with lock:
+            if self.job and self.job["st"] in ("waiting", "sending"): return "busy"
+            devs = [self.devices[fp] for fp in targets if fp in self.devices]
+            if not devs: return "no device"
+            files = []  # (id, name, path or None, size, type, preview)
+            if mode == "text":
+                raw = payload.encode()
+                files.append((secrets.token_hex(8), "message.txt", None, len(raw), "text/plain", payload))
+            else:
+                for p in payload.split("\x1f"):
+                    p = os.path.expanduser(p)
+                    if os.path.isdir(p):
+                        base = os.path.dirname(os.path.abspath(p).rstrip("/"))
+                        for root, _, names in os.walk(p):
+                            for n in sorted(names):
+                                fpth = os.path.join(root, n)
+                                files.append((secrets.token_hex(8), os.path.relpath(fpth, base), fpth, os.path.getsize(fpth), mime(fpth), None))
+                    elif os.path.isfile(p):
+                        files.append((secrets.token_hex(8), os.path.basename(p), p, os.path.getsize(p), mime(p), None))
+            if not files: return "nothing to send"
+            self.job = {"st": "waiting", "mode": mode, "to": devs, "files": files, "total": sum(f[3] for f in files), "done": 0,
+                        "files_done": 0, "speed": 0.0, "started": time.time(), "cancel": False, "targets": {d["fingerprint"]: ["waiting", 0.0] for d in devs},
+                        "detached": False, "card": 0, "session": None, "cur": None, "text": payload if mode == "text" else ""}
+        threading.Thread(target=self.send_job, daemon=True).start()
+        return "ok"
+
+    def send_job(self):
+        job = self.job
+        names = [d["alias"] for d in job["to"]]
+        result = "sent"
+        for d in job["to"]:
+            fp = d["fingerprint"]
+            if job["cancel"]: break
+            body = {"info": self.info(), "files": {f[0]: dict({"id": f[0], "fileName": f[1], "size": f[3], "fileType": f[4]}, **({"preview": f[5]} if f[5] else {})) for f in job["files"]}}
+            try:
+                c = self.conn(d, d["ip"], 130)
+                c.request("POST", "/api/localsend/v2/prepare-upload", body=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+                r = c.getresponse(); raw = r.read(); c.close()
+            except Exception as e:
+                debug("prepare-upload to", d.get("ip"), e)
+                job["targets"][fp] = ["failed", 0.0]; result = "failed"; continue
+            if job["cancel"]: break
+            if r.status == 204:  # nothing to upload: a message, shown there
+                job["targets"][fp] = ["sent", 1.0]; continue
+            if r.status != 200:
+                job["targets"][fp] = ["declined" if r.status in (403, 401) else "failed", 0.0]
+                result = "declined" if r.status in (403, 401) else "failed"
+                continue
+            try:
+                ans = json.loads(raw); sid = ans["sessionId"]; tokens = ans["files"]
+            except (ValueError, KeyError):
+                job["targets"][fp] = ["failed", 0.0]; result = "failed"; continue
+            job["session"], job["cur"] = sid, d
+            job["st"] = "sending"; job["targets"][fp] = ["sending", 0.0]
+            ok = True
+            sent_here = 0
+            for fid, name, path, size, ftype, preview in job["files"]:
+                if fid not in tokens: continue
+                q = urllib.parse.urlencode({"sessionId": sid, "fileId": fid, "token": tokens[fid]})
+                try:
+                    c = self.conn(d, d["ip"], 30)
+                    c.putrequest("POST", "/api/localsend/v2/upload?" + q)
+                    c.putheader("Content-Length", str(size)); c.putheader("Content-Type", "application/octet-stream"); c.endheaders()
+                    src = open(path, "rb") if path else None
+                    data_left = (preview or "").encode() if not path else None
+                    t0 = time.time()
+                    while True:
+                        if job["cancel"]: raise InterruptedError
+                        chunk = src.read(262144) if src else data_left
+                        data_left = b""
+                        if not chunk: break
+                        c.send(chunk)
+                        sent_here += len(chunk); job["done"] += len(chunk)
+                        el = max(time.time() - job["started"], 0.1)
+                        job["speed"] = job["done"] / el
+                        job["targets"][fp][1] = sent_here / max(job["total"], 1)
+                        self.job_card()
+                    if src: src.close()
+                    r = c.getresponse(); r.read(); c.close()
+                    if r.status != 200: raise OSError("upload %d" % r.status)
+                    job["files_done"] += 1
+                except InterruptedError:
+                    ok = False; break
+                except Exception as e:
+                    debug("upload", e)
+                    ok = False; job["targets"][fp] = ["failed", sent_here / max(job["total"], 1)]; result = "failed"; break
+            if job["cancel"]:
+                try: self.request(d, d["ip"], "POST", "/api/localsend/v2/cancel?sessionId=" + sid, timeout=3)
+                except Exception: pass
+                break
+            if ok: job["targets"][fp] = ["sent", 1.0]
+        if job["cancel"]: result = "cancelled"
+        elif any(t[0] == "sent" for t in job["targets"].values()) and result != "sent":
+            result = result if all(t[0] != "sent" for t in job["targets"].values()) else "sent"
+        job["st"] = result
+        job["finished"] = time.time()
+        if job["detached"]:
+            what = "the text" if job["mode"] == "text" else plural(len(job["files"]), "file")
+            if result == "sent": self.post(job["card"], "Sent to " + join_names(names), "%s · %s" % (what, human(job["total"])), tag="SAVED", icon=ICONS.get(job["to"][0].get("deviceType"), ""), actions=[("dismiss", "OK")])
+            elif result == "cancelled": self.close_card(job["card"])
+            else: self.post(job["card"], ("%s said no" % join_names(names)) if result == "declined" else ("Lost connection to " + join_names(names)), "Nothing was sent" if result == "declined" else "Stopped at %d%%" % (100 * job["done"] / max(job["total"], 1)), timeout=0, urgency=1, icon=ICONS.get(job["to"][0].get("deviceType"), ""), actions=[("dismiss", "Dismiss")])
+
+    _last_card = 0.0
+
+    def job_card(self):  # the sending card, once the Send page has closed
+        job = self.job
+        if not job or not job["detached"] or time.time() - self._last_card < 0.5: return
+        self._last_card = time.time()
+        pct = int(100 * job["done"] / max(job["total"], 1))
+        left = (job["total"] - job["done"]) / max(job["speed"], 1)
+        job["card"] = self.post(job["card"], "Sending to " + join_names([d["alias"] for d in job["to"]]),
+                                "%d of %d files · %s of %s · %s/s · %d s left" % (job["files_done"], len(job["files"]), human(job["done"]), human(job["total"]), human(job["speed"]), left),
+                                progress=pct, timeout=0, icon=ICONS.get(job["to"][0].get("deviceType"), ""), actions=[("cancel", "Cancel")])
+
+    # --- receiving ---
+    def prepare(self, body, ip):
+        info, files = body.get("info", {}), body.get("files", {})
+        self.seen(info, ip)
+        alias, fp = info.get("alias", "Someone"), info.get("fingerprint", "")
+        icon = ICONS.get(info.get("deviceType"), "󰖟")
+        with lock:
+            if any(not s.get("over") for s in self.sessions.values()): return 409, None
+        vals = list(files.values())
+        # a message: shown, nothing to upload
+        if len(vals) == 1 and (vals[0].get("fileType") or "").startswith("text") and vals[0].get("preview"):
+            text = vals[0]["preview"]
+            acts = [("copy", "Copy")] + ([("open", "Open")] if text.startswith(("http://", "https://")) else []) + [("dismiss", "Dismiss")]
+            nid = self.post(0, "Text from " + alias, timeout=0, icon=icon, quote=text, actions=acts)
+            with lock: self.texts[nid] = text
+            return 204, None
+        sid = secrets.token_hex(12)
+        total = sum(int(f.get("size") or 0) for f in vals)
+        names = [f.get("fileName", "?") for f in vals]
+        first = ", ".join(os.path.basename(n) for n in names[:3]) + (" and %d more" % (len(names) - 3) if len(names) > 3 else "")
+        what = ("a photo" if len(vals) == 1 and (vals[0].get("fileType") or "").startswith("image") else plural(len(vals), "file"))
+        trusted = fp in self.conf["trusted"]
+        sess = {"id": sid, "alias": alias, "fp": fp, "icon": icon, "files": files, "tokens": {k: secrets.token_hex(8) for k in files}, "total": total,
+                "done": 0, "files_done": 0, "paths": [], "started": time.time(), "card": 0, "over": False, "cancel": False, "trusted": trusted}
+        if not trusted:
+            ev = threading.Event()
+            p = {"event": ev, "answer": None}
+            with lock: self.prompts[sid] = p; self.recv_state = ("wait", short(alias), 0)
+            sess["card"] = self.post(0, "%s wants to send %s" % (alias, what), "%s · %s" % (human(total), first), timeout=0, tag="WAITING", icon=icon,
+                                     actions=[("accept", "Accept"), ("decline", "Decline"), ("always", "Always accept")], image="")
+            sess["prompt_card"] = sess["card"]
+            p["card"] = sess["card"]
+            ev.wait(120)
+            with lock: self.prompts.pop(sid, None)
+            if p["answer"] not in ("accept", "always"):
+                self.close_card(sess["card"])
+                with lock: self.recv_state = None
+                return 403, None
+            if p["answer"] == "always":
+                self.conf["trusted"][fp] = alias; save_conf(self.conf); sess["trusted"] = True
+        with lock:
+            self.sessions[sid] = sess
+            self.recv_state = ("recv", short(alias), 0)
+        self.recv_card(sess, force=True)
+        return 200, {"sessionId": sid, "files": sess["tokens"]}
+
+    def recv_card(self, sess, force=False):
+        if not force and time.time() - sess.get("last", 0) < 0.5: return
+        sess["last"] = time.time()
+        pct = int(100 * sess["done"] / max(sess["total"], 1))
+        el = max(time.time() - sess["started"], 0.1)
+        speed = sess["done"] / el
+        left = (sess["total"] - sess["done"]) / max(speed, 1)
+        body = "%d of %d files · %s of %s · %s/s · %d s left" % (sess["files_done"], len(sess["files"]), human(sess["done"]), human(sess["total"]), human(speed), left)
+        acts = [("cancel", "Cancel")] + ([("untrust", "Stop trusting")] if sess["trusted"] else [])
+        sess["card"] = self.post(sess["card"], "Receiving from " + sess["alias"], body, progress=pct, timeout=0, icon=sess["icon"],
+                                 tag="TRUSTED" if sess["trusted"] else "", actions=acts)
+        with lock: self.recv_state = ("recv", short(sess["alias"]), pct)
+
+    def upload(self, q, length, rfile):
+        sid, fid, tok = q.get("sessionId", [""])[0], q.get("fileId", [""])[0], q.get("token", [""])[0]
+        sess = self.sessions.get(sid)
+        if not sess or sess["over"] or sess["tokens"].get(fid) != tok: return 403
+        meta = sess["files"].get(fid, {})
+        name = (meta.get("fileName") or fid).replace("\\", "/")
+        parts = [p for p in name.split("/") if p not in ("", ".", "..")]
+        dest = os.path.join(self.conf["dir"], *parts) if parts else os.path.join(self.conf["dir"], fid)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        base, ext = os.path.splitext(dest)
+        k = 1
+        while os.path.exists(dest):
+            dest = "%s (%d)%s" % (base, k, ext); k += 1
+        sess["paths"].append(dest)
+        left = length
+        try:
+            with open(dest + ".part", "wb") as out:
+                while left > 0:
+                    if sess["cancel"]: raise InterruptedError
+                    chunk = rfile.read(min(262144, left))
+                    if not chunk: raise OSError("short")
+                    out.write(chunk); left -= len(chunk); sess["done"] += len(chunk)
+                    self.recv_card(sess)
+            os.replace(dest + ".part", dest)
+        except Exception:
+            try: os.remove(dest + ".part")
+            except OSError: pass
+            self.recv_failed(sess)
+            return 500
+        sess["files_done"] += 1
+        if sess["files_done"] >= len(sess["files"]): self.recv_done(sess)
+        return 200
+
+    def recv_done(self, sess):
+        sess["over"] = True
+        paths = sess["paths"]
+        first = os.path.basename(paths[0]) if paths else ""
+        where = self.conf["dir"].replace(HOME, "~") + "/"
+        body = "%s · %s%s · %s" % (where, first, " and %d more" % (len(paths) - 1) if len(paths) > 1 else "", human(sess["total"]))
+        image = paths[0] if len(paths) == 1 and os.path.splitext(paths[0])[1].lower() in (".png", ".jpg", ".jpeg", ".webp") else ""
+        nid = self.post(sess["card"], "Received %s from %s" % (plural(len(paths), "file") if len(paths) != 1 else "a file", sess["alias"]), body, tag="SAVED",
+                        icon=sess["icon"], actions=[("open", "Open"), ("folder", "Show in folder")], image=image)
+        with lock:
+            self.texts[nid] = paths[0] if len(paths) == 1 else os.path.dirname(paths[0]) if paths else self.conf["dir"]
+            self.recv_state = ("done", "✓", 100)
+        threading.Timer(5, self.clear_recv).start()
+
+    def recv_failed(self, sess):
+        if sess["over"]: return
+        sess["over"] = True
+        for p in sess["paths"]:
+            for x in (p, p + ".part"):
+                try: os.remove(x)
+                except OSError: pass
+        pct = int(100 * sess["done"] / max(sess["total"], 1))
+        self.post(sess["card"], "Transfer from %s stopped" % sess["alias"], "%s at %d%%. The partial files were removed." % ("Cancelled" if sess["cancel"] else "Connection lost", pct),
+                  timeout=0, icon=sess["icon"], actions=[("dismiss", "Dismiss")])
+        with lock: self.recv_state = ("failed", "failed", pct)
+
+    def clear_recv(self):
+        with lock:
+            if self.recv_state and self.recv_state[0] == "done": self.recv_state = None
+
+    # --- the buttons on the cards (k4-localsend act card KEY, with the card's id from the service) ---
+    def card_action(self, key, nid=0):
+        with lock:
+            for sid, p in list(self.prompts.items()):
+                if key in ("accept", "decline", "always") and (not nid or p.get("card") == nid or len(self.prompts) == 1):
+                    p["answer"] = key; p["event"].set(); return "ok"
+        if key == "cancel":
+            with lock:
+                for s in self.sessions.values():
+                    if not s["over"]: s["cancel"] = True
+                if self.job and self.job["st"] in ("waiting", "sending"): self.job["cancel"] = True
+            return "ok"
+        if key == "untrust":
+            with lock:
+                for s in self.sessions.values():
+                    if s["trusted"] and s["fp"] in self.conf["trusted"]:
+                        del self.conf["trusted"][s["fp"]]; s["trusted"] = False
+                save_conf(self.conf)
+            return "ok"
+        target = self.texts.get(nid) if nid else (list(self.texts.values())[-1] if self.texts else "")
+        if key == "copy" and target:
+            subprocess.run(["wl-copy"], input=target.encode()); return "ok"
+        if key == "open" and target:
+            subprocess.Popen(["xdg-open", target], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); return "ok"
+        if key == "folder" and target:
+            subprocess.Popen(["xdg-open", os.path.dirname(target) if os.path.isfile(target) else target], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); return "ok"
+        return "ok"
+
+    # --- the control socket ---
+    def command(self, line):
+        line = line[:-1] if line.endswith("\n") else line
+        p = line.split("\t") if "\t" in line else line.split()
+        if not p: return ""
+        c = p[0]
+        if c == "devices":
+            now = time.time()
+            with lock: devs = sorted(self.devices.values(), key=lambda d: -d["seen"])
+            out = []
+            for d in devs:
+                age = now - d["seen"]
+                if age > 600: continue
+                out.append("\t".join(map(field, ["D", d["fingerprint"], d.get("alias", "?"), d.get("deviceType") or "desktop", d.get("deviceModel") or "",
+                                                 d["ip"], int(age), 1 if d["fingerprint"] in self.conf["trusted"] else 0])))
+            return "\n".join(out) + "\n"
+        if c == "scan":
+            threading.Thread(target=self.scan, daemon=True).start(); return "ok\n"
+        if c == "send":  # send MODE FP,FP PAYLOAD (tab-separated)
+            if len(p) < 4: return "usage\n"
+            return self.start_send(p[1], [x for x in p[2].split(",") if x], "\t".join(p[3:])) + "\n"
+        if c == "job":
+            j = self.job
+            if not j: return "J\tnone\n"
+            out = ["\t".join(map(field, ["J", j["st"], "%.3f" % (j["done"] / max(j["total"], 1)), j["done"], j["total"], j["files_done"], len(j["files"]),
+                                         int(j["speed"]), int((j["total"] - j["done"]) / max(j["speed"], 1)), join_names([d["alias"] for d in j["to"]]),
+                                         "%.1f" % ((j.get("finished") or time.time()) - j["started"]), j["mode"]]))]
+            for fp, (st, pr) in j["targets"].items(): out.append("T\t%s\t%s\t%.3f" % (fp, st, pr))
+            return "\n".join(out) + "\n"
+        if c == "cancel":
+            with lock:
+                if self.job and self.job["st"] in ("waiting", "sending"): self.job["cancel"] = True
+            return "ok\n"
+        if c == "detach":  # the Send page closed: a running job gets its card
+            j = self.job
+            if j and j["st"] in ("waiting", "sending"):
+                j["detached"] = True; self._last_card = 0; self.job_card()
+                if j["st"] == "waiting":
+                    j["card"] = self.post(j["card"], "Waiting for " + join_names([d["alias"] for d in j["to"]]), "They may be asked to accept · gives up after 2 min",
+                                          timeout=0, tag="WAITING", icon=ICONS.get(j["to"][0].get("deviceType"), ""), actions=[("cancel", "Cancel")])
+            return "ok\n"
+        if c == "clear":
+            with lock:
+                if self.job and self.job["st"] not in ("waiting", "sending"): self.job = None
+            return "ok\n"
+        if c == "vis":
+            v = p[1] if len(p) > 1 else "toggle"
+            self.conf["visible"] = v == "on" or (v == "toggle" and not self.conf["visible"])
+            save_conf(self.conf)
+            if self.conf["visible"]: self.announce(True)
+            return ("on" if self.conf["visible"] else "off") + "\n"
+        if c == "status":
+            return "%s\t%d\t%d\t%s\n" % (field(self.conf["alias"]), 1 if self.conf["visible"] else 0, len(self.conf["trusted"]), self.conf["dir"])
+        if c == "trusted":
+            return "".join("%s\t%s\n" % (fp, field(a)) for fp, a in self.conf["trusted"].items())
+        if c == "untrust" and len(p) > 1:
+            self.conf["trusted"].pop(p[1], None); save_conf(self.conf); return "ok\n"
+        if c == "bar":
+            return self.bar() + "\n"
+        if c == "act":  # act card KEY [NOTE ID]
+            return self.card_action(p[2] if len(p) > 2 else "", int(p[3]) if len(p) > 3 and p[3].isdigit() else 0) + "\n"
+        return "unknown\n"
+
+    def bar(self):
+        j = self.job
+        if j and j["st"] == "waiting": return json.dumps(ensure_ascii=False, obj={"icon": "󰁝", "text": "waiting", "class": "dim", "tooltip": "Waiting for " + join_names([d["alias"] for d in j["to"]])})
+        if j and j["st"] == "sending":
+            pct = int(100 * j["done"] / max(j["total"], 1))
+            return json.dumps(ensure_ascii=False, obj={"icon": "󰁝", "icon_tone": "accent", "text": "%d%%" % pct, "text_tone": "accent",
+                               "tooltip": "Sending to %s · %s of %s · %s/s" % (join_names([d["alias"] for d in j["to"]]), human(j["done"]), human(j["total"]), human(j["speed"]))})
+        if j and j["st"] == "failed": return json.dumps(ensure_ascii=False, obj={"icon": "󰁝", "icon_tone": "red", "text": "failed", "text_tone": "red", "tooltip": "The transfer failed · click for details"})
+        if j and j["st"] == "sent" and time.time() - j.get("finished", 0) < 5: return json.dumps(ensure_ascii=False, obj={"icon": "󰁅", "icon_tone": "accent", "text": "✓", "tooltip": "Sent"})
+        r = self.recv_state
+        if r:
+            kind, label, pct = r
+            if kind == "wait": return json.dumps(ensure_ascii=False, obj={"icon": "󰁅", "icon_tone": "yellow", "text": label, "text_tone": "yellow", "tooltip": label + " wants to send you something · click to answer"})
+            if kind == "recv": return json.dumps(ensure_ascii=False, obj={"icon": "󰁅", "icon_tone": "accent", "text": "%d%%" % pct, "text_tone": "accent", "tooltip": "Receiving from " + label})
+            if kind == "done": return json.dumps(ensure_ascii=False, obj={"icon": "󰁅", "icon_tone": "accent", "text": "✓", "tooltip": "Received"})
+            if kind == "failed": return json.dumps(ensure_ascii=False, obj={"icon": "󰁅", "icon_tone": "red", "text": "failed", "text_tone": "red", "tooltip": "A transfer stopped"})
+        return "{}"
+
+
+def short(alias):  # "Jon’s Pixel 8" -> "Pixel 8"
+    for sep in ("’s ", "'s "):
+        if sep in alias: return alias.split(sep, 1)[1]
+    return alias
+
+
+def join_names(names):
+    return names[0] if len(names) == 1 else "%d devices" % len(names)
+
+
+def plural(n, w):
+    return "1 %s" % w if n == 1 else "%d %ss" % (n, w)
+
+
+def mime(path):
+    import mimetypes
+    return mimetypes.guess_type(path)[0] or "application/octet-stream"
+
+
+# ---------- HTTP ----------
+
+def handler_for(svc):
+    class H(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a): pass
+
+        def reply(self, code, obj=None):
+            data = json.dumps(obj).encode() if obj is not None else b""
+            self.send_response(code)
+            if data: self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            if data: self.wfile.write(data)
+
+        def body(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(n) if n else b""
+            try: return json.loads(raw) if raw else {}
+            except ValueError: return {}
+
+        def do_GET(self):
+            u = urllib.parse.urlparse(self.path)
+            if u.path in ("/api/localsend/v2/info", "/api/localsend/v1/info"): return self.reply(200, svc.info())
+            self.reply(404)
+
+        def do_POST(self):
+            u = urllib.parse.urlparse(self.path)
+            q = urllib.parse.parse_qs(u.query)
+            ip = self.client_address[0]
+            if u.path in ("/api/localsend/v2/register", "/api/localsend/v1/register"):
+                svc.seen(self.body(), ip)
+                return self.reply(200, svc.info())
+            if u.path in ("/api/localsend/v2/prepare-upload", "/api/localsend/v1/send-request"):
+                code, obj = svc.prepare(self.body(), ip)
+                return self.reply(code, obj)
+            if u.path in ("/api/localsend/v2/upload", "/api/localsend/v1/send"):
+                code = svc.upload(q, int(self.headers.get("Content-Length") or 0), self.rfile)
+                return self.reply(code)
+            if u.path in ("/api/localsend/v2/cancel", "/api/localsend/v1/cancel"):
+                sid = q.get("sessionId", [""])[0]
+                s = svc.sessions.get(sid) or next((x for x in svc.sessions.values() if not x["over"]), None)
+                if s: s["cancel"] = True; svc.recv_failed(s)
+                p = svc.prompts.get(sid)
+                if p: p["answer"] = "decline"; p["event"].set()
+                return self.reply(200)
+            self.reply(404)
+    return H
+
+
+def serve_http(svc):
+    httpd = http.server.ThreadingHTTPServer(("", PORT), handler_for(svc))
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(svc.crt, svc.key)
+    httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+    httpd.daemon_threads = True
+    httpd.serve_forever()
+
+
+def serve_ctl(svc):
+    try: os.unlink(SOCK)
+    except OSError: pass
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.bind(SOCK)
+    os.chmod(SOCK, 0o600)
+    s.listen(8)
+    while True:
+        c, _ = s.accept()
+        try:
+            c.settimeout(5)
+            data = b""
+            while True:  # the client shuts its side when done: a text may hold newlines
+                b = c.recv(65536)
+                if not b: break
+                data += b
+            c.sendall(svc.command(data.decode(errors="replace")).encode())
+        except Exception as e:
+            try: c.sendall(("error %s\n" % e).encode())
+            except OSError: pass
+        finally:
+            c.close()
+
+
+def ctl(args):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.connect(SOCK)
+    except OSError:
+        sys.stderr.write("k4-localsend: the service is not running\n"); sys.exit(1)
+    s.sendall(("\t".join(args) + "\n").encode())
+    s.shutdown(socket.SHUT_WR)
+    out = b""
+    while True:
+        b = s.recv(65536)
+        if not b: break
+        out += b
+    sys.stdout.write(out.decode(errors="replace"))
+
+
+def main():
+    a = sys.argv[1:]
+    if not a or a[0] in ("-h", "--help"):
+        print(__doc__.strip()); return
+    if a[0] == "ctl": return ctl(a[1:])
+    if a[0] == "act": return ctl(["act"] + a[1:])  # from a card's button: act card KEY
+    if a[0] != "daemon": print(__doc__.strip()); sys.exit(2)
+    # one service: another one answering on the socket wins
+    try:
+        t = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); t.connect(SOCK); t.close(); return
+    except OSError:
+        pass
+    svc = Service()
+    for target in (serve_http, svc.udp_loop, serve_ctl):
+        threading.Thread(target=target, args=(svc,) if target in (serve_http, serve_ctl) else (), daemon=True).start()
+    if svc.conf["visible"]: svc.announce(True)
+    while True:
+        time.sleep(60)
+        with lock:  # forget devices not seen for 10 min
+            for fp in [fp for fp, d in svc.devices.items() if time.time() - d["seen"] > 600]: del svc.devices[fp]
+
+
+if __name__ == "__main__":
+    main()

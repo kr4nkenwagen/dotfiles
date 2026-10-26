@@ -56,6 +56,7 @@ exec dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY SWAYSO
 exec_always sh -c 'pkill -x waybar; pkill -f "^k4 --bar"; sleep 0.3; if [ "$(cat ~/.local/state/sway/bar 2>/dev/null || echo k4)" = k4 ] && command -v k4 >/dev/null; then exec ~/.local/bin/k4-bar; else exec waybar -c $theme/waybar.jsonc -s $theme/waybar.css; fi'
 # notifications: k4's (k4-notify: popups, the Super+N centre), mako without k4
 exec sh -c 'command -v k4 >/dev/null && exec ~/.local/bin/k4-notify daemon || exec mako -c $theme/mako.ini'
+exec ~/.local/bin/k4-share daemon   # LocalSend for k4: receive and send (port 53317 tcp/udp must be open)
 exec lxpolkit
 exec nm-applet
 exec blueman-applet
@@ -79,6 +80,7 @@ bindsym $mod+Ctrl+v exec ~/.local/bin/k4-clip  # clipboard history (k4 + clipse)
 bindsym $mod+Ctrl+c exec ~/.local/bin/sway-menu capture   # k4's Capture menu, as on Omarchy
 bindsym $mod+n exec ~/.local/bin/k4-notify center     # k4's notification centre (k4-notify replaces mako)
 bindsym $mod+period exec ~/.local/bin/k4-tray popup   # the system tray's apps and menus (k4)
+bindsym $mod+Ctrl+s exec ~/.local/bin/k4-share send clipboard   # Send to a nearby device (LocalSend, k4)
 bindsym $mod+comma exec ~/.local/bin/k4-notify dismiss
 bindsym $mod+Shift+comma exec ~/.local/bin/k4-notify clear
 bindsym $mod+Ctrl+comma exec ~/.local/bin/k4-notify dnd

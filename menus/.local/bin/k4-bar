@@ -194,6 +194,7 @@ spec() {
   m awake right exec "$SELF status awake" 3 - "$c toggle_idle" - - - - "px=5"
   m reminder right exec "$SELF status reminder" 30 - "$p calendar" - - - - "px=5"
   m calsync right exec "$SELF status calsync" 300 - - - - - - -
+  m share right exec "k4-share bar" 1 - "k4-share bar-click" "k4-share cancel" - - - "px=6"   # a LocalSend transfer, only while one moves
   m pin0 right exec "k4-tray pinned 0" 3 - "k4-tray pin-click 0" "k4-tray pin-click 0 menu" - - - "px=4"   # tray apps pinned to the bar
   m pin1 right exec "k4-tray pinned 1" 3 - "k4-tray pin-click 1" "k4-tray pin-click 1 menu" - - - "px=4"
   m pin2 right exec "k4-tray pinned 2" 3 - "k4-tray pin-click 2" "k4-tray pin-click 2 menu" - - - "px=4"

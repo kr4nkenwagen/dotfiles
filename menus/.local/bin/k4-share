@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# k4-share: LocalSend in k4 (the Kestrel design's Share): the Send page (k4 --send) over the
+# k4-localsend service, the bar's transfer module and the launcher's Share rows.
+#   k4-share daemon                    start the service unless it runs (login does it)
+#   k4-share send [clipboard|files|folder]   the Send page with that (from a bar click: under it)
+#   k4-share send-file PATH…           the Send page with these files (a screenshot's Send to…)
+#   k4-share send-text TEXT            the Send page with a text (the clipboard window's Send to…)
+#   k4-share bar | bar-click | cancel  the bar module, its click (the page or the centre), its right click
+#   k4-share visible [on|off|toggle] | received | trusted | untrust FP
+export PATH="$HOME/.local/bin:$PATH"
+TMP="${XDG_RUNTIME_DIR:-/tmp}/k4-share"
+mkdir -p "$TMP"
+
+ctl() { k4-localsend ctl "$@" 2>/dev/null; }
+running() { ctl status >/dev/null; }
+daemon() { running || setsid -f k4-localsend daemon >/dev/null 2>&1 </dev/null; }
+human() { awk -v b="${1:-0}" 'BEGIN { if (b >= 1e9) printf "%.2f GB", b / 1e9; else if (b >= 1e6) printf "%.1f MB", b / 1e6; else printf "%d KB", (b + 999) / 1e3 }'; }
+tilde() { printf '%s' "${1/#$HOME/\~}"; }
+line() { local IFS=$'\t'; printf 'S\t%s\n' "$*"; }   # kind title sub mode payload tab [thumb]
+
+# what is being sent, as k4 --send reads it
+src_clipboard() {
+  local types t n
+  types=$(wl-paste --list-types 2>/dev/null)
+  if grep -q '^image/png' <<<"$types"; then
+    wl-paste --type image/png > "$TMP/clipboard.png" 2>/dev/null
+    local dim; dim=$(file -b "$TMP/clipboard.png" | grep -oE '[0-9]+ x [0-9]+' | tr -d ' ')
+    line IMAGE "Clipboard image${dim:+ · $dim}" "PNG · $(human "$(stat -c %s "$TMP/clipboard.png")") · sent as clipboard.png" files "$TMP/clipboard.png" clipboard "$TMP/clipboard.png"
+    return
+  fi
+  t=$(wl-paste --no-newline 2>/dev/null)
+  if [ -z "$t" ]; then line TEXT "" "The clipboard is empty · copy something, or Tab to files" text "" clipboard; return; fi
+  n=${#t}
+  line TEXT "$(printf '%s' "$t" | head -1 | cut -c1-120)" "Clipboard text · $n chars · arrives as a message, not a file" text "$(printf '%s' "$t" | sed ':a;N;$!ba;s/\n/\\n/g' | tr '\t' ' ')" clipboard; }
+pick() {  # pick files|folder: paths, one a line (empty when cancelled)
+  if command -v omarchy-file-select >/dev/null; then
+    if [ "$1" = folder ]; then omarchy-file-select --title "Send a folder" --directory; else omarchy-file-select --title "Send files" --multiple; fi
+  elif command -v zenity >/dev/null; then
+    if [ "$1" = folder ]; then zenity --file-selection --directory --title "Send a folder"; else zenity --file-selection --multiple --separator=$'\n' --title "Send files"; fi
+  elif command -v kdialog >/dev/null; then
+    if [ "$1" = folder ]; then kdialog --getexistingdirectory "$HOME"; else kdialog --getopenfilename "$HOME" --multiple --separate-output; fi
+  fi 2>/dev/null; }
+src_paths() {  # src_paths TAB PATH…: files, a folder, or a screenshot
+  local tab="$1"; shift
+  local total=0 n=0 p names=() payload="" kind title sub thumb=""
+  for p in "$@"; do [ -e "$p" ] || continue
+    if [ -d "$p" ]; then total=$(( total + $(du -sb "$p" | cut -f1) )); n=$(( n + $(find "$p" -type f | wc -l) ))
+    else total=$(( total + $(stat -c %s "$p") )); n=$((n + 1)); fi
+    names+=("${p##*/}"); payload+="${payload:+$'\x1f'}$p"
+  done
+  [ -n "$payload" ] || return 1
+  if [ "$tab" = folder ]; then kind=FOLDER title=$(tilde "$1") sub="$n files · $(human "$total") · keeps the folder structure"
+  elif [ "$tab" = screenshot ]; then kind=SCREENSHOT title="Screenshot · ${names[0]}" sub="Just taken · $(human "$total") · from Capture" thumb="$1"
+  else
+    kind=$([ "$n" = 1 ] && echo FILE || echo "$n FILES"); title=$(IFS=,; printf '%s' "${names[*]}" | sed 's/,/, /g'); sub="$(human "$total") · picked in Files"
+    case "${1,,}" in *.png|*.jpg|*.jpeg|*.webp) [ "$n" = 1 ] && kind=IMAGE thumb="$1" ;; esac
+  fi
+  line "$kind" "$title" "$sub" files "$payload" "$tab" "$thumb"; }
+src_text() { local t="$1"; line TEXT "$(printf '%s' "$t" | head -1 | cut -c1-120)" "Text · ${#t} chars · arrives as a message, not a file" text "$(printf '%s' "$t" | sed ':a;N;$!ba;s/\n/\\n/g' | tr '\t' ' ')" clipboard; }
+
+page() {  # page SOURCE-LINE: the Send page; Tab closes it to pick, then it opens again
+  local src="$1" out next pop=()
+  daemon
+  [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,right,${K4_BAR_POS:-top}")
+  while :; do
+    out=$(printf '%s\n' "$src" | k4 --send "${pop[@]}") || return 0
+    case "$out" in
+      pick$'\t'*)
+        case "${out#*$'\t'}" in
+          clipboard) src=$(src_clipboard) ;;
+          files) mapfile -t ps < <(pick files); [ ${#ps[@]} -gt 0 ] && next=$(src_paths files "${ps[@]}") && src=$next ;;
+          folder) mapfile -t ps < <(pick folder); [ ${#ps[@]} -gt 0 ] && next=$(src_paths folder "${ps[0]}") && src=$next ;;
+        esac ;;
+      *) return 0 ;;
+    esac
+  done; }
+
+case "${1:-send}" in
+  daemon) daemon ;;
+  send) pkill -f '^k4 --send' && exit 0
+        case "${2:-clipboard}" in
+          clipboard) page "$(src_clipboard)" ;;
+          files) mapfile -t ps < <(pick files); [ ${#ps[@]} -gt 0 ] && page "$(src_paths files "${ps[@]}")" ;;
+          folder) mapfile -t ps < <(pick folder); [ ${#ps[@]} -gt 0 ] && page "$(src_paths folder "${ps[0]}")" ;;
+        esac ;;
+  send-file) shift; t=files; case "${1##*/}" in screenshot-*|Screenshot*) t=screenshot ;; esac; page "$(src_paths "$t" "$@")" ;;
+  send-text) page "$(src_text "${2:-}")" ;;
+  bar) running && ctl bar || echo '{}' ;;
+  bar-click) case "$(ctl bar)" in *'"icon": "󰁝"'*) "$0" send ;; *) k4-notify center ;; esac ;;   # sending: the page; receiving: the cards
+  cancel) ctl cancel >/dev/null; ctl act card cancel >/dev/null ;;
+  visible) r=$(ctl vis "${2:-toggle}"); command -v notify-send >/dev/null && notify-send -a LocalSend "Visible to nearby devices" "$([ "$r" = on ] && echo on || echo "off · you can still send")" ;;
+  received) d=$(ctl status | cut -f4); mkdir -p "${d:-$HOME/Downloads/LocalSend}"; setsid -f xdg-open "${d:-$HOME/Downloads/LocalSend}" >/dev/null 2>&1 ;;
+  trusted) ctl trusted ;;
+  untrust) ctl untrust "${2:?fingerprint}" ;;
+  *) echo "usage: k4-share daemon|send [clipboard|files|folder]|send-file PATH…|send-text TEXT|bar|bar-click|cancel|visible|received|trusted|untrust FP" >&2; exit 2 ;;
+esac

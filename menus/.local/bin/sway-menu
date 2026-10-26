@@ -755,6 +755,7 @@ k4id() { printf '%s' "$1" | base64 -w0; }
 item() { printf 'A\t%s\t%s\t%s\t%s\t%s\n' "$(k4id "$2")" "$1" "${3:-}" "${4:-}" "${5:-}"; }   # item LABEL ACTION [META] [VIEW] [FLAGS]
 stay() { item "$1" "$2" "${3:-}" "" "stay${4:+;$4}"; }   # runs in place, the menu stays open (footer shows the result)
 hdr() { printf 'H\t%s\t%s\n' "$1" "${2:-}"; }   # hdr TEXT [COUNT]
+empty() { printf 'E\t%s\n' "$1"; }   # empty TEXT: a dim line where rows would be
 desc() { printf 'D\t%s\t%s\t%s\n' "$1" "${2:-}" "${3:-}"; }   # desc TEXT [COUNT] [PLACEHOLDER]: the section's line under its title, header count
 hints() { local IFS=$'\t'; printf 'Y\t%s\n' "$*"; }   # hints KEY LABEL...: the footer
 slider() { item "$1" "$2" "" "" "slider=${3:-0};step=${4:-5}"; }   # slider LABEL ACTION VALUE [STEP]: ← → runs ACTION with $K4_VALUE
@@ -776,7 +777,7 @@ k4_meta() { case "$1" in
   toggle) echo "Toggle|T|Flip things on and off|󰔎" ;;
   style) echo "Style|S|Theme, background and window decoration|󰸌" ;;
   display) echo "Display|D|Brightness, outputs and night light|󰍹" ;;
-  network) echo "Network|N|Wi-Fi, addresses and DNS|󰤨" ;;
+  network) echo "Network|N|Wi-Fi, addresses, DNS and LocalSend sharing|󰤨" ;;
   audio) echo "Audio|O|Levels, devices and streams via PipeWire|󰕾" ;;
   bluetooth) echo "Bluetooth|B|Pair, connect and forget devices|󰂯" ;;
   weather) echo "Weather|W|One fetch, shown as rows|󰖐" ;;
@@ -821,6 +822,7 @@ power_tiles() { local bat pct st info mem n inh lockc
   info=$(power_uptime); [ -n "$bat" ] && info="$info · battery $pct%"
   printf 'H\t%s@%s\t%s\n' "$USER" "$(cat /etc/hostname 2>/dev/null || hostname)" "$info"
   lockc=swaylock; [ -n "$OMARCHY" ] && lockc=omarchy-system-lock
+  command -v k4-perf >/dev/null && printf 'T\tperf\tPerformance\tM\t󰍛\tk4 perf\tOpens the performance window: CPU, memory, disk, network, processes and utilities. Also Super+Shift+Esc.\n'
   printf 'T\tlock\tLock\tL\t\t%s\tBlanks the screen behind the lock. Everything keeps running.\n' "$lockc"
   local sus=() low=""
   [ -n "$bat" ] && [ "$st" = Discharging ] && [ "$pct" -le 10 ] && power_hibernate_ok && low=1
@@ -841,6 +843,7 @@ power_tiles() { local bat pct st info mem n inh lockc
 power_menu() { local out
   out=$(power_tiles | k4 --power) || return 0
   case "$out" in
+    perf) k4-perf popup ;;
     lock) lock ;;
     suspend) systemctl suspend ;;
     hibernate) systemctl hibernate ;;
@@ -921,7 +924,8 @@ k4_pages() { case "$1" in   # the P/F records of a section (printed after it, so
   bluetooth) page bt "Bluetooth" "Devices: connect, pair and forget" ;;
   setup) page inputs "Input devices" "Keyboard layout and touchpad"
          page timezone Timezone "Setting it asks for sudo in a terminal" ;;
-  install) page nerdfonts "Nerd Fonts" "Latest release; installs in the background" ;;
+  install) page nerdfonts "Nerd Fonts" "Latest release; installs in the background"
+           page webapps "Web apps" "Enter removes the launcher from Apps" ;;
   system) page calendar Calendar "The month with ISO weeks · ← → steps the month"
           [ -n "$(ls -d /sys/class/power_supply/BAT* 2>/dev/null)" ] && page battery Battery "Charge, time left, power and profile" ;;
   esac; }
@@ -1212,6 +1216,19 @@ bt_pair_page() {  # bt_pair_page MAC NAME: compare the code on both
   stay "Cancel" "bt_pair_answer no $(printf %q "$name")" "n" "" "key=n"
   hints "y" "Codes match" "n" Cancel; }
 
+# LocalSend (k4-share over the k4-localsend service): the Share rows in Network, the trusted devices
+ls_visible() { [ "$(k4-localsend ctl status 2>/dev/null | cut -f2)" = 1 ]; }
+share_rows() { local st dir n first
+  st=$(k4-localsend ctl status 2>/dev/null); dir=$(cut -f4 <<<"$st"); n=$(cut -f3 <<<"$st")
+  first=$(k4-localsend ctl trusted 2>/dev/null | head -1 | cut -f2)
+  hdr "Share · LocalSend"
+  item "Send clipboard to…" 'k4-share send clipboard' "Super+Ctrl+S"
+  item "Send file to…" 'k4-share send files'
+  item "Send folder to…" 'k4-share send folder'
+  tog "Visible to nearby devices" 'k4-share visible toggle >/dev/null; notify LocalSend "$(ls_visible && echo visible || echo hidden)"' "$(ls_visible && echo on || echo off)" "${st:+$(cut -f1 <<<"$st")}"
+  item "Received files" 'k4-share received' "${dir/#$HOME/\~}"
+  item "Trusted devices" : "${n:-0}${first:+ · $first}" ls-trusted; }
+
 k4_page() { local p="$1"; shift
   case "$p" in
   wifi) net_page ;;
@@ -1219,6 +1236,12 @@ k4_page() { local p="$1"; shift
   net-wifi) net_page wifi ;;
   wifi-qr) wifi_qr_page "$@" ;;
   bt) bt_popup ;;
+  ls-trusted) local fp alias n=0
+    hdr "Trusted devices · they send without asking"
+    while IFS=$'\t' read -r fp alias; do [ -n "$fp" ] || continue; n=$((n + 1))
+      stay "$alias" "k4-share untrust $(printf %q "$fp"); notify Untrusted $(printf %q "$alias")" "Enter stops trusting" "confirm=Stop trusting $alias?|It will ask again next time."
+    done < <(k4-localsend ctl trusted 2>/dev/null)
+    [ "$n" -gt 0 ] || empty "None yet · Always accept on an incoming transfer adds one" ;;
   bt-dev) bt_dev_page "$@" ;;
   bt-pair) bt_pair_page "$@" ;;
   font) local cur f; cur=$(font_current 2>/dev/null)
@@ -1263,6 +1286,7 @@ k4_page() { local p="$1"; shift
   diskspeed) speed_page disk ;;
   apt) pkg_rows_search "${1:-}" ;;
   apt-installed) pkg_rows_installed "${1:-}" ;;
+  webapps) webapp_rows ;;
   flatpak) local q="${1:-}"
         flatpak search --columns=application,name "$q" 2>/dev/null | head -60 \
           | awk -F'\t' '$1 ~ /\./ { printf "%s\ttui_wait '\''flatpak install -y flathub %s'\''\t%s\t\n", $2, $1, $1 }' | k4rows ;;
@@ -1379,6 +1403,27 @@ webapp_create() {  # webapp_create NAME; the URL is $K4_INPUT
   slug=$(printf '%s' "$name" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-'); f="$HOME/.local/share/applications/webapp-$slug.desktop"
   mkdir -p "${f%/*}"; printf '[Desktop Entry]\nType=Application\nName=%s\nExec=qutebrowser --target window %s\nIcon=applications-internet\nCategories=Network;\n' "$name" "$url" > "$f"
   notify "Web app" "$name added to Apps"; }
+webapp_list() {  # NAME<TAB>PATH per installed web app launcher (ours, and Omarchy's)
+  local f name
+  for f in "$HOME"/.local/share/applications/*.desktop; do [ -f "$f" ] || continue
+    case "$(basename "$f")" in webapp-*) ;; *) grep -q '^Exec=.*\(omarchy-launch-webapp\|omarchy-webapp-handler\)' "$f" || continue ;; esac
+    name=$(sed -n 's/^Name=//p' "$f" | head -1); printf '%s\t%s\n' "${name:-$(basename "${f%.desktop}")}" "$f"
+  done | sort -f; }
+webapp_rows() {  # the Remove web app page: Enter removes the launcher (after a confirm)
+  local name f n=0
+  while IFS=$'\t' read -r name f; do [ -n "$f" ] || continue; n=$((n+1))
+    stay "$name" "webapp_remove $(printf %q "$f"); echo k4:back" "$(sed -n 's/^Exec=.*https\?:\/\///p' "$f" | head -1 | cut -d/ -f1 | cut -d' ' -f1)" "confirm=Remove $name?|Deletes its launcher and icon. Install it again from the Install section."
+  done < <(webapp_list)
+  [ "$n" -gt 0 ] || item "No web apps installed" ':'; }
+webapp_remove() {  # webapp_remove PATH: delete the launcher and its icon
+  local f="$1" name icon; [ -f "$f" ] || { notify "Web app" "Already removed"; return; }
+  name=$(sed -n 's/^Name=//p' "$f" | head -1); name=${name:-$(basename "${f%.desktop}")}
+  if command -v omarchy-webapp-remove >/dev/null && grep -q '^Exec=.*omarchy-' "$f"; then
+    OMARCHY_REMOVE_NOTIFY=false omarchy-webapp-remove "$(basename "${f%.desktop}")" >/dev/null 2>&1 || rm -f "$f"
+  else icon=$(sed -n 's/^Icon=//p' "$f" | head -1); rm -f "$f"
+    [ -n "$icon" ] && [ "$icon" != applications-internet ] && rm -f "$HOME/.local/share/icons/hicolor/256x256/apps/$icon".{png,svg}; fi
+  update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1
+  notify "Web app" "$name removed"; }
 # k4 input rows: the typed text arrives as $K4_INPUT, the results open as a page
 pkg_search() { [ -n "${K4_INPUT:-}" ] && k4page Packages "matching “$K4_INPUT” · Enter installs in a terminal" apt "$K4_INPUT"; }
 pkg_installed_search() { [ -n "${K4_INPUT:-}" ] && k4page Installed "matching “$K4_INPUT” · Enter removes in a terminal" apt-installed "$K4_INPUT"; }
@@ -1680,6 +1725,7 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
              command -v k4-perf >/dev/null && item "System performance" 'k4-perf popup' "Super+Shift+Esc"
              [ -s "$HOME/.local/state/sway/tray-hidden" ] && stay "Show hidden tray apps" 'rm -f "$HOME/.local/state/sway/tray-hidden"; notify Tray "hidden apps are back"' "$(wc -l < "$HOME/.local/state/sway/tray-hidden") hidden" ;;
   toggle) tog "Bar" 'toggle_bar; sleep 0.2; notify Bar "$(onoff bar_running)"' "$(onoff bar_running)"
+          command -v k4-share >/dev/null && tog "Visible to nearby devices" 'k4-share visible toggle >/dev/null; notify LocalSend "$(ls_visible && echo visible || echo hidden)"' "$(ls_visible && echo on || echo off)"
           choice "Status bar" set_bar_kind "$([ "$(bar_kind)" = k4 ] && echo k4 || echo "$BAR_ALT")" "k4|$BAR_ALT"
           if [ "$(bar_kind)" = k4 ]; then
             choice "Bar position" 'bar_pref bar-position' "$(bar_pref_now bar-position Top)" "Top|Bottom"
@@ -1733,6 +1779,7 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            stay "Ping" ping_both
            hdr "DNS"
            stay "DNS provider" dns_cycle "$(dns_now)"
+           if command -v k4-share >/dev/null; then share_rows; fi
            hdr "More"
            stay "Ethernet" eth_toggle "$(eth_state)"
            item "Open nmtui" 'tui nmtui' ;;
@@ -1806,7 +1853,8 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            ask_item "Web app" webapp_name "" "Web app name|Shown in Apps · the URL comes next"
            item "Font" : "Nerd Fonts" nerdfonts
            hdr "Remove"
-           ask_item "Remove package…" pkg_installed_search "$PKG_TOOL" "Remove which package|Filters the installed packages" ;;
+           ask_item "Remove package…" pkg_installed_search "$PKG_TOOL" "Remove which package|Filters the installed packages"
+           item "Remove web app…" : "$(webapp_list | wc -l) installed" webapps ;;
   update) item "System packages" "$(update_cmd)" "$PKG_TOOL"
           item "Firmware" "$(firmware_cmd)" fwupd
           hdr "Restart"
@@ -1816,8 +1864,10 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
           item "Trackpad" "tui_wait $(printf %q "$SELF") restart-trackpad" "reloads the driver · sudo"
           hdr "Dotfiles"
           item "Update dotfiles" "tui_wait \"cd $(printf %q "$DOTFILES") && git pull --ff-only && bash init.sh\"" "git pull" ;;
-  system) item "Lock" lock
+  system) command -v k4-perf >/dev/null && item "Performance" 'k4-perf popup' "Super+Shift+Esc"
+          item "Lock" lock
           item "Suspend" 'systemctl suspend'
+          power_hibernate_ok && item "Hibernate" 'systemctl hibernate'
           item "Log out" 'wm_exit' "" "" "$K4_CONFIRM_LOGOUT"
           item "Reboot" 'sys_reboot' "" "" "$K4_CONFIRM_REBOOT"
           item "Shut down" 'sys_poweroff' "" "" "$K4_CONFIRM_SHUTDOWN" ;;

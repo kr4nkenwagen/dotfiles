@@ -90,6 +90,10 @@ clip_act() {  # clip_act VERB ID
   case "$verb" in
     paste|plain) clip_copy "$id" ${verb/paste/}; sleep 0.15; wtype -M shift -k Insert -m shift 2>/dev/null ;;   # into the window k4 left
     copy) clip_copy "$id" ;;
+    send)  # over LocalSend: an image as its file, text as a message
+      f=$(clip_file "$id")
+      if [ -n "$f" ] && [ "$f" != null ] && [ -f "$f" ]; then exec k4-share send-file "$f"
+      else exec k4-share send-text "$(clip_value "$id")"; fi ;;
     pin) clip_edit '.clipboardHistory |= map(if .recorded == $r then .pinned = (.pinned | not) else . end)' "$id"
          [ "$(jq -r --arg r "$id" '.clipboardHistory[] | select(.recorded == $r) | .pinned' "$HIST")" = true ] && echo "Pinned" || echo "Unpinned" ;;
     delete) f=$(clip_file "$id"); clip_edit '.clipboardHistory |= map(select(.recorded != $r))' "$id"
