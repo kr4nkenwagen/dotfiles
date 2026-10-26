@@ -78,3 +78,8 @@ hl.config({
 -- parts left alone). The overview and the click catcher are not blurred: they cover the whole
 -- output and their dimming should show the windows.
 hl.layer_rule({ match = { namespace = "^(k4|k4-osd|k4-bar|k4-power|k4-notify)$" }, blur = true, ignore_alpha = 0.05 })
+
+-- The bar and the notification popups change size as tooltips, the workspace preview and
+-- notifications come and go: no layer animation, or Hyprland draws them stretched while it
+-- animates the new size (Omarchy does the same for its own bar).
+hl.layer_rule({ match = { namespace = "^(k4-bar|k4-notify)$" }, no_anim = true, animation = "none" })
