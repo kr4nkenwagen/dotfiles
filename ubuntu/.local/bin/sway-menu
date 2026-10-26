@@ -769,25 +769,30 @@ k4_pages() { case "$1" in   # the P/F records of a section (printed after it, so
          page gaps "Gaps & borders" "Space around windows and their border"
          page opacity Opacity "Terminal and browser background" ;;
   display) page scale Scale "The focused output" ;;
-  network) page wifi "Wi-Fi networks" "Enter connects; secured networks ask for the password" ;;
-  bluetooth) page btscan "Scan & pair" "Scanning for 8 s, then Enter pairs" ;;
+  network) page wifi "Wi-Fi networks" "Enter connects; secured networks ask for the password"
+             printf 'O\tpane\n' ;;   # in the right pane, next to the sections
+  bluetooth) page btscan "Scan & pair" "Scanning for 8 s, then Enter pairs"
+             printf 'O\tpane\n' ;;   # in the right pane, next to the sections
   setup) page inputs "Input devices" "Keyboard layout and touchpad"
          page timezone Timezone "Setting it asks for sudo in a terminal" ;;
   install) page nerdfonts "Nerd Fonts" "Latest release; installs in the background" ;;
   esac; }
 k4_page() { local p="$1"; shift
   case "$p" in
-  wifi) local inuse ssid sig sec meta flags lock n; local -A saved=()
+  wifi) local inuse ssid sig sec meta flags lock n nets=(); local -A saved=()
         while IFS= read -r n; do saved[$n]=1; done < <(nmcli -g NAME con show 2>/dev/null)
-        hdr "Networks · Enter connects"
-        while IFS=$'\t' read -r inuse ssid sig sec; do
+        mapfile -t nets < <(wifi_list auto)
+        printf 'D\t%s\t%s\t%s\n' "Enter connects; secured networks ask for the password" "$([ ${#nets[@]} = 1 ] && echo "1 network" || echo "${#nets[@]} networks")" "Filter networks…"
+        hdr "Networks · Enter connects" "${#nets[@]}"
+        [ ${#nets[@]} -gt 0 ] || printf 'E\t%s\n' "No networks in range$([ "$(nmcli radio wifi 2>/dev/null)" = enabled ] || echo " · Wi-Fi is off")"
+        for n in "${nets[@]}"; do IFS=$'\t' read -r inuse ssid sig sec <<<"$n"
           lock=""; [ -n "$sec" ] && [ "$sec" != "--" ] && lock="  󰌾"
           meta="$(wifi_bars "$sig") ${sig}%$lock"; flags=stay
           if [ "$inuse" = '*' ]; then item "$ssid" "notify Wi-Fi $(printf %q "Connected to $ssid")" "connected  $meta" "" "stay;current"; continue; fi
           if [ -n "${saved[$ssid]:-}" ]; then meta="saved  $meta"
           elif [ -n "$lock" ]; then flags+=";input=Password for ${ssid//[;|]/ }|$sec network|password"; fi
           item "$ssid" "wifi_join $(printf %q "$ssid") $(printf %q "$sec")" "$meta" "" "$flags"
-        done < <(wifi_list auto)
+        done
         hdr "More"
         stay "Rescan" 'nmcli dev wifi rescan >/dev/null 2>&1; sleep 3; notify Wi-Fi Rescanned'
         ask_item "Connect to hidden…" wifi_hidden "" "Network name|The SSID of the hidden network"
@@ -811,10 +816,12 @@ k4_page() { local p="$1"; shift
         if ! bt_powered; then hdr "Bluetooth is off"; stay "Turn on and scan" 'bluetoothctl power on >/dev/null 2>&1; notify Bluetooth on'; return; fi
         bluetoothctl --timeout 8 scan on >/dev/null 2>&1
         while IFS=$'\t' read -r mac name; do known[$mac]=1; done < <(bt_devices Paired)
-        hdr "Found · Enter pairs"
-        while IFS=$'\t' read -r mac name; do [ -n "${known[$mac]:-}" ] && continue; n=$((n + 1))
-          stay "$name" "bt_pair $mac $(printf %q "$name")" "$mac"; done < <(bt_devices)
-        [ "$n" -gt 0 ] || hdr "No new devices found"
+        local found=(); while IFS=$'\t' read -r mac name; do [ -n "${known[$mac]:-}" ] || found+=("$mac"$'\t'"$name"); done < <(bt_devices)
+        n=${#found[@]}
+        printf 'D\t%s\t%s\t%s\n' "Scanned for 8 s · Enter pairs" "$([ "$n" = 1 ] && echo "1 device" || echo "$n devices")" "Filter devices…"
+        hdr "Found · Enter pairs" "$n"
+        [ "$n" -gt 0 ] || printf 'E\t%s\n' "No new devices found · put the device in pairing mode, then scan again"
+        for r in "${found[@]}"; do IFS=$'\t' read -r mac name <<<"$r"; stay "$name" "bt_pair $mac $(printf %q "$name")" "$mac"; done
         hdr "More"; stay "Scan again" 'notify Bluetooth "Scanning again…"' ;;
   inputs) local nat kb l n t
         nat=$(swaymsg -t get_inputs 2>/dev/null | jq -r '[.[] | select(.type == "touchpad") | .libinput.natural_scroll] | first // "n/a"'); kb=$(kb_now)
