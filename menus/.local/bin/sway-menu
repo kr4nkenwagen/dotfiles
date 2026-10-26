@@ -1646,20 +1646,21 @@ K4_CONFIRM_SHUTDOWN='confirm=Shut down now?|Unsaved work in open apps will be lo
 
 k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
   case "$s" in
-  apps) local n id title key sum inst miss=() count=0 keys=""
+  apps) local n id title key sum inst miss=() count=0 keys=""; local -A integ=()
         # design: the integrations first (each a page, letters g r m x q p in shortcut mode),
         # then the installed applications; the main menu keeps its 17 rows
         if command -v k4-apps >/dev/null; then
           hdr "Integrations"
           while IFS=$'\t' read -r id title key sum inst; do
-            if [ "$inst" = installed ]; then item "$title" : "$sum" "$id" "key=$key"; count=$((count + 1)); keys+=" ${key,,}"
+            if [ "$inst" = installed ]; then item "$title" : "$sum" "$id" "key=$key"; count=$((count + 1)); keys+=" ${key,,}"; integ[${title,,}]=1
             else miss+=("$id"$'\t'"$title"$'\t'"$key"); fi
           done < <(k4-apps summaries)
           desc "Integrations first, then installed applications" "$count integrations" "Search Apps…"
           hints "↑↓" Move "↵" Open Esc "Shortcuts: a, then${keys}"
         fi
         hdr "Installed apps"
-        while IFS=$'\t' read -r n id; do item "$n" "launch_app $(printf %q "$id")" "" "" app; done < <(apps_list)
+        # an app with an integration shows once, as the integration (its page launches it first)
+        while IFS=$'\t' read -r n id; do [ -n "${integ[${n,,}]:-}" ] && continue; item "$n" "launch_app $(printf %q "$id")" "" "" app; done < <(apps_list)
         if [ ${#miss[@]} -gt 0 ]; then hdr "Not installed"
           for n in "${miss[@]}"; do IFS=$'\t' read -r id title key <<<"$n"; item "$title" : "not installed" "$id" "dim;key=$key"; done; fi ;;
   learn) item "$WM_TITLE wiki" "open_url $WM_WIKI"

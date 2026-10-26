@@ -68,6 +68,19 @@ install_cmd() {  # install_cmd ARCH_PKG APT_PKG [OTHER]: the command for this ma
   else echo "${3:-}"; fi; }
 hidden() { grep -qxF "$1" "$K4_STATE/hidden-apps" 2>/dev/null; }
 
+# The app the integration belongs to: its desktop entry (K4_DESKTOP, else the one named like
+# the integration), and the first row of the integration's page that launches it.
+desktop_id() {
+  [ -n "${K4_DESKTOP:-}" ] && { echo "$K4_DESKTOP"; return; }
+  local cache="$HOME/.cache/sway-menu/apps.tsv" d f
+  if [ -s "$cache" ]; then awk -F'\t' -v t="${K4_TITLE,,}" 'tolower($1) == t { print $2; exit }' "$cache"; return; fi
+  for d in "$HOME/.local/share/applications" /usr/local/share/applications /usr/share/applications /var/lib/flatpak/exports/share/applications; do
+    f=$(grep -lix "Name=$K4_TITLE" "$d"/*.desktop 2>/dev/null | head -1)
+    [ -n "$f" ] && { f=${f##*/}; echo "${f%.desktop}"; return; }
+  done; }
+launch_desktop() { if command -v uwsm-app >/dev/null; then bg uwsm-app -- gtk-launch "$1"; else bg gtk-launch "$1"; fi; }
+launch_row() { local id; id=$(desktop_id); [ -n "$id" ] && item "Launch $K4_TITLE" "launch_desktop $(printf %q "$id")" "opens the app"; return 0; }
+
 # The "not installed" body (design: Combined, partly installed). missing_body PURPOSE INSTALL SITE
 missing_body() {
   notice "$K4_TITLE isn't installed" "Install it to $1." muted
@@ -102,7 +115,7 @@ k4_dispatch() {
   case "${1:-}" in
     "") k4_open "$K4_ID" ;;
     part) if available && [ "${2:-}" != dim ]; then part; else part dim; fi ;;   # part dim: as if not installed (tests)
-    section) if available; then section; else missing; fi ;;
+    section) if available; then launch_row; section; else missing; fi ;;
     summary) if available; then summary; else echo "not installed"; fi ;;
     view) view ;;
     tree) k4_tree ;;

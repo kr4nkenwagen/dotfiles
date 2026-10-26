@@ -37,7 +37,6 @@ section() {
     desc "Spotify isn't running" "" "Search on open.spotify.com…"
     query web_search
     notice "Spotify isn't running" "Playback controls need the Spotify app." muted
-    stay "Start Spotify" 'bg spotify; notify Starting Spotify'
     stay "Search on open.spotify.com" web_search "opens browser" "input=Search Spotify|Opens the results in the browser"
     return
   fi
