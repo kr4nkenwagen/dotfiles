@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""k4-bt-pair MAC DIR: pair a Bluetooth device the way k4's Bluetooth popup asks for it.
+
+Runs bluetoothctl with a KeyboardDisplay agent and answers it: a code to compare goes to
+DIR/code ("482 913") and the answer is read from DIR/answer (yes/no, written by the popup);
+then trust and connect. The outcome is DIR/ok, or DIR/fail with the reason. 60 s at most.
+"""
+import os, re, select, subprocess, sys, time
+
+mac, d = sys.argv[1], sys.argv[2]
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x01|\x02")
+
+
+def put(name, text=""):
+    with open(os.path.join(d, name + ".tmp"), "w") as f: f.write(text)
+    os.replace(os.path.join(d, name + ".tmp"), os.path.join(d, name))
+
+
+p = subprocess.Popen(["bluetoothctl"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
+send = lambda s: (p.stdin.write((s + "\n").encode()), p.stdin.flush())
+send("agent KeyboardDisplay")
+send("default-agent")
+send("pair " + mac)
+buf, end, paired = "", time.time() + 60, False
+try:
+    while time.time() < end:
+        r, _, _ = select.select([p.stdout], [], [], 0.5)
+        if not r: continue
+        chunk = os.read(p.stdout.fileno(), 4096)
+        if not chunk: break
+        buf += ANSI.sub("", chunk.decode(errors="replace"))
+        m = re.search(r"Confirm passkey (\d+)", buf) or re.search(r"Passkey: (\d+)", buf)
+        if m and not os.path.exists(os.path.join(d, "code")):
+            code = m.group(1).zfill(6)
+            put("code", code[:3] + " " + code[3:])
+            if "Confirm passkey" in m.group(0):
+                ans = ""
+                while time.time() < end and not ans:
+                    try: ans = open(os.path.join(d, "answer")).read().strip()
+                    except OSError: time.sleep(0.2)
+                send("yes" if ans == "yes" else "no")
+                if ans != "yes": put("fail", "cancelled"); break
+        if "Request PIN code" in buf: put("fail", "it asks for a PIN: use Bluetooth settings"); send("no"); break
+        if "Failed to pair" in buf:
+            reason = re.search(r"Failed to pair: (\S+)", buf)
+            put("fail", (reason.group(1) if reason else "failed").replace("org.bluez.Error.", "")); break
+        if not paired and ("Pairing successful" in buf or "Paired: yes" in buf):
+            paired = True
+            send("trust " + mac)
+            send("connect " + mac)
+            end = min(end, time.time() + 15)
+        if paired and ("Connection successful" in buf or "Connected: yes" in buf):
+            put("ok"); break
+        buf = buf[-4000:]
+    else:
+        if paired: put("ok")  # paired and trusted; it connects on its own
+        else: put("fail", "timed out · is it in pairing mode?")
+    if paired and not os.path.exists(os.path.join(d, "ok")) and not os.path.exists(os.path.join(d, "fail")): put("ok")
+    if not paired and not os.path.exists(os.path.join(d, "fail")) and not os.path.exists(os.path.join(d, "ok")): put("fail", "timed out · is it in pairing mode?")
+finally:
+    try: send("quit")
+    except OSError: pass
+    try: p.wait(timeout=3)
+    except subprocess.TimeoutExpired: p.kill()

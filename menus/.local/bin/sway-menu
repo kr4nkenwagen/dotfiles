@@ -863,36 +863,237 @@ k4_pages() { case "$1" in   # the P/F records of a section (printed after it, so
          page gaps "Gaps & borders" "Space around windows and their border"
          page opacity Opacity "Terminal and browser background" ;;
   display) page scale Scale "The focused output" ;;
-  network) page wifi "Wi-Fi networks" "Enter connects; secured networks ask for the password"
+  network) page wifi "Wi-Fi" "Networks: Enter connects; secured ones ask for the password"
              printf 'O\tpane\n' ;;   # in the right pane, next to the sections
-  bluetooth) page btscan "Scan & pair" "Scanning for 8 s, then Enter pairs"
-             printf 'O\tpane\n' ;;   # in the right pane, next to the sections
+  bluetooth) page bt "Bluetooth" "Devices: connect, pair and forget" ;;
   setup) page inputs "Input devices" "Keyboard layout and touchpad"
          page timezone Timezone "Setting it asks for sudo in a terminal" ;;
   install) page nerdfonts "Nerd Fonts" "Latest release; installs in the background" ;;
   system) page calendar Calendar "The month with ISO weeks · ← → steps the month"
           [ -n "$(ls -d /sys/class/power_supply/BAT* 2>/dev/null)" ] && page battery Battery "Charge, time left, power and profile" ;;
   esac; }
+# ---------- the bar's Wi-Fi and Bluetooth popups (the Kestrel design, 424×524) ----------
+kbind() { printf 'KB\t%s\t%s\n' "$1" "$(k4id "$2")"; }   # kbind KEY ACTION: a letter in the popup runs ACTION
+wifi_dev() { nmcli -t -f DEVICE,TYPE dev 2>/dev/null | awk -F: '$2 == "wifi" { print $1; exit }'; }
+wifi_glyph() { local n=${1:-0}; if [ "$n" -ge 75 ]; then echo 󰤨; elif [ "$n" -ge 50 ]; then echo 󰤥; elif [ "$n" -ge 25 ]; then echo 󰤢; else echo 󰤟; fi; }
+wifi_band() { local f=${1%% *}; [ "${f:-0}" -ge 5900 ] && echo "6 GHz" || { [ "${f:-0}" -ge 4900 ] && echo "5 GHz" || echo "2.4 GHz"; }; }
+wifi_rescan() { nmcli dev wifi rescan >/dev/null 2>&1; sleep 2; notify "Scanning…" "$(nmcli -t -f SSID dev wifi list 2>/dev/null | grep -c .) networks"; }
+wifi_popup() {
+  local dev on cur="" csig cfreq crate csec conn ssid sig freq rate sec n flags sub lock
+  printf 'O\twidth=424;height=524;refresh=8\n'
+  dev=$(wifi_dev)
+  if [ -z "$dev" ]; then
+    printf 'D\tNo Wi-Fi\t\t\nST\tno adapter\tdim\n'
+    printf 'N\tNo Wi-Fi adapter\tThis computer has no wireless device. Ethernet and VPN live in the launcher under Network.\tmuted\n'
+    stay "Network settings" 'echo k4:launcher network' "⌃↵ launcher"
+    hints "↵" Run; return
+  fi
+  on=$(nmcli radio wifi 2>/dev/null)
+  kbind w wifi_power_toggle; kbind r wifi_rescan
+  tog "Wi-Fi" wifi_power_toggle "$([ "$on" = enabled ] && echo on || echo off)"
+  if [ "$on" != enabled ]; then
+    printf 'D\tOff\t\t\nST\toff\tdim\n'
+    printf 'N\tWi-Fi is off\tTurn it on to see networks. Ethernet and VPN are not affected. Airplane mode lives in the launcher under Network.\tmuted\n'
+    hints "↵" "Turn Wi-Fi on"; return
+  fi
+  local -A saved=()
+  while IFS= read -r n; do saved[$n]=1; done < <(nmcli -g NAME,TYPE con show 2>/dev/null | awk -F: '$2 == "802-11-wireless" { print $1 }')
+  local rows=()
+  # IN-USE SSID SIGNAL FREQ RATE SECURITY (escaped colons in SSIDs kept)
+  mapfile -t rows < <(nmcli -t -f IN-USE,SSID,SIGNAL,FREQ,RATE,SECURITY dev wifi list --rescan auto 2>/dev/null \
+    | sed 's/\\:/\x01/g' | awk -F: '$2 != "" && !seen[$2]++ { gsub(/\x01/, ":", $2); print ($1 == "*" ? "*" : "-") "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" ($6 == "" ? "--" : $6) }')
+  for n in "${rows[@]}"; do IFS=$'\t' read -r conn ssid sig freq rate sec <<<"$n"; [ "$conn" = '*' ] && { cur=$ssid; csig=$sig; cfreq=$freq; crate=$rate; csec=$sec; }; done
+  local portal=""; [ -n "$cur" ] && [ "$(nmcli networking connectivity 2>/dev/null)" = portal ] && portal=1
+  printf 'D\t%s\t\t\n' "${cur:-Not connected}"
+  if [ -n "$portal" ]; then printf 'ST\tsign-in needed\tyellow\n'
+  elif [ -n "$cur" ]; then printf 'ST\t%s · %s%%\tdim\n' "$(wifi_band "$cfreq")" "$csig"
+  else printf 'ST\tnot connected\tdim\n'; fi
+  if [ -n "$cur" ]; then
+    hdr "Connected"
+    item "$cur" "k4page $(printf %q "$cur") '' wifi-net $(printf %q "$cur")" "›" "" \
+      "stay;mark=$(wifi_glyph "$csig");markc=accent;bold;labelc=accent;line2=$([ -n "$portal" ] && echo 'connected · no internet yet' || echo connected) · $(wifi_band "$cfreq") · ${crate% *} Mb/s$([ -n "$portal" ] && echo ';line2c=yellow')$(wifi_secured "$csec" && echo ';lock')"
+    [ -n "$portal" ] && item "Sign in to $cur" 'open_url http://neverssl.com; notify Opened "sign-in page in your browser"' "browser ↗" "" "stay;bold;labelc=yellow;line2=This network shows a sign-in page first"
+  fi
+  printf 'H\tNetworks\t\t↻ scanning\taccent\n'
+  for n in "${rows[@]}"; do
+    IFS=$'\t' read -r conn ssid sig freq rate sec <<<"$n"
+    [ "$ssid" = "$cur" ] && continue
+    printf '%s\t%s\n' "$([ -n "${saved[$ssid]:-}" ] && echo 1 || echo 0)$(printf '%03d' "$sig")" "$n"
+  done | sort -r | while IFS=$'\t' read -r _ conn ssid sig freq rate sec; do
+    sub="$(wifi_band "$freq")"; flags="stay;mark=$(wifi_glyph "$sig")"
+    [ -n "${saved[$ssid]:-}" ] && sub+=" · saved"
+    case "$sec" in *802.1X*) sub+=" · 802.1X" ;; esac
+    wifi_secured "$sec" && flags+=";lock"
+    case "$sec" in
+      *802.1X*) item "$ssid" "tui nmtui-connect $(printf %q "$ssid"); notify $(printf %q "$ssid") 'needs a username and certificate · opens nmtui'" "" "" "$flags;line2=$sub" ;;
+      *) if [ -n "${saved[$ssid]:-}" ] || ! wifi_secured "$sec"; then item "$ssid" "wifi_join $(printf %q "$ssid") $(printf %q "$sec")" "" "" "$flags;line2=$sub"
+         else item "$ssid" "wifi_join $(printf %q "$ssid") $(printf %q "$sec")" "" "" "$flags;line2=$sub;input=${ssid//[;|]/ } needs a password ($sec).|Saved to NetworkManager, k4 never stores the password itself.|password"; fi ;;
+    esac
+  done
+  ask_item "Connect to hidden network…" wifi_hidden "" "Network name|The name (SSID) of the hidden network"
+  stay "Network settings" 'echo k4:launcher network' "⌃↵ launcher"
+  hints "↑↓" Move "↵" Connect "r" Rescan "w" "Wi-Fi on/off"; }
+wifi_net_page() {  # wifi_net_page SSID: the connected network's details and what to do with it
+  local ssid="$1" dev sig freq chan rate sec ip gw dns dbm auto
+  printf 'O\twidth=424;height=524\n'
+  dev=$(wifi_dev)
+  IFS=: read -r sig freq chan rate sec < <(nmcli -t -f ACTIVE,SIGNAL,FREQ,CHAN,RATE,SECURITY dev wifi list --rescan no 2>/dev/null | awk -F: '$1 == "yes" { print $2 ":" $3 ":" $4 ":" $5 ":" $6; exit }')
+  ip=$(nmcli -g IP4.ADDRESS dev show "$dev" 2>/dev/null | head -1); gw=$(nmcli -g IP4.GATEWAY dev show "$dev" 2>/dev/null)
+  dns=$(nmcli -g IP4.DNS dev show "$dev" 2>/dev/null | head -1)
+  dbm=$(iw dev "$dev" link 2>/dev/null | awk '/signal:/ { print $2 }')
+  auto=$(nmcli -g connection.autoconnect con show id "$ssid" 2>/dev/null)
+  printf 'D\t%s\t\t\nST\t%s · %s%%\tdim\n' "$ssid" "$(wifi_band "$freq")" "${sig:-0}"
+  local k v
+  for kv in "Signal|${sig:-?}%${dbm:+ · $dbm dBm}" "Band|$(wifi_band "$freq") · channel ${chan:-?}" "Speed|${rate:-?}" "Security|${sec:-open}" "IP|${ip%%/*}" "Gateway|$gw" "DNS|$dns"; do
+    k=${kv%%|*}; v=${kv#*|}; [ -n "$v" ] || continue
+    stay "$v" "copy_val $(printf %q "$k") $(printf %q "$v")" "" "field=$k"
+  done
+  hdr "This network"
+  tog "Connect automatically" "nmcli con mod id $(printf %q "$ssid") connection.autoconnect $([ "$auto" = yes ] && echo no || echo yes) && notify 'Connect automatically' $([ "$auto" = yes ] && echo off || echo on)" "$([ "$auto" = yes ] && echo on || echo off)"
+  stay "Share with a phone" "k4page $(printf %q "Share $ssid") '' wifi-qr $(printf %q "$ssid")" "QR code"
+  stay "Disconnect" 'wifi_disconnect; echo k4:back'
+  stay "Forget network" "nmcli con delete id $(printf %q "$ssid") >/dev/null 2>&1; notify Forgot $(printf %q "$ssid"); echo k4:back" "" "confirm=Forget $ssid?|You will need the password to join it again."
+  hints "↑↓" Move "↵" "Copy / run" "⌫" Back; }
+wifi_qr_page() {  # wifi_qr_page SSID: a code a phone camera joins with
+  local ssid="$1" psk sec t png
+  printf 'O\twidth=424;height=524\n'
+  printf 'D\tShare %s\t\t\n' "$ssid"
+  psk=$(nmcli -s -g 802-11-wireless-security.psk con show id "$ssid" 2>/dev/null)
+  sec=$(nmcli -g 802-11-wireless-security.key-mgmt con show id "$ssid" 2>/dev/null)
+  t=WPA; [ -z "$sec" ] && t=nopass
+  esc() { printf '%s' "$1" | sed 's/[\;,:"]/\\&/g'; }
+  png="${XDG_RUNTIME_DIR:-/tmp}/k4-wifi-qr-$(printf '%s' "$ssid$psk" | md5sum | cut -c1-12).png"
+  [ -f "$png" ] || qrencode -o "$png" -s 10 -m 0 "WIFI:T:$t;S:$(esc "$ssid");P:$(esc "$psk");;" 2>/dev/null
+  printf 'QR\t%s\tScan to join %s\tPhone camera, no typing. The code carries the network name, the security and the password.\n' "$png" "$ssid"
+  hints "⌫" Back; }
+
+bt_icon() {  # bt_icon BLUEZ_ICON -> glyph<TAB>kind
+  case "$1" in
+    audio-headset|audio-headphones) printf '󰋋\tHeadphones' ;; input-keyboard) printf '󰌌\tKeyboard' ;; input-mouse) printf '󰍽\tMouse' ;;
+    input-gaming) printf '󰊴\tGame controller' ;; phone) printf '󰏲\tPhone' ;; audio-card) printf '󰓃\tSpeaker' ;; video-display) printf '󰔂\tTV' ;;
+    computer) printf '󰟀\tComputer' ;; input-tablet) printf '󰓶\tTablet' ;; *) printf '󰂯\tUnknown device' ;;
+  esac; }
+bt_info_tsv() {  # MAC NAME ICON PAIRED CONNECTED TRUSTED RSSI BATTERY, every device bluez knows ("-": none; read drops empty fields)
+  local mac name
+  while IFS=$'\t' read -r mac name; do
+    bluetoothctl info "$mac" 2>/dev/null | awk -v mac="$mac" -v nm="$name" '
+      /^\tName:/ { sub(/^\tName: /, ""); n = $0 } /^\tIcon:/ { i = $2 } /^\tPaired:/ { p = $2 } /^\tConnected:/ { c = $2 } /^\tTrusted:/ { t = $2 }
+      /^\tRSSI:/ { r = $NF; gsub(/[()]/, "", r) } /^\tBattery Percentage:/ { b = $NF; gsub(/[()]/, "", b) }
+      END { if (n == "") n = nm; printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", mac, n, i == "" ? "-" : i, p == "" ? "no" : p, c == "" ? "no" : c, t == "" ? "no" : t, r == "" ? "-" : r, b == "" ? "-" : b }'
+  done < <(bt_devices); }
+bt_visible() { bluetoothctl show 2>/dev/null | grep -q "Discoverable: yes"; }
+bt_visible_toggle() { if bt_visible; then bluetoothctl discoverable off >/dev/null; notify "Hidden" "from nearby devices"
+  else bluetoothctl discoverable-timeout 180 >/dev/null 2>&1; bluetoothctl discoverable on >/dev/null; notify "Visible as $(hostname)" "for 3 minutes"; fi; }
+bt_connect() { if timeout 15 bluetoothctl connect "$1" 2>/dev/null | grep -q "Connection successful"; then notify Connected "$2"
+  else notify "Couldn’t connect to $2" "· is it nearby with Bluetooth on?"; fi; }
+bt_popup() {
+  local on mac name icon paired conn trusted rssi bat g kind n_conn=0 low="" names=() conns=() pairs=() near=()
+  printf 'O\twidth=424;height=524;refresh=4\n'
+  if ! bluetoothctl show >/dev/null 2>&1 || ! bluetoothctl show 2>/dev/null | grep -q Controller; then
+    printf 'D\tNo Bluetooth\t\t\nST\tno adapter\tdim\nN\tNo Bluetooth adapter\tThis computer has no Bluetooth controller.\tmuted\n'; return
+  fi
+  kbind b bt_power_toggle; kbind v bt_visible_toggle
+  tog "Bluetooth" bt_power_toggle "$(bt_powered && echo on || echo off)"
+  if ! bt_powered; then
+    while IFS=$'\t' read -r mac name; do names+=("$name"); done < <(bt_devices Paired)
+    printf 'D\tOff\t\t\nST\toff\tdim\n'
+    printf 'N\tBluetooth is off\tConnected devices drop when it is off. Turn it on to reconnect %s automatically.\tmuted\n' "$( [ ${#names[@]} -gt 0 ] && printf '%s' "${names[0]}${names[1]:+ and ${names[1]}}" || echo 'your devices')"
+    hints "↵" "Turn Bluetooth on"; return
+  fi
+  # scan in the background while the popup is up (it loads again every 4 s)
+  pgrep -f 'bluetoothctl --timeout 30 scan on' >/dev/null || setsid -f bluetoothctl --timeout 30 scan on >/dev/null 2>&1 </dev/null
+  tog "Visible as $(hostname)" bt_visible_toggle "$(bt_visible && echo on || echo off)" "$(bt_visible && echo '3 min')"
+  while IFS=$'\t' read -r mac name icon paired conn trusted rssi bat; do
+    [ "$rssi" = - ] && rssi=""; [ "$bat" = - ] && bat=""
+    if [ "$conn" = yes ]; then conns+=("$mac"$'\t'"$name"$'\t'"$icon"$'\t'"${bat:--}"); n_conn=$((n_conn + 1)); [ -n "$bat" ] && [ "$bat" -le 20 ] && low="$name battery $bat%"
+    elif [ "$paired" = yes ]; then pairs+=("$mac"$'\t'"$name"$'\t'"$icon")
+    elif [ -n "$rssi" ]; then near+=("$mac"$'\t'"$name"$'\t'"$icon"$'\t'"$rssi"); fi
+  done < <(bt_info_tsv)
+  printf 'D\tDevices\t\t\n'
+  if [ -n "$low" ]; then printf 'ST\t%s\tyellow\n' "$low"; elif [ "$n_conn" -gt 0 ]; then printf 'ST\t%d connected\tdim\n' "$n_conn"; else printf 'ST\ton\tdim\n'; fi
+  if [ ${#conns[@]} -gt 0 ]; then hdr "Connected"
+    for r in "${conns[@]}"; do IFS=$'\t' read -r mac name icon bat <<<"$r"; [ "$bat" = - ] && bat=""; IFS=$'\t' read -r g kind < <(bt_icon "$icon")
+      item "$name" "k4page $(printf %q "$name") '' bt-dev $mac" "›" "" "stay;mark=$g;markc=accent;bold;tall;line2=connected · $kind${bat:+;bat=$bat}"
+    done; fi
+  if [ ${#pairs[@]} -gt 0 ]; then hdr "Paired"
+    for r in "${pairs[@]}"; do IFS=$'\t' read -r mac name icon <<<"$r"; IFS=$'\t' read -r g kind < <(bt_icon "$icon")
+      item "$name" "bt_connect $mac $(printf %q "$name")" "" "" "stay;mark=$g;tall;line2=$kind"
+    done; fi
+  [ ${#conns[@]} -eq 0 ] && [ ${#pairs[@]} -eq 0 ] && printf 'N\tNo paired devices yet\tPut a device in pairing mode and pick it from Nearby.\tmuted\n'
+  printf 'H\tNearby\t\t↻ scanning\taccent\n'
+
+  local -A known_names=(); for r in "${conns[@]}" "${pairs[@]}"; do IFS=$'\t' read -r mac name _ <<<"$r"; known_names[$name]=1; done
+  for r in "${near[@]}"; do IFS=$'\t' read -r mac name icon rssi <<<"$r"
+    [ -n "${known_names[$name]:-}" ] && continue   # a paired device's second (LE) address
+    IFS=$'\t' read -r g kind < <(bt_icon "$icon")
+    local s=weak; [ "${rssi:--100}" -gt -75 ] 2>/dev/null && s=fair; [ "${rssi:--100}" -gt -60 ] 2>/dev/null && s=strong
+    item "$name" "bt_pair_start $mac $(printf %q "$name")" "" "" "stay;mark=$g;tall;line2=$kind · $s signal$([ "$kind" = "Unknown device" ] && echo ';dim;markc=muted')"
+  done
+  shown_near=$(for r in "${near[@]}"; do IFS=$'\t' read -r _ name _ <<<"$r"; [ -n "${known_names[$name]:-}" ] || echo x; done | grep -c x)
+  [ "$shown_near" -gt 0 ] || printf 'E\t%s\n' "Nothing in pairing mode nearby yet"
+  if command -v blueman-manager >/dev/null; then stay "Bluetooth settings" 'bg blueman-manager' "Blueman ↗"
+  else stay "Bluetooth settings" 'tui bluetui' "bluetui ↗"; fi
+  hints "↑↓" Move "↵" "Connect / pair" "v" Visible "b" "On/off"; }
+bt_dev_page() {  # bt_dev_page MAC: a connected device
+  local mac="$1" name icon paired conn trusted rssi bat g kind prof sink
+  printf 'O\twidth=424;height=524\n'
+  IFS=$'\t' read -r _ name icon paired conn trusted rssi bat < <(bt_info_tsv | awk -F'\t' -v m="$mac" '$1 == m')
+  [ "$bat" = - ] && bat=""
+  IFS=$'\t' read -r g kind < <(bt_icon "$icon")
+  printf 'D\t%s\t\t\nST\t%s\t%s\n' "$name" "$([ "$conn" = yes ] && echo connected || echo 'not connected')" "$([ "$conn" = yes ] && echo accent || echo dim)"
+  item "$name" k4:noop "" "" "mark=$g;markc=accent;bold;tall;line2=$([ "$conn" = yes ] && echo connected || echo 'not connected');line2c=accent"
+  stay "$kind" "copy_val Type $(printf %q "$kind")" "" "field=Type"
+  [ -n "$bat" ] && stay "$bat%$([ "$bat" -le 20 ] && echo ' · low')" "copy_val Battery $bat%" "" "field=Battery$([ "$bat" -le 20 ] && echo ';labelc=yellow')"
+  prof=$(pactl -f json list cards 2>/dev/null | jq -r --arg m "${mac//:/_}" '.[] | select(.name | contains($m)) | .active_profile' 2>/dev/null | head -1)
+  [ -n "$prof" ] && stay "$prof" "copy_val Profile $(printf %q "$prof")" "" "field=Profile"
+  stay "$mac" "copy_val Address $mac" "" "field=Address;dim"
+  hdr ""
+  sink=$(pactl list short sinks 2>/dev/null | awk -v m="${mac//:/_}" 'index($2, m) { print $2; exit }')
+  [ -n "$sink" ] && stay "Use as audio output" "pactl set-default-sink $(printf %q "$sink") && notify 'Audio output' $(printf %q "$name")" "$([ "$(pactl get-default-sink 2>/dev/null)" = "$sink" ] && echo current)"
+  tog "Connect automatically" "bluetoothctl $([ "$trusted" = yes ] && echo untrust || echo trust) $mac >/dev/null && notify 'Connect automatically' $([ "$trusted" = yes ] && echo off || echo on)" "$([ "$trusted" = yes ] && echo on || echo off)"
+  stay "Disconnect" "bluetoothctl disconnect $mac >/dev/null; notify Disconnected $(printf %q "$name"); echo k4:back"
+  stay "Forget device" "bluetoothctl remove $mac >/dev/null; notify Forgot $(printf %q "$name"); echo k4:back" "" "confirm=Forget $name?|Pair it again to use it."
+  hints "↑↓" Move "↵" Run "⌫" Back; }
+BT_PAIR_DIR="${XDG_RUNTIME_DIR:-/tmp}/k4-bt-pair"
+bt_pair_start() {  # bt_pair_start MAC NAME: pair (k4-bt-pair answers bluez); a code to compare opens the code page
+  local mac="$1" name="$2" i
+  rm -rf "$BT_PAIR_DIR"; mkdir -p "$BT_PAIR_DIR"
+  setsid -f k4-bt-pair "$mac" "$BT_PAIR_DIR" >/dev/null 2>&1 </dev/null
+  for i in $(seq 1 150); do
+    [ -f "$BT_PAIR_DIR/code" ] && { k4page "Pair $name" "" bt-pair "$mac" "$name"; return; }
+    [ -f "$BT_PAIR_DIR/ok" ] && { notify "Paired and connected" "$name"; return; }
+    [ -f "$BT_PAIR_DIR/fail" ] && { notify "Couldn’t pair with $name" "· $(cat "$BT_PAIR_DIR/fail")"; return; }
+    sleep 0.2
+  done
+  notify Pairing "$name · still waiting"; }
+bt_pair_answer() {  # bt_pair_answer yes|no NAME: the code page's answer, then wait for bluez
+  local i; echo "$1" > "$BT_PAIR_DIR/answer"
+  [ "$1" = no ] && { notify "Pairing cancelled" ""; echo k4:back; return; }
+  for i in $(seq 1 100); do
+    [ -f "$BT_PAIR_DIR/ok" ] && { notify "Paired and connected" "$2"; echo k4:back; return; }
+    [ -f "$BT_PAIR_DIR/fail" ] && { notify "Couldn’t pair with $2" "· $(cat "$BT_PAIR_DIR/fail")"; echo k4:back; return; }
+    sleep 0.2
+  done; notify Pairing "$2 · still waiting"; echo k4:back; }
+bt_pair_page() {  # bt_pair_page MAC NAME: compare the code on both
+  local mac="$1" name="$2" code icon g kind
+  printf 'O\twidth=424;height=524\n'
+  code=$(cat "$BT_PAIR_DIR/code" 2>/dev/null)
+  icon=$(bluetoothctl info "$mac" 2>/dev/null | awk '/^\tIcon:/ { print $2 }'); IFS=$'\t' read -r g kind < <(bt_icon "$icon")
+  printf 'D\tPair %s\t\t\n' "$name"
+  item "Pair with $name?" k4:noop "" "" "mark=$g;markc=accent;bold;tall;line2=Check that $name shows the same code, then confirm on both."
+  printf 'BIG\t%s\n' "${code:-– – –}"
+  stay "Codes match" "bt_pair_answer yes $(printf %q "$name")" "y" "" "key=y;bold"
+  stay "Cancel" "bt_pair_answer no $(printf %q "$name")" "n" "" "key=n"
+  hints "y" "Codes match" "n" Cancel; }
+
 k4_page() { local p="$1"; shift
   case "$p" in
-  wifi) local inuse ssid sig sec meta flags lock n nets=(); local -A saved=()
-        while IFS= read -r n; do saved[$n]=1; done < <(nmcli -g NAME con show 2>/dev/null)
-        mapfile -t nets < <(wifi_list auto)
-        printf 'D\t%s\t%s\t%s\n' "Enter connects; secured networks ask for the password" "$([ ${#nets[@]} = 1 ] && echo "1 network" || echo "${#nets[@]} networks")" "Filter networks…"
-        hdr "Networks · Enter connects" "${#nets[@]}"
-        [ ${#nets[@]} -gt 0 ] || printf 'E\t%s\n' "No networks in range$([ "$(nmcli radio wifi 2>/dev/null)" = enabled ] || echo " · Wi-Fi is off")"
-        for n in "${nets[@]}"; do IFS=$'\t' read -r inuse ssid sig sec <<<"$n"
-          lock=""; [ -n "$sec" ] && [ "$sec" != "--" ] && lock="  󰌾"
-          meta="$(wifi_bars "$sig") ${sig}%$lock"; flags=stay
-          if [ "$inuse" = '*' ]; then item "$ssid" "notify Wi-Fi $(printf %q "Connected to $ssid")" "connected  $meta" "" "stay;current"; continue; fi
-          if [ -n "${saved[$ssid]:-}" ]; then meta="saved  $meta"
-          elif [ -n "$lock" ]; then flags+=";input=Password for ${ssid//[;|]/ }|$sec network|password"; fi
-          item "$ssid" "wifi_join $(printf %q "$ssid") $(printf %q "$sec")" "$meta" "" "$flags"
-        done
-        hdr "More"
-        stay "Rescan" 'nmcli dev wifi rescan >/dev/null 2>&1; sleep 3; notify Wi-Fi Rescanned'
-        ask_item "Connect to hidden…" wifi_hidden "" "Network name|The SSID of the hidden network"
-        stay "Disconnect" wifi_disconnect ;;
+  wifi) wifi_popup ;;
+  wifi-net) wifi_net_page "$@" ;;
+  wifi-qr) wifi_qr_page "$@" ;;
+  bt) bt_popup ;;
+  bt-dev) bt_dev_page "$@" ;;
+  bt-pair) bt_pair_page "$@" ;;
   font) local cur f; cur=$(font_current 2>/dev/null)
         while IFS= read -r f; do
           printf '%s\t%s\t\t%s\n' "$f" "font_apply $(printf %q "$f") >/dev/null 2>&1; notify Font $(printf %q "$f")" "stay$([ "$f" = "$cur" ] && echo ';current')"
@@ -1622,7 +1823,7 @@ case "${1:-}" in
   background) set_background "${2:?image path}" ;;
   display|network|audio|bluetooth|weather) if [ "$LAUNCHER" = k4 ]; then k4_main "$1"; else submenu "$1"; fi ;;
   menu) main_menu ;;                                    # the k4 bar's menu button
-  calendar|battery|toggle|update|system|apps) k4_main "$1" ;; # the k4 bar's popups
+  calendar|battery|toggle|update|system|apps|bt) k4_main "$1" ;; # the k4 bar's popups
   kb-next) kb_cycle ;;
   timezone) if [ "$LAUNCHER" = k4 ]; then k4_main timezone; else tz_menu; fi ;;
   k4-section) k4_section "${2:?section}" ;;

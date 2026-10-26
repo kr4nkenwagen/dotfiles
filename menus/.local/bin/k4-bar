@@ -190,8 +190,8 @@ spec() {
   m weather right exec "$SELF status weather" 900 - "$p weather" "rm -f ~/.cache/sway-weather.json" - - - -
   m microphone right exec "$SELF status microphone --follow" 0 - "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle" - "$p audio" "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SOURCE@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-" "flash"
   m audio right exec "$SELF status audio --follow" 0 - "$p audio" "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle" - "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-" -
-  m network right exec "$SELF status network --follow" 0 - "$p network" "nmcli radio wifi \"\$(nmcli radio wifi | grep -q enabled && echo off || echo on)\"" - - - -
-  m bluetooth right exec "$SELF status bluetooth" 5 - "$p bluetooth" "bluetoothctl power \"\$(bluetoothctl show | grep -q 'Powered: yes' && echo off || echo on)\"" - - - -
+  m network right exec "$SELF status network --follow" 0 - "$p wifi" "nmcli radio wifi \"\$(nmcli radio wifi | grep -q enabled && echo off || echo on)\"" - - - -
+  m bluetooth right exec "$SELF status bluetooth" 5 - "$p bt" "bluetoothctl power \"\$(bluetoothctl show | grep -q 'Powered: yes' && echo off || echo on)\"" - - - -
   m brightness right exec "$SELF status brightness" 2 - "$p display" - - "brightnessctl set 5%+" "brightnessctl set 5%-" "flash"
   m battery right exec "$SELF status battery" 30 - "$p battery" - - - - -
   m keyboard right exec "$SELF status keyboard --follow" 0 - "$c kb_cycle" - - - - -
