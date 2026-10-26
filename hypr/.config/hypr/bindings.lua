@@ -136,3 +136,7 @@ o.bind("XF86AudioMute", "Mute", "k4-osd volume mute", { locked = true })
 o.bind("XF86AudioMicMute", "Mute microphone", "k4-osd mic mute", { locked = true })
 o.bind("XF86MonBrightnessUp", "Brightness up", "k4-osd brightness up", { locked = true, repeating = true })
 o.bind("XF86MonBrightnessDown", "Brightness down", "k4-osd brightness down", { locked = true, repeating = true })
+
+-- Super+Tab: k4's overview of every workspace (it was "next workspace"; Super+Tab again closes it).
+hl.unbind("SUPER + TAB")
+o.bind("SUPER + TAB", "Overview (k4)", "k4-overview")

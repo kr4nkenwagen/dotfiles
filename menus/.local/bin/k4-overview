@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# k4-overview: every workspace at once (k4 --overview, the Kestrel design's Overview).
+# Super+Tab opens it on the focused output; Super+Tab again closes it.
+export PATH="$HOME/.local/bin:$PATH"
+pkill -f '^k4 --overview' && exit 0
+exec k4 --overview
