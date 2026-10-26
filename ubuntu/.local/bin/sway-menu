@@ -708,6 +708,7 @@ hdr() { printf 'H\t%s\t%s\n' "$1" "${2:-}"; }   # hdr TEXT [COUNT]
 desc() { printf 'D\t%s\t%s\t%s\n' "$1" "${2:-}" "${3:-}"; }   # desc TEXT [COUNT] [PLACEHOLDER]: the section's line under its title, header count
 hints() { local IFS=$'\t'; printf 'Y\t%s\n' "$*"; }   # hints KEY LABEL...: the footer
 slider() { item "$1" "$2" "" "" "slider=${3:-0};step=${4:-5}"; }   # slider LABEL ACTION VALUE [STEP]: ← → runs ACTION with $K4_VALUE
+tog() { local st="$3"; stay "$1" "$2" "${4:-}" "toggle=$st${5:+;$5}"; }   # tog LABEL ACTION on|off [LABEL_TEXT] [FLAGS]: a switch row (Space/Enter flips it)
 ask_item() { item "$1" "$2" "${3:-}" "" "stay;input=$4"; }   # ask_item LABEL ACTION META 'Prompt|Hint[|password]': k4 asks, ACTION reads $K4_INPUT
 page() { printf 'P\t%s\t%s\t%s\t%q k4-page %s\n' "$1" "$2" "$3" "$SELF" "$1"; }   # page NAME TITLE SUBTITLE: rows from `sway-menu k4-page NAME`
 k4ask() { printf 'k4:input\t%s\t%s\t%s\t%s\n' "$(k4id "$1")" "${2//[$'\t;|']/ }" "${3:-}" "${4:-}"; }   # from a run: ask, then run ACTION with $K4_INPUT
@@ -1084,11 +1085,11 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            item "Record region" 'record_toggle region' "$([ "$rec" = Stop ] && echo recording || echo wf-recorder)"
            item "Record output" record_toggle "$([ "$rec" = Stop ] && echo recording)"
            item "Pick color" color_picker ;;
-  toggle) stay "Waybar" 'toggle_bar; notify Waybar "$(onoff pgrep -x waybar)"' "$(onoff pgrep -x waybar)"
-          stay "Starfield" 'starfield-toggle >/dev/null; notify Starfield "$(starfield-toggle status)"' "$(starfield-toggle status 2>/dev/null || echo on)"
-          stay "Launcher" toggle_launcher "$([ "$LAUNCHER" = k4 ] && echo on || echo off)"
-          stay "Idle lock" toggle_idle "$(onoff pgrep -x swayidle)"
-          stay "Do not disturb" 'toggle_dnd; notify "Do not disturb" "$(onoff sh -c "makoctl mode | grep -qx do-not-disturb")"' "$(onoff sh -c 'makoctl mode | grep -qx do-not-disturb')" ;;
+  toggle) tog "Waybar" 'toggle_bar; notify Waybar "$(onoff pgrep -x waybar)"' "$(onoff pgrep -x waybar)"
+          tog "Starfield" 'starfield-toggle >/dev/null; notify Starfield "$(starfield-toggle status)"' "$(starfield-toggle status 2>/dev/null || echo on)"
+          tog "Launcher" toggle_launcher "$([ "$LAUNCHER" = k4 ] && echo on || echo off)"
+          tog "Idle lock" toggle_idle "$(onoff pgrep -x swayidle)"
+          tog "Do not disturb" 'toggle_dnd; notify "Do not disturb" "$(onoff sh -c "makoctl mode | grep -qx do-not-disturb")"' "$(onoff sh -c 'makoctl mode | grep -qx do-not-disturb')" ;;
   style) local w; w=$(wallpaper)
          hdr "Theme"
          item "Theme" : "$(theme_pretty "$(theme_name)")" theme
@@ -1109,17 +1110,17 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            fi
            hdr "Outputs"
            while IFS=$'\t' read -r n a; do
-             stay "$n  $([[ $n =~ ^(eDP|LVDS|DSI) ]] && echo built-in || echo external)" "output_toggle $(printf %q "$n")" "$([ "$a" = true ] && echo enabled || echo disabled)"
+             tog "$n  $([[ $n =~ ^(eDP|LVDS|DSI) ]] && echo built-in || echo external)" "output_toggle $(printf %q "$n")" "$([ "$a" = true ] && echo on || echo off)" "$([ "$a" = true ] && echo enabled || echo disabled)"
            done < <(swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | [.name, (.active|tostring)] | @tsv')
            hdr "More"
-           stay "Night light" 'toggle_night; sleep 0.2; notify "Night light" "$(onoff pgrep -x wlsunset)"' "$(onoff pgrep -x wlsunset)"
+           tog "Night light" 'toggle_night; sleep 0.2; notify "Night light" "$(onoff pgrep -x wlsunset)"' "$(onoff pgrep -x wlsunset)"
            item "Scale" : "$(swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | select(.focused) | .scale')" scale ;;
   network) local dev ip gw dns; dev=$(primary_dev)
            ip=${dev:+$(nmcli -g IP4.ADDRESS dev show "$dev" 2>/dev/null | head -1)}; ip=${ip%%/*}
            gw=${dev:+$(nmcli -g IP4.GATEWAY dev show "$dev" 2>/dev/null)}
            dns=${dev:+$(nmcli -g IP4.DNS dev show "$dev" 2>/dev/null | head -1)}
            hdr "Wi-Fi"
-           stay "Wi-Fi power" wifi_power_toggle "$([ "$(nmcli radio wifi 2>/dev/null)" = enabled ] && echo on || echo off)"
+           tog "Wi-Fi power" wifi_power_toggle "$([ "$(nmcli radio wifi 2>/dev/null)" = enabled ] && echo on || echo off)"
            item "Wi-Fi networks" : "$(wifi_ssid)" wifi
            stay "Wi-Fi band" band_cycle "$(band_now)"
            command -v qrencode >/dev/null && item "Share Wi-Fi (QR code)" "wifi_qr $(printf %q "$(active_wifi_con)") $(printf %q "$(wifi_ssid)")"
@@ -1140,21 +1141,21 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
          slider "Volume" 'vol_to "${K4_VALUE}%"' "$v"
          slider "Microphone" 'wpctl set-volume -l 1 @DEFAULT_AUDIO_SOURCE@ "${K4_VALUE}%"; notify Microphone "$(vol_pct @DEFAULT_AUDIO_SOURCE@)"' "$(wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | awk '{ printf "%d", $2 * 100 + 0.5 }')"
          for l in 25 50 75 100; do stay "Volume $l%" "vol_to $l%" "$([ "$v" = "$l" ] && echo current)"; done
-         stay "Mute output" 'wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle; notify Output "$(out_muted)"' "$(out_muted)"
-         stay "Mute microphone" 'wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle; notify Microphone "$(mic_muted | sed s/on/muted/)"' "$(mic_muted | sed 's/on/muted/')"
+         tog "Mute output" 'wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle; notify Output "$(out_muted)"' "$([ "$(out_muted)" = muted ] && echo on || echo off)" "$(out_muted)"
+         tog "Mute microphone" 'wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle; notify Microphone "$(mic_muted | sed s/on/muted/)"' "$(mic_muted)" "$(mic_muted | sed 's/on/muted/')"
          hdr "Output device"
          while IFS=$'\t' read -r id def name vol; do stay "$name" "wpctl set-default $id; notify Output $(printf %q "$name")" "$([ "$def" = '*' ] && echo current)"; done < <(wp_list Sinks)
          hdr "Input device"
          while IFS=$'\t' read -r id def name vol; do stay "$name" "wpctl set-default $id; notify Input $(printf %q "$name")" "$([ "$def" = '*' ] && echo current)"; done < <(wp_list Sources)
          hdr "Streams · Enter mutes"
-         while IFS=$'\t' read -r id def name vol; do stay "$name" "wpctl set-mute $id toggle; notify $(printf %q "$name") toggled" "$([[ $vol == *MUTED* ]] && echo muted || echo playing)"; done < <(wp_list Streams)
+         while IFS=$'\t' read -r id def name vol; do tog "$name" "wpctl set-mute $id toggle; notify $(printf %q "$name") toggled" "$([[ $vol == *MUTED* ]] && echo on || echo off)" "$([[ $vol == *MUTED* ]] && echo muted || echo playing)"; done < <(wp_list Streams)
          hdr "More"
          item "pavucontrol" 'bg pavucontrol' ;;
   bluetooth) local mac name; local -A conn=()
              while IFS=$'\t' read -r mac name; do conn[$mac]=1; done < <(bt_devices Connected)
-             stay "Bluetooth power" bt_power_toggle "$(bt_powered && echo on || echo off)"
+             tog "Bluetooth power" bt_power_toggle "$(bt_powered && echo on || echo off)"
              hdr "Devices · Enter connects"
-             while IFS=$'\t' read -r mac name; do stay "$name" "bt_dev_toggle $mac $(printf %q "$name")" "$([ -n "${conn[$mac]:-}" ] && echo connected || echo disconnected)"; done < <(bt_devices Paired)
+             while IFS=$'\t' read -r mac name; do tog "$name" "bt_dev_toggle $mac $(printf %q "$name")" "$([ -n "${conn[$mac]:-}" ] && echo on || echo off)" "$([ -n "${conn[$mac]:-}" ] && echo connected || echo disconnected)"; done < <(bt_devices Paired)
              hdr "Manage"
              item "Scan & pair…" : "" btscan
              while IFS=$'\t' read -r mac name; do stay "Forget $name" "bluetoothctl remove $mac >/dev/null; notify Bluetooth $(printf %q "Forgot $name")" "" "$(printf 'confirm=Forget %s?|Pair it again to use it.' "$name")"; done < <(bt_devices Paired)
@@ -1190,7 +1191,7 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
        if command -v forticlient >/dev/null; then
          on=$(vpn_state)
          hdr "Profiles · Enter connects"
-         while IFS= read -r n; do [ -n "$n" ] && stay "Connect: $n" "vpn_profile_toggle $(printf %q "$n")" "$([ "$on" = on ] && echo connected)"; done < <(vpn_profiles)
+         while IFS= read -r n; do [ -n "$n" ] && tog "Connect: $n" "vpn_profile_toggle $(printf %q "$n")" "$on" "$([ "$on" = on ] && echo connected)"; done < <(vpn_profiles)
        fi
        hdr "More"
        item "Connect in terminal" "tui $(printf %q "$SELF") vpn-pick"
