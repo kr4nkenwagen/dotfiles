@@ -58,6 +58,24 @@ status() {
     [ -n "$pid" ] || { out; return; }
     local s; s=$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' '); s=${s:-0}
     out icon 󰑋 icon_tone red text "$(printf '%02d:%02d' $((s / 60)) $((s % 60)))" text_tone red tooltip "Recording · click stops it" ;;
+  reminder)  # a meeting within 10 minutes (Google Calendar, k4-cal): the bell, its time; notified once
+    command -v k4-cal >/dev/null || { out; return; }
+    local now st en title video
+    now=$(date +%s)
+    while IFS=$'\t' read -r st en title video; do
+      [ -n "$st" ] && [ "$st" -gt "$now" ] && [ $((st - now)) -le 600 ] || continue
+      local seen="$HOME/.cache/k4/cal/notified"
+      if ! grep -qx "$st $title" "$seen" 2>/dev/null; then
+        mkdir -p "${seen%/*}"; echo "$st $title" >> "$seen"
+        notify-send -a k4 "$title" "In $(( (st - now + 59) / 60 )) min${video:+ · $video}" 2>/dev/null
+      fi
+      out icon 󰂚 icon_tone yellow text "$(date -d "@$st" +%H:%M)" text_tone yellow tooltip "$title in $(( (st - now + 59) / 60 )) min · click opens the calendar"
+      return
+    done < <(k4-cal next 2>/dev/null)
+    out ;;
+  calsync)  # Google Calendar every 5 minutes (hidden; the clock and the reminder read what it wrote)
+    command -v k4-cal >/dev/null && k4-cal sync --quiet >/dev/null 2>&1
+    out ;;
   awake)
     if [ -n "$OMARCHY" ]; then [ -f "$HOME/.local/state/omarchy/indicators/stay-awake" ] || { out; return; }
     else pgrep -x swayidle >/dev/null && { out; return; }; fi
@@ -160,12 +178,14 @@ spec() {
   m menu left icon 󰕰 0 accent "$p menu" "${TERMINAL:-ghostty}" - - - "px=9"
   m workspaces left workspaces - 0 - - - - - - -
   m window left window - 0 - - - - - - -
-  m clock center clock "%H:%M;%a %d %b|%Y-%m-%d %H:%M:%S;w%V" 0 - "$p calendar" - - - - "px=10"
+  m clock center clock "%H:%M;%a %d %b|%Y-%m-%d %H:%M:%S;w%V" 0 - "$p calendar" - - - - "px=10;next=~/.cache/k4/cal/today.tsv"
   m media center exec "$SELF status media --follow" 0 - "$p spotify" - "playerctl play-pause" "playerctl previous" "playerctl next" "maxw=200;maxw2=140;compact"
   m dnd right exec "$SELF status dnd" 2 - "$c toggle_dnd" - - - - "px=5"
   m night right exec "$SELF status night" 3 - "$c toggle_night" - - - - "px=5"
   m rec right exec "$SELF status rec" 1 - "$c record_toggle" - - - - "px=5"
   m awake right exec "$SELF status awake" 3 - "$c toggle_idle" - - - - "px=5"
+  m reminder right exec "$SELF status reminder" 30 - "$p calendar" - - - - "px=5"
+  m calsync right exec "$SELF status calsync" 300 - - - - - - -
   m updates right exec "$SELF status updates" 3600 - "$p update" "$SELF status updates >/dev/null" - - - -
   m weather right exec "$SELF status weather" 900 - "$p weather" "rm -f ~/.cache/sway-weather.json" - - - -
   m microphone right exec "$SELF status microphone --follow" 0 - "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle" - "$p audio" "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SOURCE@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-" "flash"
@@ -177,8 +197,15 @@ spec() {
   m keyboard right exec "$SELF status keyboard --follow" 0 - "$c kb_cycle" - - - - -
 }
 
-popup() {  # popup PAGE: the k4 page under the clicked module; a second click closes it
-  if pgrep -f "^k4 --menu" >/dev/null; then pkill -f "^k4 --menu"; exit 0; fi
+popup() {  # popup PAGE: the k4 page under the clicked module; a second click closes it, another
+  # module's click swaps it for that one
+  local cur="${XDG_RUNTIME_DIR:-/tmp}/k4-popup"
+  if pgrep -f "^k4 --menu" >/dev/null; then
+    pkill -f "^k4 --menu"
+    [ "$(cat "$cur" 2>/dev/null)" = "$1" ] && { rm -f "$cur"; exit 0; }
+    sleep 0.1
+  fi
+  echo "$1" > "$cur"
   case "$1" in
     spotify) command -v spotify-menu >/dev/null && exec spotify-menu ;;
     *) exec sway-menu "$1" ;;

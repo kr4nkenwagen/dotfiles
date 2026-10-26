@@ -1259,9 +1259,10 @@ speed_page() {  # speed_page net|disk: the last result, and a row that runs the 
   else stay "Run the test" disk_speed_run "writes 512 MB, then deletes it" "current"; fi; }
 
 # ---------- Calendar and Battery (popups of the k4 bar's clock and battery) ----------
-calendar_page() {  # k4 draws the month grid itself (O cal): ← → months, ↑↓ weeks, t today
-  printf 'O\tcal;width=340\n'
-  printf 'D\t%s\t%s\t\n' "$(date '+%A %-d %B')" "week $(date +%V)"; }
+calendar_page() {  # k4 draws the calendar (O cal); k4-cal gives it Google Calendar's events
+  printf 'O\tcal\n'
+  printf 'D\t%s\t%s\t\n' "$(date '+%A %-d %B')" "week $(date +%V)"
+  k4-cal k4 2>/dev/null; }
 battery_page() {  # the design's battery popup: the charge large, draw, health, power profile
   local b c st en ef efd pn cyc t w line title
   b=$(ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -1); [ -n "$b" ] || { hdr "No battery"; return; }

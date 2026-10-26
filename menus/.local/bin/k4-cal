@@ -1,0 +1,435 @@
+#!/usr/bin/env python3
+"""k4-cal: Google Calendar for k4's calendar popup (the Kestrel bar design) and the bar.
+
+  k4-cal k4                      the popup's lines (CS CX CC CE CG CN, see k4's src/cal.odin)
+  k4-cal sync [--quiet]          send what waits offline, then fetch calendars and events
+  k4-cal connect | later | disconnect
+  k4-cal add CAL YYYY-MM-DD [HH:MM] TITLE
+  k4-cal rsvp EVENT yes|maybe|no [ORGANIZER]
+  k4-cal delete EVENT [TITLE]
+  k4-cal toggle CAL NAME on|off  show or hide a calendar (the bar and the grid)
+  k4-cal join URL | open URL | copy TEXT
+  k4-cal next                    the bar: today's timed events (start, end, title, video) as TSV
+
+Google needs an OAuth client of your own (one time): Google Cloud Console › APIs & Services ›
+enable the Google Calendar API › Credentials › Create credentials › OAuth client ID ›
+Desktop app › Download JSON, saved as ~/.config/k4/google-client.json. Sign-in uses the
+browser with a loopback redirect; the refresh token lives in the Secret Service keyring
+(secret-tool). Events are cached in ~/.cache/k4/cal (K4_CAL_DIR), so the popup opens at once
+and works offline; adds, replies and deletes made offline wait in a queue.
+"""
+import base64, datetime as dt, hashlib, html, http.server, json, os, re, secrets, shutil
+import subprocess, sys, threading, time, urllib.error, urllib.parse, urllib.request
+
+HOME = os.path.expanduser("~")
+DIR = os.environ.get("K4_CAL_DIR") or os.path.join(HOME, ".cache/k4/cal")
+CLIENT = os.path.join(HOME, ".config/k4/google-client.json")
+RUN = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+TOKEN_CACHE = os.path.join(RUN, "k4-cal-token.json")
+SECRET = ["service", "k4-google-calendar"]
+API = "https://www.googleapis.com/calendar/v3"
+SCOPE = "https://www.googleapis.com/auth/calendar"
+TONES = ["blue", "yellow", "green", "magenta", "cyan", "orange", "red"]
+SELF = os.path.realpath(__file__)
+
+
+def path(name): return os.path.join(DIR, name)
+
+
+def load(name, default):
+    try:
+        with open(path(name)) as f: return json.load(f)
+    except (OSError, ValueError): return default
+
+
+def save(name, data):
+    os.makedirs(DIR, exist_ok=True)
+    tmp = path(name + ".tmp")
+    with open(tmp, "w") as f: json.dump(data, f)
+    os.replace(tmp, path(name))
+
+
+def clean(s): return re.sub(r"[\t\r\n]+", " ", str(s or "")).strip()
+
+
+def say(msg): print(msg, flush=True)
+
+
+# ---------- the token ----------
+
+def refresh_token():
+    if os.environ.get("K4_CAL_DIR"): return load("refresh-token.json", {}).get("token")  # tests
+    try:
+        r = subprocess.run(["secret-tool", "lookup", *SECRET], capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() or None
+    except (OSError, subprocess.SubprocessError): return None
+
+
+def client():
+    with open(CLIENT) as f: c = json.load(f)
+    return c.get("installed") or c.get("web") or c
+
+
+def access_token():
+    try:
+        with open(TOKEN_CACHE) as f: t = json.load(f)
+        if t.get("expires", 0) > time.time() + 60: return t["token"]
+    except (OSError, ValueError, KeyError): pass
+    rt = refresh_token()
+    if not rt: raise PermissionError("not connected")
+    c = client()
+    body = urllib.parse.urlencode({"client_id": c["client_id"], "client_secret": c.get("client_secret", ""),
+                                   "refresh_token": rt, "grant_type": "refresh_token"}).encode()
+    try:
+        with urllib.request.urlopen(c.get("token_uri", "https://oauth2.googleapis.com/token"), body, timeout=15) as r:
+            j = json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code in (400, 401): raise PermissionError("sign in again")  # revoked or expired grant
+        raise
+    fd = os.open(TOKEN_CACHE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f: json.dump({"token": j["access_token"], "expires": time.time() + j.get("expires_in", 3600)}, f)
+    return j["access_token"]
+
+
+def api(method, url, body=None, query=None):
+    if query: url += "?" + urllib.parse.urlencode(query)
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url if url.startswith("http") else API + url, data=data, method=method)
+    req.add_header("Authorization", "Bearer " + access_token())
+    if data: req.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(req, timeout=20) as r:
+        raw = r.read()
+    return json.loads(raw) if raw else {}
+
+
+def q(s): return urllib.parse.quote(s, safe="")
+
+
+# ---------- connect ----------
+
+def connect():
+    if not os.path.exists(CLIENT):
+        say("Google needs your OAuth client first: see k4-cal --help (~/.config/k4/google-client.json)")
+        return
+    c = client()
+    verifier = base64.urlsafe_b64encode(secrets.token_bytes(48)).rstrip(b"=").decode()
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    state = secrets.token_urlsafe(16)
+    got = {}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            p = urllib.parse.urlparse(self.path)
+            got.update({k: v[0] for k, v in urllib.parse.parse_qs(p.query).items()})
+            ok = got.get("state") == state and "code" in got
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(("<p style='font:16px monospace'>%s</p>" % ("k4 is connected to Google Calendar. You can close this tab." if ok else "Sign-in did not finish. Try again from k4.")).encode())
+
+        def log_message(self, *a): pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    srv.timeout = 300
+    redirect = "http://127.0.0.1:%d" % srv.server_address[1]
+    url = c.get("auth_uri", "https://accounts.google.com/o/oauth2/auth") + "?" + urllib.parse.urlencode({
+        "client_id": c["client_id"], "redirect_uri": redirect, "response_type": "code", "scope": SCOPE,
+        "access_type": "offline", "prompt": "consent", "state": state,
+        "code_challenge": challenge, "code_challenge_method": "S256"})
+    subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    srv.handle_request()
+    srv.server_close()
+    if got.get("state") != state or "code" not in got:
+        say("Not connected  · the sign-in was cancelled or timed out")
+        return
+    body = urllib.parse.urlencode({"code": got["code"], "client_id": c["client_id"], "client_secret": c.get("client_secret", ""),
+                                   "redirect_uri": redirect, "grant_type": "authorization_code", "code_verifier": verifier}).encode()
+    with urllib.request.urlopen(c.get("token_uri", "https://oauth2.googleapis.com/token"), body, timeout=20) as r:
+        j = json.load(r)
+    if "refresh_token" not in j:
+        say("Not connected  · Google sent no refresh token")
+        return
+    subprocess.run(["secret-tool", "store", "--label=k4 Google Calendar", *SECRET], input=j["refresh_token"], text=True, check=True)
+    fd = os.open(TOKEN_CACHE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f: json.dump({"token": j["access_token"], "expires": time.time() + j.get("expires_in", 3600)}, f)
+    n = sync(quiet=True)
+    say("Connected  Google Calendar · %d calendars" % n)
+
+
+def disconnect():
+    subprocess.run(["secret-tool", "clear", *SECRET], capture_output=True)
+    for p_ in (TOKEN_CACHE,):
+        try: os.remove(p_)
+        except OSError: pass
+    shutil.rmtree(DIR, ignore_errors=True)
+    say("Disconnected  Google Calendar · the cache is gone")
+
+
+# ---------- sync ----------
+
+def local_tz(): return dt.datetime.now().astimezone().tzinfo
+
+
+def norm_event(cal, e):
+    """One Google event as the popup's fields."""
+    st, en = e.get("start", {}), e.get("end", {})
+    out = {"id": cal + "|" + e["id"], "cal": cal, "title": clean(e.get("summary")) or "(no title)",
+           "loc": clean((e.get("location") or "").split("\n")[0]), "link": e.get("htmlLink", "")}
+    if "date" in st:
+        d0 = dt.date.fromisoformat(st["date"])
+        d1 = dt.date.fromisoformat(en.get("date", st["date"]))
+        out.update(date=d0.isoformat(), s="", e="", days=max((d1 - d0).days, 1))
+    else:
+        s = dt.datetime.fromisoformat(st["dateTime"].replace("Z", "+00:00")).astimezone(local_tz())
+        t = dt.datetime.fromisoformat(en["dateTime"].replace("Z", "+00:00")).astimezone(local_tz())
+        days = (t.date() - s.date()).days + (1 if t.time() > dt.time(0, 0) else 0)
+        out.update(date=s.date().isoformat(), s=s.strftime("%H:%M"), e=t.strftime("%H:%M"), days=max(days, 1),
+                   start_ts=s.timestamp(), end_ts=t.timestamp())
+    meet = e.get("hangoutLink") or next((p["uri"] for p in e.get("conferenceData", {}).get("entryPoints", []) if p.get("entryPointType") == "video"), "")
+    out["meet"] = re.sub(r"^https?://", "", meet or "")
+    org = e.get("organizer", {})
+    out["own"] = bool(org.get("self") or e.get("creator", {}).get("self"))
+    out["org"] = "" if org.get("self") else clean(org.get("displayName") or org.get("email"))
+    me = next((a for a in e.get("attendees", []) if a.get("self")), None)
+    out["rsvp"] = {"accepted": "yes", "tentative": "maybe", "declined": "no"}.get((me or {}).get("responseStatus"), "")
+    words = {"accepted": "going", "tentative": "maybe", "declined": "not going", "needsAction": "no reply"}
+    guests = []
+    for a in e.get("attendees", []):
+        name = "You" if a.get("self") else clean(a.get("displayName") or a.get("email"))
+        guests.append([name, "organizer" if a.get("organizer") else words.get(a.get("responseStatus"), "")])
+    if len(guests) > 8: guests = guests[:7] + [["+%d more" % (len(guests) - 7), ""]]
+    out["guests"] = guests if (guests and not (len(guests) == 1 and guests[0][0] == "You")) else []
+    notes = html.unescape(re.sub(r"<br\s*/?>", "\n", e.get("description") or "", flags=re.I))
+    notes = re.sub(r"<[^>]+>", "", notes).strip()
+    out["notes"] = notes[:300]
+    return out
+
+
+def flush_queue():
+    queue = load("queue.json", [])
+    left = []
+    for op in queue:
+        try:
+            if op["op"] == "add": api("POST", "/calendars/%s/events" % q(op["cal"]), op["body"])
+            elif op["op"] == "delete": api("DELETE", "/calendars/%s/events/%s" % (q(op["cal"]), q(op["ev"])), query={"sendUpdates": "all"})
+            elif op["op"] == "rsvp": rsvp_online(op["cal"], op["ev"], op["answer"])
+        except urllib.error.HTTPError as e:
+            if e.code >= 500: left.append(op)  # Google's trouble: later; 4xx: it cannot work, drop it
+        except (urllib.error.URLError, OSError): left.append(op)
+    save("queue.json", left)
+
+
+def sync(quiet=False):
+    if not refresh_token():
+        if not quiet: say("Not connected  · ↵ in the calendar signs in")
+        return 0
+    try:
+        flush_queue()
+        old = {c["id"]: c for c in load("cals.json", [])}
+        items = api("GET", "/users/me/calendarList").get("items", [])
+        cals, used = [], {c.get("tone") for c in old.values()}
+        free = [t for t in TONES if t not in used] + TONES
+        for c in items:
+            cid = c["id"]
+            prev = old.get(cid, {})
+            ro = c.get("accessRole") in ("reader", "freeBusyReader")
+            if prev.get("tone"): tone = prev["tone"]
+            elif c.get("primary"): tone = "accent"
+            elif "#holiday@" in cid: tone = "dim"
+            else: tone = free.pop(0)
+            acct = "primary" if c.get("primary") else ("read-only" if ro else ("yours" if c.get("accessRole") == "owner" else "shared with you"))
+            cals.append({"id": cid, "name": clean(c.get("summaryOverride") or c.get("summary")), "tone": tone, "acct": acct,
+                         "on": prev.get("on", c.get("selected", True)), "ro": ro, "primary": bool(c.get("primary"))})
+        cals.sort(key=lambda c: (not c["primary"], c["ro"], c["name"].lower()))
+        now = dt.datetime.now().astimezone()
+        lo, hi = (now - dt.timedelta(days=35)).isoformat(), (now + dt.timedelta(days=120)).isoformat()
+        evs = []
+        for c in cals:
+            tok = None
+            while True:
+                qy = {"timeMin": lo, "timeMax": hi, "singleEvents": "true", "orderBy": "startTime", "maxResults": "2500"}
+                if tok: qy["pageToken"] = tok
+                r = api("GET", "/calendars/%s/events" % q(c["id"]), query=qy)
+                evs += [norm_event(c["id"], e) for e in r.get("items", []) if e.get("status") != "cancelled"]
+                tok = r.get("nextPageToken")
+                if not tok: break
+        evs += [e for e in load("events.json", []) if e.get("pending")]  # still waiting to be sent
+        save("cals.json", cals)
+        save("events.json", evs)
+        save("state.json", {"synced": time.time(), "offline": False})
+        write_next(cals, evs)
+        if not quiet: say("Synced  %s · %d events" % (time.strftime("%H:%M"), len(evs)))
+        return len(cals)
+    except PermissionError:
+        if not quiet: say("Signed out  · ↵ in the calendar signs in again")
+        return 0
+    except (urllib.error.URLError, OSError, TimeoutError) as e:
+        st = load("state.json", {})
+        st["offline"] = True
+        save("state.json", st)
+        if not quiet: say("Offline  · the cached events stay")
+        return 0
+
+
+def write_next(cals, evs):
+    """Today's timed events of the shown calendars, for the bar's clock and reminder."""
+    shown = {c["id"] for c in cals if c.get("on", True)}
+    today = dt.date.today().isoformat()
+    rows = sorted((e for e in evs if e.get("date") == today and e.get("s") and e["cal"] in shown and e.get("rsvp") != "no" and "start_ts" in e),
+                  key=lambda e: e["start_ts"])
+    os.makedirs(DIR, exist_ok=True)
+    with open(path("today.tsv"), "w") as f:
+        for e in rows: f.write("%d\t%d\t%s\t%s\n" % (e["start_ts"], e["end_ts"], e["title"], e.get("meet", "")))
+
+
+# ---------- the popup ----------
+
+def k4():
+    cals = load("cals.json", [])
+    st = load("state.json", {})
+    connected = bool(refresh_token())
+    if not connected: print("CS\tnone\tnot connected")
+    elif st.get("offline"): print("CS\toffline\toffline · cached %s" % time.strftime("%H:%M", time.localtime(st.get("synced", 0))))
+    elif st.get("synced"): print("CS\tok\tsynced %s" % time.strftime("%H:%M", time.localtime(st["synced"])))
+    else: print("CS\tsync\t↻ syncing…")
+    print("CX\t%s" % SELF)
+    for c in cals:
+        print("CC\t%s\t%s\t%s\t%s\t%d\t%d" % (c["id"], c["name"], c["tone"], c["acct"], 1 if c.get("on", True) else 0, 1 if c.get("ro") else 0))
+    for e in load("events.json", []):
+        flags = []
+        if e.get("own"): flags.append("own")
+        if e.get("pending"): flags.append("pending")
+        if e.get("org"): flags.append("org=" + e["org"].replace(";", ","))
+        if e.get("rsvp"): flags.append("rsvp=" + e["rsvp"])
+        print("\t".join(["CE", e["id"], e["cal"], e["date"], e.get("s") or "-", e.get("e") or "-", str(e.get("days", 1)),
+                         clean(e["title"]), clean(e.get("loc")) or "-", e.get("meet") or "-", e.get("link") or "-", ";".join(flags)]))
+        for g in e.get("guests", []): print("CG\t%s\t%s\t%s" % (e["id"], clean(g[0]), clean(g[1])))
+        if e.get("notes"): print("CN\t%s\t%s" % (e["id"], e["notes"].replace("\t", " ").replace("\n", "\\n")))
+
+
+# ---------- actions ----------
+
+def short(d): return d.strftime("%a %-d %b")
+
+
+def add(cal, date, tm, title):
+    d = dt.date.fromisoformat(date)
+    if tm:
+        s = dt.datetime.combine(d, dt.time.fromisoformat(tm)).astimezone()
+        e = s + dt.timedelta(hours=1)
+        body = {"summary": title, "start": {"dateTime": s.isoformat()}, "end": {"dateTime": e.isoformat()},
+                "reminders": {"useDefault": False, "overrides": [{"method": "popup", "minutes": 10}]}}
+    else:
+        body = {"summary": title, "start": {"date": d.isoformat()}, "end": {"date": (d + dt.timedelta(days=1)).isoformat()}}
+    when = short(d) + (" " + tm if tm else "")
+    try:
+        api("POST", "/calendars/%s/events" % q(cal), body)
+        sync(quiet=True)
+        say("Created  %s · %s" % (title, when))
+    except PermissionError: raise
+    except (urllib.error.URLError, OSError, TimeoutError) as err:
+        if isinstance(err, urllib.error.HTTPError) and err.code < 500:
+            say("Not created  · Google said %d" % err.code); return
+        queue = load("queue.json", [])
+        queue.append({"op": "add", "cal": cal, "body": body})
+        save("queue.json", queue)
+        evs = load("events.json", [])
+        ev = {"id": "pending|%d" % time.time(), "cal": cal, "date": d.isoformat(), "s": tm or "", "e": (dt.datetime.combine(d, dt.time.fromisoformat(tm)) + dt.timedelta(hours=1)).strftime("%H:%M") if tm else "",
+              "days": 1, "title": title, "own": True, "pending": True}
+        save("events.json", evs + [ev])
+        say("Saved, will sync  %s · %s" % (title, when))
+
+
+def split_id(ev):
+    cal, _, eid = ev.rpartition("|")
+    return cal, eid
+
+
+def rsvp_online(cal, eid, answer):
+    e = api("GET", "/calendars/%s/events/%s" % (q(cal), q(eid)))
+    status = {"yes": "accepted", "maybe": "tentative", "no": "declined"}[answer]
+    att = e.get("attendees", [])
+    for a in att:
+        if a.get("self"): a["responseStatus"] = status
+    api("PATCH", "/calendars/%s/events/%s" % (q(cal), q(eid)), {"attendees": att}, {"sendUpdates": "all"})
+
+
+def offline_op(op, msg):
+    queue = load("queue.json", [])
+    queue.append(op)
+    save("queue.json", queue)
+    say(msg)
+
+
+def rsvp(ev, answer, org=""):
+    cal, eid = split_id(ev)
+    word = {"yes": "Yes", "maybe": "Maybe", "no": "No"}[answer]
+    evs = load("events.json", [])
+    for e in evs:
+        if e["id"] == ev: e["rsvp"] = answer
+    save("events.json", evs)
+    try:
+        rsvp_online(cal, eid, answer)
+        say("Replied  %s%s" % (word, " · sent to " + org if org else ""))
+    except PermissionError: raise
+    except (urllib.error.URLError, OSError, TimeoutError):
+        offline_op({"op": "rsvp", "cal": cal, "ev": eid, "answer": answer}, "Replied  %s · sent when back online" % word)
+
+
+def delete(ev, title=""):
+    cal, eid = split_id(ev)
+    save("events.json", [e for e in load("events.json", []) if e["id"] != ev])
+    if cal == "pending":
+        say("Deleted  " + title); return
+    try:
+        api("DELETE", "/calendars/%s/events/%s" % (q(cal), q(eid)), query={"sendUpdates": "all"})
+        say("Deleted  " + title)
+    except PermissionError: raise
+    except (urllib.error.URLError, OSError, TimeoutError):
+        offline_op({"op": "delete", "cal": cal, "ev": eid}, "Deleted  %s · sent when back online" % title)
+    write_next(load("cals.json", []), load("events.json", []))
+
+
+def toggle(cal, name, on):
+    cals = load("cals.json", [])
+    for c in cals:
+        if c["id"] == cal: c["on"] = on == "on"
+    save("cals.json", cals)
+    write_next(cals, load("events.json", []))
+    say("%s  %s" % (name, "shown" if on == "on" else "hidden"))
+
+
+def bg(*cmd): subprocess.Popen(list(cmd), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def main(a):
+    cmd = a[0] if a else ""
+    if cmd in ("-h", "--help", "help", ""): print(__doc__.strip()); return
+    if cmd in ("add", "rsvp", "delete") and not refresh_token():
+        say("Not connected  · ↵ in the calendar signs in"); return
+    if cmd == "k4": k4()
+    elif cmd == "sync": sync(quiet="--quiet" in a)
+    elif cmd == "connect": connect()
+    elif cmd == "later": say("Using the local calendar · connect later from the calendar (↵)")
+    elif cmd == "disconnect": disconnect()
+    elif cmd == "add": add(a[1], a[2], a[3] if len(a) > 4 else "", a[-1])
+    elif cmd == "rsvp": rsvp(a[1], a[2], a[3] if len(a) > 3 else "")
+    elif cmd == "delete": delete(a[1], a[2] if len(a) > 2 else "")
+    elif cmd == "toggle": toggle(a[1], a[2], a[3])
+    elif cmd == "join": bg("xdg-open", "https://" + re.sub(r"^https?://", "", a[1])); say("Opened  " + a[1])
+    elif cmd == "open": bg("xdg-open", a[1]); say("Opened in Google Calendar  ·  browser")
+    elif cmd == "copy":
+        subprocess.run(["wl-copy"], input=a[1], text=True)
+        say("Copied  " + a[1])
+    elif cmd == "next":
+        try:
+            with open(path("today.tsv")) as f: sys.stdout.write(f.read())
+        except OSError: pass
+    else:
+        print("k4-cal: unknown command %r (k4-cal --help)" % cmd, file=sys.stderr); sys.exit(2)
+
+
+if __name__ == "__main__":
+    try: main(sys.argv[1:])
+    except PermissionError: say("Not connected  · ↵ in the calendar signs in")
+    except FileNotFoundError as e: say("Missing  %s" % e.filename)
