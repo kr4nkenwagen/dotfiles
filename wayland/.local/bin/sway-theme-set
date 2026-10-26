@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sway-theme-set: apply an Omarchy-format theme on the Ubuntu/Sway profile.
+# sway-theme-set: apply an Omarchy-format theme on the Sway and plain Hyprland profiles.
 #   sway-theme-set NAME     stage the theme, render app configs, apply everything live
 #   sway-theme-set next     cycle to the next theme (bound to Super+Shift+Ctrl+Space)
 #   sway-theme-set list     print "name<TAB>dir" for every available theme
@@ -83,6 +83,10 @@ apply_live() {
     while IFS= read -r line; do
       [[ $line == client.* || $line == font\ * ]] && swaymsg -- "$line" >/dev/null 2>&1 || true
     done <"$CURRENT/sway.conf"
+  fi
+  # Hyprland (the plain-Arch profile): a reload re-reads hyprland.lua and the theme's colours
+  if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && command -v hyprctl >/dev/null; then
+    hyprctl reload >/dev/null 2>&1 || true
   fi
   bg=$(backgrounds "$name" | head -1)
   if [ -n "$bg" ]; then

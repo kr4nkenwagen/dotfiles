@@ -5,9 +5,11 @@
 #   k4-bar stop
 #   k4-bar spec            the module list k4 --bar reads
 #   k4-bar status MODULE   one module's line (Waybar JSON); --follow keeps printing on changes
-# Modules (left · center · right): menu, workspaces, window · clock, media · indicators (do not
-# disturb, night light, recording, stay awake: each shown only when on), updates, weather,
-# microphone, audio, network, bluetooth, brightness, battery, keyboard (the Kestrel bar design).
+# Modules (left · center · right): menu, workspaces, window · clock, media (any MPRIS player, via
+# media-menu) · indicators (do not disturb, night light, recording, stay awake: each shown only
+# when on), a LocalSend transfer, removable drives (k4-drives, only with one in), pinned tray apps
+# and the tray (chat apps with their unread count tag), updates, weather, microphone, audio,
+# network, bluetooth, brightness, battery, keyboard (the Kestrel bar design).
 set -u
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/snap/bin:$PATH"
 SELF=$(readlink -f "$0")
@@ -35,14 +37,9 @@ vol_icon() { if [ "$1" -ge 66 ]; then echo 󰕾; elif [ "$1" -ge 33 ]; then echo
 status() {
   MOD=$1
   case "$1" in
-  media)  # any MPRIS player: note and title · artist; paused dims; nothing playing hides
-    command -v playerctl >/dev/null || { out; return; }
-    local st t a
-    st=$(playerctl status 2>/dev/null) || { out; return; }
-    t=$(playerctl metadata title 2>/dev/null); a=$(playerctl metadata artist 2>/dev/null)
-    [ -n "$t" ] || { out; return; }
-    if [ "$st" = Playing ]; then out icon 󰝚 icon_tone accent text "$t" text2 "$a" tooltip "$t — $a"
-    else out icon 󰏤 text "$t" text2 "$a" class dim tooltip "Paused · $t — $a"; fi ;;
+  media)  # any MPRIS player (media-menu, over busctl): note and title · artist; paused dims; nothing playing hides
+    command -v media-menu >/dev/null && { media-menu bar; return; }
+    out ;;
   dnd)  # k4's notifications: the bell with the unread count (crossed out with do not disturb)
     local st n d
     if st=$(k4 --notify-ctl status 2>/dev/null); then
@@ -56,7 +53,7 @@ status() {
     else makoctl mode 2>/dev/null | grep -qx do-not-disturb || { out; return; }; fi
     out icon 󰍶 tooltip "Do not disturb · click turns it off" ;;
   night)
-    if [ -n "$OMARCHY" ]; then local t; t=$(hyprctl hyprsunset temperature 2>/dev/null | grep -oE '^[0-9]+' | head -1); [ -n "$t" ] && [ "$t" -lt 6000 ] || { out; return; }
+    if [ -n "$HYPR" ]; then local t; t=$(hyprctl hyprsunset temperature 2>/dev/null | grep -oE '^[0-9]+' | head -1); [ -n "$t" ] && [ "$t" -lt 6000 ] || { out; return; }
     else pgrep -x wlsunset >/dev/null || { out; return; }; fi
     out icon 󰖔 tooltip "Night light · click turns it off" ;;
   rec)  # counts up while recording
@@ -86,7 +83,7 @@ status() {
     out ;;
   awake)
     if [ -n "$OMARCHY" ]; then [ -f "$HOME/.local/state/omarchy/indicators/stay-awake" ] || { out; return; }
-    else pgrep -x swayidle >/dev/null && { out; return; }; fi
+    else pgrep -x swayidle >/dev/null || pgrep -x hypridle >/dev/null && { out; return; }; fi
     out icon 󰅶 tooltip "Stay awake (idle lock off) · click turns the lock back on" ;;
   updates)
     local n
@@ -170,7 +167,7 @@ status() {
 follow_status() {  # status, then again on every change of what it shows
   MOD=$1
   case "$1" in
-    media) follow playerctl --follow status ;;
+    media) command -v media-menu >/dev/null && exec media-menu bar --follow; status media; exec sleep infinity ;;   # blocks: the bar restarts a follower that ends
     microphone|audio) follow sh -c 'pactl subscribe | grep --line-buffered -E "sink|source|server"' ;;
     network) follow nmcli monitor ;;
     keyboard) if [ -n "$HYPR" ]; then follow sh -c 'socat -U - "UNIX-CONNECT:$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock" | grep --line-buffered "^activelayout>>"'
@@ -187,7 +184,7 @@ spec() {
   m workspaces left workspaces - 0 - - - - - - -
   m window left window - 0 - - - - - - -
   m clock center clock "%H:%M;%a %d %b|%Y-%m-%d %H:%M:%S;w%V" 0 - "$p calendar" - - - - "px=10;next=~/.cache/k4/cal/today.tsv"
-  m media center exec "$SELF status media --follow" 0 - "$p spotify" - "playerctl play-pause" "playerctl previous" "playerctl next" "maxw=200;maxw2=140;compact"
+  m media center exec "$SELF status media --follow" 0 - "$p media" - "media-menu ctl play-pause" "media-menu ctl previous" "media-menu ctl next" "maxw=200;maxw2=140;compact"
   m dnd right exec "$SELF status dnd" 1 - "k4-notify center" "$c toggle_dnd" - - - - "px=5"
   m night right exec "$SELF status night" 3 - "$c toggle_night" - - - - "px=5"
   m rec right exec "$SELF status rec" 1 - "$c record_toggle" - - - - "px=5"
@@ -195,6 +192,7 @@ spec() {
   m reminder right exec "$SELF status reminder" 30 - "$p calendar" - - - - "px=5"
   m calsync right exec "$SELF status calsync" 300 - - - - - - -
   m share right exec "k4-share bar" 1 - "k4-share bar-click" "k4-share cancel" - - - "px=6"   # a LocalSend transfer, only while one moves
+  command -v k4-drives >/dev/null && m drives right exec "k4-drives bar --follow" 0 - "$p drives" "k4-drives newest eject" "k4-drives newest open" - - "px=6"   # only while a removable drive is in
   m pin0 right exec "k4-tray pinned 0" 3 - "k4-tray pin-click 0" "k4-tray pin-click 0 menu" - - - "px=4"   # tray apps pinned to the bar
   m pin1 right exec "k4-tray pinned 1" 3 - "k4-tray pin-click 1" "k4-tray pin-click 1 menu" - - - "px=4"
   m pin2 right exec "k4-tray pinned 2" 3 - "k4-tray pin-click 2" "k4-tray pin-click 2 menu" - - - "px=4"
@@ -213,15 +211,18 @@ spec() {
 
 popup() {  # popup PAGE: the k4 page under the clicked module; a second click closes it, another
   # module's click swaps it for that one
-  local cur="${XDG_RUNTIME_DIR:-/tmp}/k4-popup"
-  if pgrep -f "^k4 --menu" >/dev/null; then
-    pkill -f "^k4 --menu"
+  local cur="${XDG_RUNTIME_DIR:-/tmp}/k4-popup" pat='^k4 --(menu|media|drives|keyring)'
+  if pgrep -f "$pat" >/dev/null; then
+    pkill -f "$pat"
     [ "$(cat "$cur" 2>/dev/null)" = "$1" ] && { rm -f "$cur"; exit 0; }
     sleep 0.1
   fi
   echo "$1" > "$cur"
   case "$1" in
     spotify) command -v spotify-menu >/dev/null && exec spotify-menu ;;
+    media) command -v media-menu >/dev/null && exec media-menu window ;;
+    drives) exec k4-drives window ;;
+    keyring) exec k4-secret window ;;
     *) exec sway-menu "$1" ;;
   esac; }
 

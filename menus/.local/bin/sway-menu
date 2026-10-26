@@ -41,7 +41,7 @@ plog() { mkdir -p "${PICK_LOG%/*}"; printf '%s %s\n' "$(date +%H:%M:%S.%3N)" "$*
 ms() { echo $(( $(date +%s%N) / 1000000 )); }   # for step timings in the pick log
 
 # ---------- platform: Ubuntu/Sway here; Omarchy/Hyprland overrides these at the end ----------
-OMARCHY=""; command -v omarchy-theme-set >/dev/null 2>&1 && OMARCHY=1
+OMARCHY=""; [ -z "${K4_NO_OMARCHY:-}" ] && command -v omarchy-theme-set >/dev/null 2>&1 && OMARCHY=1   # K4_NO_OMARCHY=1: the plain Hyprland menu here (tests)
 WM=sway; [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && WM=hyprland
 update_cmd() { echo "tui_wait 'sudo apt update && sudo apt full-upgrade'"; }
 theme_apply() { sway-theme-set "$1"; }
@@ -58,6 +58,7 @@ wm_exit() { swaymsg exit; }
 WM_CONFIG="$HOME/.config/sway/config"
 launch_app() { bg gtk-launch "$1"; }
 PKG_TOOL=apt
+pkg_hint() { if [ "$PKG_TOOL" = pacman ]; then printf 'sudo pacman -S %s' "${2:-$1}"; else printf 'sudo apt install %s' "$1"; fi; }   # pkg_hint APT_NAME [PACMAN_NAME]
 WM_TITLE=Sway; [ "$WM" = hyprland ] && WM_TITLE=Hyprland; WM_WIKI=https://github.com/swaywm/sway/wiki; BAR_ALT=Waybar; SHOT_TOOL="grim + slurp"; REC_TOOL=wf-recorder
 sys_reboot() { systemctl reboot; }
 sys_poweroff() { systemctl poweroff; }
@@ -342,20 +343,30 @@ wifi_list() {  # prints "*|-<TAB>ssid<TAB>signal<TAB>security" (never an empty f
 wifi_prompt() { fz --dmenu --prompt "$1 ❯ " --lines 0 --width 40 ${2:+--password} < /dev/null; }
 # The k4 Wi-Fi page's actions: no pickers; the password comes from $K4_INPUT (k4 asks for it).
 wifi_secured() { [ -n "$1" ] && [ "$1" != "--" ]; }
+# A password typed here is kept in the keyring (k4-secret, app=k4 kind=wifi) once it works, and
+# tried first next time; one that stops working is forgotten and asked for again.
+KEY_FAILED="!The saved password did not work. It was forgotten; type the new one."
+wifi_key() { command -v k4-secret >/dev/null && k4-secret lookup wifi "$1" 2>/dev/null; }
+wifi_keep() { [ -n "$2" ] && command -v k4-secret >/dev/null && printf '%s' "$2" | k4-secret store wifi "$1" 2>/dev/null; return 0; }
 wifi_join() {  # wifi_join SSID SECURITY [hidden]
-  local ssid="$1" sec="$2" hidden="${3:-}" pw="${K4_INPUT:-}" out again
+  local ssid="$1" sec="$2" hidden="${3:-}" pw="${K4_INPUT:-}" out again typed=""
   again="wifi_join $(printf %q "$ssid") $(printf %q "$sec") $hidden"
+  [ -n "$pw" ] && typed=1
+  if [ -z "$pw" ] && wifi_secured "$sec"; then pw=$(wifi_key "$ssid") || pw=""; fi
   if nmcli -g NAME con show 2>/dev/null | grep -qxF -- "$ssid"; then
     if [ -n "$pw" ]; then nmcli con mod id "$ssid" wifi-sec.psk "$pw" >/dev/null 2>&1; fi
-    if out=$(nmcli con up id "$ssid" 2>&1); then notify Wi-Fi "Connected to $ssid"; return; fi
-    if wifi_secured "$sec"; then k4ask "$again" "Password for $ssid" "The saved password did not work" password
+    if out=$(nmcli con up id "$ssid" 2>&1); then [ -n "$typed" ] && wifi_keep "$ssid" "$pw"; notify Wi-Fi "Connected to $ssid"; return; fi
+    if wifi_secured "$sec"; then
+      if [ -z "$typed" ] && [ -n "$pw" ]; then k4-secret clear wifi "$ssid" 2>/dev/null; k4ask "$again" "Password for $ssid" "$KEY_FAILED" password
+      else k4ask "$again" "Password for $ssid" "The saved password did not work" password; fi
     else notify Wi-Fi "$(printf '%s' "$out" | tail -1)"; fi
     return
   fi
   if wifi_secured "$sec" && [ -z "$pw" ]; then k4ask "$again" "Password for $ssid" "$sec network" password; return; fi
-  if out=$(nmcli dev wifi connect "$ssid" ${pw:+password "$pw"} ${hidden:+hidden yes} 2>&1); then notify Wi-Fi "Connected to $ssid"
+  if out=$(nmcli dev wifi connect "$ssid" ${pw:+password "$pw"} ${hidden:+hidden yes} 2>&1); then [ -n "$typed" ] && wifi_keep "$ssid" "$pw"; notify Wi-Fi "Connected to $ssid"
   else
     nmcli con delete id "$ssid" >/dev/null 2>&1   # a failed attempt leaves a profile with the wrong password
+    if [ -z "$typed" ] && [ -n "$pw" ]; then k4-secret clear wifi "$ssid" 2>/dev/null; k4ask "$again" "Password for $ssid" "$KEY_FAILED" password; return; fi
     notify Wi-Fi "$(printf '%s' "$out" | tail -1 | sed 's/^Error: //')"
   fi; }
 wifi_hidden() { local h="${K4_INPUT:-}"; [ -n "$h" ] || return 0; K4_INPUT="" wifi_join "$h" WPA hidden; }
@@ -712,8 +723,8 @@ about() { tui_wait 'command -v fastfetch >/dev/null && fastfetch || { uname -a; 
 leaves_system() { local p="${1:-}"
   add "󰌾  ${p}Lock" lock
   add "󰤄  ${p}Suspend" 'systemctl suspend'
-  add "󰑓  ${p}Reload sway" 'swaymsg reload >/dev/null'
-  add "󰍃  ${p}Logout" 'confirm "Log out?" && swaymsg exit'
+  add "󰑓  ${p}Reload $WM_TITLE" wm_reload
+  add "󰍃  ${p}Logout" 'confirm "Log out?" && wm_exit'
   add "󰜉  ${p}Reboot" 'confirm "Reboot?" && systemctl reboot'
   add "󰐥  ${p}Shutdown" 'confirm "Shut down?" && systemctl poweroff'; }
 
@@ -821,7 +832,7 @@ power_tiles() { local bat pct st info mem n inh lockc
   bat=$(power_battery); pct=${bat%% *}; st=${bat#* }
   info=$(power_uptime); [ -n "$bat" ] && info="$info · battery $pct%"
   printf 'H\t%s@%s\t%s\n' "$USER" "$(cat /etc/hostname 2>/dev/null || hostname)" "$info"
-  lockc=swaylock; [ -n "$OMARCHY" ] && lockc=omarchy-system-lock
+  lockc=swaylock; [ "$WM" = hyprland ] && lockc=hyprlock; [ -n "$OMARCHY" ] && lockc=omarchy-system-lock
   command -v k4-perf >/dev/null && printf 'T\tperf\tPerformance\tM\t󰍛\tk4 perf\tOpens the performance window: CPU, memory, disk, network, processes and utilities. Also Super+Shift+Esc.\n'
   printf 'T\tlock\tLock\tL\t\t%s\tBlanks the screen behind the lock. Everything keeps running.\n' "$lockc"
   local sus=() low=""
@@ -832,7 +843,7 @@ power_tiles() { local bat pct st info mem n inh lockc
   if power_hibernate_ok; then printf 'T\thibernate\tHibernate\tH\t󰤁\tsystemctl hibernate\tWrites memory to swap and powers off. Uses no battery; resumes where you left off.\n'
   else mem=$(awk '/^MemTotal/ {printf "%d", $2 / 1048576 + 0.5}' /proc/meminfo)
     printf 'T\thibernate\tHibernate\tH\t󰤁\tsystemctl hibernate\tWrites memory to swap and powers off.\toff=no swap|No swap big enough for %s GB of RAM.%s\n' "$mem" "$([ -n "$OMARCHY" ] && echo ' Set it up with omarchy-hibernation-setup.')"; fi
-  local ex=wm_exit; [ -n "$OMARCHY" ] && ex=omarchy-system-logout || ex="swaymsg exit"
+  local ex="swaymsg exit"; [ "$WM" = hyprland ] && ex="hyprctl dispatch 'hl.dsp.exit()'"; [ -n "$OMARCHY" ] && ex=omarchy-system-logout
   local rb="systemctl reboot" po="systemctl poweroff"; [ -n "$OMARCHY" ] && rb=omarchy-system-reboot po=omarchy-system-shutdown
   printf 'T\tlogout\tLog out\tE\t󰍃\t%s\tEnds the session and returns to the login screen.\task=Log out?|Every window closes and the session ends.\n' "$ex"
   printf 'T\treboot\tReboot\tR\t󰜉\t%s\tRestarts the machine.\task=Reboot now?|Unsaved work in open apps will be lost.\tblock\n' "$rb"
@@ -1049,19 +1060,22 @@ net_wifi_tab() {
   fi
   local -A saved=()
   while IFS= read -r n; do saved[$n]=1; done < <(nmcli -g NAME,TYPE con show 2>/dev/null | awk -F: '$2 == "802-11-wireless" { print $1 }')
+  local -A keyed=()   # passwords k4 keeps in the keyring: "WPA2 · key saved"
+  command -v k4-secret >/dev/null && while IFS= read -r n; do [ -n "$n" ] && keyed[$n]=1; done < <(k4-secret names wifi 2>/dev/null)
   printf 'H\tNetworks\t\t↻ scanning\taccent\n'
   nmcli -t -f IN-USE,SSID,SIGNAL,FREQ,RATE,SECURITY dev wifi list --rescan auto 2>/dev/null \
     | sed 's/\\:/\x01/g' | awk -F: '$2 != "" && !seen[$2]++ { gsub(/\x01/, ":", $2); print ($1 == "*" ? "*" : "-") "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" ($6 == "" ? "--" : $6) }' \
     | while IFS=$'\t' read -r conn ssid sig freq rate sec; do [ "$ssid" = "$cur" ] && continue; printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$([ -n "${saved[$ssid]:-}" ] && echo 1 || echo 0)$(printf '%03d' "$sig")" "$ssid" "$sig" "$freq" "$rate" "$sec"; done \
     | sort -r | while IFS=$'\t' read -r _ ssid sig freq rate sec; do
     sub="$(wifi_band "$freq")"; flags="stay;mark=$(wifi_glyph "$sig")"
-    [ -n "${saved[$ssid]:-}" ] && sub+=" · saved"
+    [ -n "${keyed[$ssid]:-}" ] && sub="${sec%% *} · key saved"
+    [ -n "${saved[$ssid]:-}" ] && [ -z "${keyed[$ssid]:-}" ] && sub+=" · saved"
     case "$sec" in *802.1X*) sub+=" · 802.1X" ;; esac
     wifi_secured "$sec" && flags+=";lock"
     case "$sec" in
       *802.1X*) item "$ssid" "tui nmtui-connect $(printf %q "$ssid"); notify $(printf %q "$ssid") 'needs a username and certificate · opens nmtui'" "" "" "$flags;line2=$sub" ;;
-      *) if [ -n "${saved[$ssid]:-}" ] || ! wifi_secured "$sec"; then item "$ssid" "wifi_join $(printf %q "$ssid") $(printf %q "$sec")" "" "" "$flags;line2=$sub"
-         else item "$ssid" "wifi_join $(printf %q "$ssid") $(printf %q "$sec")" "" "" "$flags;line2=$sub;input=${ssid//[;|]/ } needs a password ($sec).|Saved to NetworkManager, k4 never stores the password itself.|password"; fi ;;
+      *) if [ -n "${saved[$ssid]:-}" ] || [ -n "${keyed[$ssid]:-}" ] || ! wifi_secured "$sec"; then item "$ssid" "wifi_join $(printf %q "$ssid") $(printf %q "$sec")" "" "" "$flags;line2=$sub"
+         else item "$ssid" "wifi_join $(printf %q "$ssid") $(printf %q "$sec")" "" "" "$flags;line2=$sub;input=${ssid//[;|]/ } needs a password ($sec).|Saved to NetworkManager, and to your keyring once it works.|password"; fi ;;
     esac
   done
   ask_item "Connect to hidden network…" wifi_hidden "" "Network name|The name (SSID) of the hidden network"
@@ -1354,7 +1368,7 @@ external_outputs() { swaymsg -t get_outputs | jq -r '.[] | select(.name | test("
 external_state() { external_outputs | awk -F'\t' '$2 == "true" { on = 1 } END { print on ? "on" : (NR ? "off" : "none") }'; }
 toggle_external() { local n a want; want=disable; [ "$(external_state)" = off ] && want=enable
   while IFS=$'\t' read -r n a; do swaymsg output "$n" "$want" >/dev/null; done < <(external_outputs); notify "External displays" "$want"; }
-mirror_output() { if command -v wl-mirror >/dev/null; then bg wl-mirror "$(focused_output)"; else notify "Mirror" "Needs wl-mirror (apt install wl-mirror)"; fi; }
+mirror_output() { if command -v wl-mirror >/dev/null; then bg wl-mirror "$(focused_output)"; else notify "Mirror" "Needs wl-mirror ($(pkg_hint wl-mirror))"; fi; }
 wifi_ssid() { nmcli -t -f ACTIVE,SSID dev wifi 2>/dev/null | awk -F: '$1 == "yes" { print $2; exit }'; }
 eth_dev() { nmcli -t -f DEVICE,TYPE,STATE dev 2>/dev/null | awk -F: '$2 == "ethernet" { print $1 "\t" $3; exit }'; }
 eth_state() { local d st; IFS=$'\t' read -r d st < <(eth_dev); [ -n "$d" ] || { echo none; return; }; [ "$st" = connected ] && echo connected || echo unplugged; }
@@ -1439,7 +1453,7 @@ webapp_remove() {  # webapp_remove PATH: delete the launcher and its icon
 # k4 input rows: the typed text arrives as $K4_INPUT, the results open as a page
 pkg_search() { [ -n "${K4_INPUT:-}" ] && k4page Packages "matching “$K4_INPUT” · Enter installs in a terminal" apt "$K4_INPUT"; }
 pkg_installed_search() { [ -n "${K4_INPUT:-}" ] && k4page Installed "matching “$K4_INPUT” · Enter removes in a terminal" apt-installed "$K4_INPUT"; }
-flatpak_search() { command -v flatpak >/dev/null || { notify Flatpak "flatpak is not installed (apt install flatpak)"; return; }
+flatpak_search() { command -v flatpak >/dev/null || { notify Flatpak "flatpak is not installed ($(pkg_hint flatpak))"; return; }
   [ -n "${K4_INPUT:-}" ] && k4page Flathub "matching “$K4_INPUT” · Enter installs in a terminal" flatpak "$K4_INPUT"; }
 weather_search() { [ -n "${K4_INPUT:-}" ] && k4page Places "for “$K4_INPUT” · Enter sets the location" places "$K4_INPUT"; }
 kb_set() { mkdir -p "$STATE"; echo "$1" > "$STATE/kb-layout"; set_layout "$1"; }
@@ -1448,7 +1462,7 @@ font_get() {  # font_get NAME: download and install a Nerd Font in the backgroun
   bg sh -c 'mkdir -p "$1" && curl -fsSL "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/$2.tar.xz" | tar -xJ -C "$1" && fc-cache -f && notify-send Fonts "Installed $2" || notify-send -u critical Fonts "Could not install $2"' sh "$d" "$1"
   notify Fonts "Installing $1 in the background"; }
 flatpak_install() { if command -v flatpak >/dev/null; then tui sh -c 'q=$(printf "" | fzf --print-query --prompt "Flatpak search ❯ " | head -1); [ -n "$q" ] && id=$(flatpak search --columns=application,name "$q" | fzf --prompt "Install ❯ " | cut -f1) && [ -n "$id" ] && flatpak install -y flathub "$id"; printf "\n[done] press enter"; read -r _'
-  else notify Flatpak "flatpak is not installed (apt install flatpak)"; fi; }
+  else notify Flatpak "flatpak is not installed ($(pkg_hint flatpak))"; fi; }
 font_install() { tui sh -c 'f=$(curl -fsSL https://api.github.com/repos/ryanoasis/nerd-fonts/releases/latest | jq -r ".assets[].name | select(endswith(\".tar.xz\")) | sub(\".tar.xz\"; \"\")" | fzf --prompt "Nerd Font ❯ ") && [ -n "$f" ] && mkdir -p "$HOME/.local/share/fonts/nerd-fonts/$f" && curl -fsSL "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/$f.tar.xz" | tar -xJ -C "$HOME/.local/share/fonts/nerd-fonts/$f" && fc-cache -f && echo "Installed $f"; printf "\n[done] press enter"; read -r _'; }
 
 # helpers for the design's in-place rows (toggles, cycles, levels, radios, copies)
@@ -1689,7 +1703,7 @@ lone_set() { local v="${K4_VALUE:-3:2}"; mkdir -p "$STATE"; printf '%s\n' "$v" >
   notify "Lone window" "$([ "$v" = Off ] && echo "full width" || echo "$v")"; }
 # a QR code on screen: pick the area, what it says goes to the clipboard
 qr_scan() { local sel r
-  command -v zbarimg >/dev/null || { notify-send -a Capture "Scanning QR codes needs zbar" "sudo apt install zbar-tools"; return 1; }
+  command -v zbarimg >/dev/null || { notify-send -a Capture "Scanning QR codes needs zbar" "$(pkg_hint zbar-tools zbar)"; return 1; }
   sel=$(slurp 2>/dev/null) || return 0
   r=$(grim -g "$sel" - | zbarimg -q --raw -Sdisable -Sqrcode.enable - 2>/dev/null)
   [ -n "$r" ] || { notify-send -a Capture -u critical "No QR code found" "Select a region containing a QR code"; return 1; }
@@ -1735,6 +1749,10 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
              command -v k4-notify >/dev/null && item "Notifications" 'k4-notify center' "Super+N"
              command -v k4-tray >/dev/null && item "Tray" 'k4-tray popup' "Super+."
              command -v k4-perf >/dev/null && item "System performance" 'k4-perf popup' "Super+Shift+Esc"
+             command -v pass-menu >/dev/null && item "Passwords" 'pass-menu' "Super+Ctrl+P"
+             command -v media-menu >/dev/null && item "Media" 'media-menu window' "$(media-menu summary 2>/dev/null)"
+             command -v k4-drives >/dev/null && item "Drives" 'k4-drives window' "$(k4-drives count) attached"
+             command -v k4-snap >/dev/null && item "Snapshots" 'k4-snap window' "btrfs · snapper"
              [ -s "$HOME/.local/state/sway/tray-hidden" ] && stay "Show hidden tray apps" 'rm -f "$HOME/.local/state/sway/tray-hidden"; notify Tray "hidden apps are back"' "$(wc -l < "$HOME/.local/state/sway/tray-hidden") hidden"
              if command -v k4-ssh >/dev/null; then ssh_rows; fi ;;
   toggle) tog "Bar" 'toggle_bar; sleep 0.2; notify Bar "$(onoff bar_running)"' "$(onoff bar_running)"
@@ -1795,6 +1813,7 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            if command -v k4-share >/dev/null; then share_rows; fi
            hdr "More"
            stay "Ethernet" eth_toggle "$(eth_state)"
+           command -v k4-secret >/dev/null && item "Keyring" 'k4-secret' "$(k4-secret count) saved by k4"
            item "Open nmtui" 'tui nmtui' ;;
   audio) if command -v pactl >/dev/null && pactl info >/dev/null 2>&1; then audio_rows; return; fi
          # without pactl: wpctl only (no per-app levels)
@@ -1840,6 +1859,7 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
          item "Display" : "" "" "jump=display"
          hdr "Config"
          item "Keybindings" show_keybindings
+         command -v k4-secret >/dev/null && item "Keyring" 'k4-secret' "$(k4-secret count) saved by k4"
          item "Input devices" : "$(kb_now)" inputs
          item "Timezone" : "$(timedatectl show -p Timezone --value 2>/dev/null)" timezone
          item "Default apps" 'tui nvim "$HOME/.config/mimeapps.list"'
@@ -1878,6 +1898,7 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
           hdr "Dotfiles"
           item "Update dotfiles" "tui_wait \"cd $(printf %q "$DOTFILES") && git pull --ff-only && bash init.sh\"" "git pull" ;;
   system) command -v k4-perf >/dev/null && item "Performance" 'k4-perf popup' "Super+Shift+Esc"
+          command -v k4-snap >/dev/null && item "Snapshots" 'k4-snap window' "take, compare, restore"
           item "Lock" lock
           item "Suspend" 'systemctl suspend'
           power_hibernate_ok && item "Hibernate" 'systemctl hibernate'
@@ -1920,14 +1941,112 @@ main_menu() {
   show Menu "$top"
 }
 
-# ---------- Omarchy (Hyprland): the same menu through Omarchy's own commands ----------
-# Everything above is the Ubuntu/Sway version; on Omarchy these replace the parts that differ.
-if [ -n "$OMARCHY" ]; then
-  [ -f "$STATE/launcher" ] || { command -v k4 >/dev/null && LAUNCHER=k4; }   # Omarchy has no fuzzel
+# ---------- Packages: pacman and the AUR (Arch, Omarchy) ----------
+# Everything above is the Ubuntu/Sway version; the layers below replace the parts that differ.
+if command -v pacman >/dev/null; then
+  PKG_TOOL=pacman
+  update_cmd() { echo "tui_wait 'command -v yay >/dev/null && yay -Syu || sudo pacman -Syu'"; }
+  pkg_install() {  # the fuzzel-era pickers (fzf in a terminal)
+    local pkgs; pkgs=$(pacman -Slq | sort -u | fzf --multi --prompt 'Install ❯ ' --header 'tab: select several · enter: install · esc: cancel' \
+      --preview 'pacman -Si {1} 2>/dev/null | head -20' --preview-window right:55%:wrap) || exit 0
+    [ -n "$pkgs" ] || exit 0
+    # shellcheck disable=SC2086
+    sudo pacman -S --needed $pkgs; printf '\n[done] press enter to close'; read -r _; }
+  pkg_remove() {
+    local pkgs; pkgs=$(pacman -Qq | fzf --multi --prompt 'Remove ❯ ' --preview 'pacman -Qi {1} 2>/dev/null | head -20' --preview-window right:55%:wrap) || exit 0
+    [ -n "$pkgs" ] || exit 0
+    # shellcheck disable=SC2086
+    sudo pacman -Rns $pkgs; printf '\n[done] press enter to close'; read -r _; }
+  firmware_cmd() { echo "tui_wait 'command -v fwupdmgr >/dev/null || sudo pacman -S --needed fwupd; fwupdmgr refresh --force; sudo fwupdmgr update'"; }
+  pkg_rows_search() {
+    local q="$1" any=""
+    while IFS=$'\t' read -r name inst desc; do any=1
+      printf '%s\ttui_wait '\''sudo pacman -S %s'\''\t%s\t\n' "$name" "$name" "$([ "$inst" = i ] && printf 'installed · ')${desc:0:48}"
+    done < <(pacman -Ss -- "$q" 2>/dev/null | awk '/^[^ ]/ { split($1, a, "/"); name = a[2]; inst = ($0 ~ /\[installed/) ? "i" : "-"; next } { sub(/^ +/, ""); printf "%s\t%s\t%s\n", name, inst, $0 }' | head -60) | k4rows
+    if command -v yay >/dev/null; then
+      hdr "AUR"
+      timeout 10 yay -Ssa -- "$q" 2>/dev/null | awk '/^[^ ]/ { split($1, a, "/"); name = a[2]; next } { sub(/^ +/, ""); printf "%s\ttui_wait '\''yay -S %s'\''\t%s\t\n", name, name, substr($0, 1, 48) }' | head -40 | k4rows
+    fi
+    [ -n "$any" ] || hdr "No repository package matches “$q”"; }
+  pkg_rows_installed() {
+    pacman -Q 2>/dev/null | grep -i -- "$1" | head -100 | awk '{ printf "%s\ttui_wait '\''sudo pacman -Rns %s'\''\t%s\t\n", $1, $1, $2 }' | k4rows; }
+fi
+
+# ---------- Hyprland (plain Arch, and Omarchy under its layer below) ----------
+if [ "$WM" = hyprland ]; then
+  [ -f "$STATE/launcher" ] || { command -v k4 >/dev/null && LAUNCHER=k4; }   # the Hyprland binds open k4
   WM_CONFIG="$HOME/.config/hypr/hyprland.lua"
   SWAY_CONFIG="$HOME/.config/hypr/autostart.lua"
-  PKG_TOOL=pacman
-  WM_TITLE=Hyprland; WM_WIKI=https://wiki.hypr.land; BAR_ALT=Omarchy; SHOT_TOOL=omarchy; REC_TOOL=gpu-screen-recorder
+  WM_TITLE=Hyprland; WM_WIKI=https://wiki.hypr.land
+  wm_reload() { hyprctl reload >/dev/null; }
+  wm_exit() { hyprctl dispatch 'hl.dsp.exit()' >/dev/null; }
+  lock() { pidof hyprlock >/dev/null || bg hyprlock; }
+  idle() { exec hypridle; }
+  idle_on() { pgrep -x hypridle >/dev/null; }
+  toggle_idle() { if idle_on; then pkill -x hypridle; else bg hypridle; fi; notify "Idle lock" "$(onoff idle_on)"; }
+  night_on() { local t; t=$(hyprctl hyprsunset temperature 2>/dev/null | grep -oE '[0-9]+' | head -1); [ -n "$t" ] && [ "$t" -lt 6000 ]; }
+  toggle_night() { pgrep -x hyprsunset >/dev/null || { bg hyprsunset; sleep 0.3; }
+    if night_on; then hyprctl hyprsunset identity >/dev/null; else hyprctl hyprsunset temperature 4000 >/dev/null; fi; }
+  # live settings through hyprctl eval, kept in ~/.local/state/sway/hypr-*.lua (hyprland.lua
+  # loads them last): one line per key, the newest wins
+  hypr_keep() {  # hypr_keep FILE KEY LUA
+    local f="$STATE/hypr-$1.lua"; mkdir -p "$STATE"
+    { awk -v k=" -- $2" 'substr($0, length($0) - length(k) + 1) != k' "$f" 2>/dev/null; printf '%s -- %s\n' "$3" "$2"; } > "$f.new" && mv "$f.new" "$f"
+    hyprctl eval "$3" >/dev/null 2>&1; }
+  # outputs
+  outputs_tsv() { hyprctl -j monitors all 2>/dev/null | jq -r '.[] | [.name, ((.disabled // false) | not | tostring), (.focused | tostring), (.scale | tostring)] | @tsv'; }
+  focused_output() { hyprctl -j monitors 2>/dev/null | jq -r '.[] | select(.focused) | .name'; }
+  screen_size() { hyprctl -j monitors 2>/dev/null | jq -r '(map(.width) | max | tostring) + "x" + (map(.height) | max | tostring)'; }
+  scale_set() { hypr_keep display "$1" "hl.monitor({ output = \"$1\", mode = \"preferred\", position = \"auto\", scale = $2 })"; notify Scale "$1  $2×"; }
+  set_scale() { local o; o=$(focused_output); [ -n "$o" ] && scale_set "$o" "$1"; }
+  output_toggle() {  # never the last active output
+    local on n; on=$(outputs_tsv | awk -F'\t' -v o="$1" '$1 == o { print $2 }'); n=$(outputs_tsv | awk -F'\t' '$2 == "true"' | wc -l)
+    if [ "$on" = true ]; then
+      if [ "$n" -le 1 ]; then notify Display "Cannot disable the last active display"; return; fi
+      hypr_keep display "$1" "hl.monitor({ output = \"$1\", disabled = true })"; notify Display "$1 disabled"
+    else hypr_keep display "$1" "hl.monitor({ output = \"$1\", mode = \"preferred\", position = \"auto\", scale = \"auto\" })"; notify Display "$1 enabled"; fi; }
+  toggle_output() { output_toggle "$1"; }
+  external_outputs() { hyprctl -j monitors all 2>/dev/null | jq -r '.[] | select(.name | test("^eDP|^LVDS|^DSI") | not) | "\(.name)\t\((.disabled // false) | not)"'; }
+  toggle_external() { local n a; while IFS=$'\t' read -r n a; do output_toggle "$n"; done < <(external_outputs); }
+  # windows, capture
+  shot_window() { local g; g=$(hyprctl -j clients 2>/dev/null | jq -r --argjson ws "$(hyprctl -j monitors | jq '[.[].activeWorkspace.id]')" \
+      '.[] | select(.workspace.id as $w | $ws | index($w)) | "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"' | slurp) || return; shot -g "$g"; }
+  floating_state() { hyprctl -j activewindow 2>/dev/null | jq -r 'if .floating then "on" else "off" end'; }
+  # gaps and borders (Style › Gaps & borders)
+  gaps_now() { hyprctl -j getoption general:gaps_in 2>/dev/null | jq -r '(.custom // "0") | split(" ") | first'; }
+  gaps_apply() { hypr_keep look gaps "hl.config({ general = { gaps_in = $1, gaps_out = $2, border_size = $3 } })"; }
+  # keyboard layout and input
+  kb_now() { hyprctl -j devices 2>/dev/null | jq -r '[.keyboards[] | select(.main) | .active_keymap] | first // "?"' | cut -c1-2 | tr '[:upper:]' '[:lower:]'; }
+  kb_cycle() { hyprctl switchxkblayout all next >/dev/null; notify Keyboard "$(kb_now)"; }
+  kb_set() { hypr_keep input layout "hl.config({ input = { kb_layout = \"$1\" } })"; notify Keyboard "Layout: $1"; }
+  set_layout() { kb_set "$1"; }
+  natural_on() { [ "$(hyprctl -j getoption input:touchpad:natural_scroll 2>/dev/null | jq -r '.int // 0')" = 1 ]; }
+  natural_toggle() { local v=true; natural_on && v=false
+    hypr_keep input natural "hl.config({ input = { touchpad = { natural_scroll = $v } } })"; notify "Natural scroll" "$([ $v = true ] && echo on || echo off)"; }
+  # pages that read the Sway tree: scale and input devices
+  eval "$(declare -f k4_page | sed '1s/^k4_page/k4_page_sway/')"
+  k4_page() {
+    case "$1" in
+      scale) local o cur v; o=$(focused_output); [ -n "$o" ] || { hdr "No focused output"; return; }
+             cur=$(outputs_tsv | awk -F'\t' -v o="$o" '$1 == o { print $4 + 0 }')
+             hdr "$o"
+             for v in 1 1.25 1.5 2; do stay "$v×" "scale_set $(printf %q "$o") $v" "$([ "$v" = "$cur" ] && echo current)" "$([ "$v" = "$cur" ] && echo current)"; done ;;
+      inputs) local kb l n t; kb=$(kb_now)
+              hdr "Keyboard layout"
+              for l in us se; do stay "$l" "kb_set $l" "$([ "$kb" = "$l" ] && echo current)" "$([ "$kb" = "$l" ] && echo current)"; done
+              if hyprctl -j devices 2>/dev/null | jq -e '[.mice[].name | select(test("touchpad"; "i"))] | length > 0' >/dev/null; then
+                hdr "Touchpad"; stay "Natural scroll" natural_toggle "$(natural_on && echo on || echo off)"; fi
+              hdr "Devices · Enter copies the name"
+              while IFS=$'\t' read -r n t; do stay "$n" "copy_val Device $(printf %q "$n")" "$t"; done < <(hyprctl -j devices 2>/dev/null | jq -r '(.keyboards[] | "\(.name)\tkeyboard"), (.mice[] | "\(.name)\tpointer")' | sort -u) ;;
+      *) k4_page_sway "$@" ;;
+    esac; }
+fi
+
+# ---------- Omarchy: Hyprland through Omarchy's own commands ----------
+# On top of the Hyprland layer above: theme, font, background, capture, toggles and the bar
+# through omarchy-*, and its own pages for gaps, scale and input devices.
+if [ -n "$OMARCHY" ]; then
+  BAR_ALT=Omarchy; SHOT_TOOL=omarchy; REC_TOOL=gpu-screen-recorder
   theme_apply() { omarchy-theme-set "$1"; }
   theme_next() { local cur list i; mapfile -t list < <(theme_list | cut -f1); cur=$(theme_name)
     for i in "${!list[@]}"; do [ "${list[$i]}" = "$cur" ] && { omarchy-theme-set "${list[$(( (i + 1) % ${#list[@]} ))]}"; return; }; done
@@ -1947,7 +2066,6 @@ if [ -n "$OMARCHY" ]; then
   wm_exit() { omarchy-system-logout; }
   sys_reboot() { omarchy-system-reboot; }
   sys_poweroff() { omarchy-system-shutdown; }
-  wm_reload() { hyprctl reload >/dev/null; }
   launch_app() { if command -v uwsm-app >/dev/null; then bg uwsm-app -- gtk-launch "$1"; else bg gtk-launch "$1"; fi; }
   show_keybindings() { omarchy-menu-keybindings; }
   update_cmd() { echo "omarchy-launch-floating-terminal-with-presentation omarchy-update"; }
@@ -1962,30 +2080,9 @@ if [ -n "$OMARCHY" ]; then
   qr_scan() { omarchy-capture-qr; }
   color_picker() { pkill hyprpicker || hyprpicker -a; }
   # outputs (Hyprland's monitors; Omarchy keeps their settings in monitors.lua)
-  outputs_tsv() { hyprctl -j monitors all 2>/dev/null | jq -r '.[] | [.name, ((.disabled // false) | not | tostring), (.focused | tostring), (.scale | tostring)] | @tsv'; }
-  focused_output() { hyprctl -j monitors 2>/dev/null | jq -r '.[] | select(.focused) | .name'; }
-  screen_size() { hyprctl -j monitors 2>/dev/null | jq -r '(map(.width) | max | tostring) + "x" + (map(.height) | max | tostring)'; }
   output_toggle() {
     if [ "$1" = "$(omarchy-hyprland-monitor-laptop 2>/dev/null)" ]; then omarchy-hyprland-monitor-internal toggle >/dev/null 2>&1; notify Display "$1 toggled"
     else notify Display "External displays are set in monitors.lua (Setup › Edit hyprland config)"; fi; }
-  # keyboard layout and input
-  kb_now() { hyprctl -j devices 2>/dev/null | jq -r '[.keyboards[] | select(.main) | .active_keymap] | first // "?"' | cut -c1-2 | tr '[:upper:]' '[:lower:]'; }
-  kb_cycle() { hyprctl switchxkblayout all next >/dev/null; notify Keyboard "$(kb_now)"; }
-  kb_set() { kb_cycle; }
-  set_layout() { kb_cycle; }
-  # packages: pacman, and the AUR through yay
-  pkg_rows_search() {
-    local q="$1" any=""
-    while IFS=$'\t' read -r name inst desc; do any=1
-      printf '%s\ttui_wait '\''sudo pacman -S %s'\''\t%s\t\n' "$name" "$name" "$([ "$inst" = i ] && printf 'installed · ')${desc:0:48}"
-    done < <(pacman -Ss -- "$q" 2>/dev/null | awk '/^[^ ]/ { split($1, a, "/"); name = a[2]; inst = ($0 ~ /\[installed/) ? "i" : "-"; next } { sub(/^ +/, ""); printf "%s\t%s\t%s\n", name, inst, $0 }' | head -60) | k4rows
-    if command -v yay >/dev/null; then
-      hdr "AUR"
-      timeout 10 yay -Ssa -- "$q" 2>/dev/null | awk '/^[^ ]/ { split($1, a, "/"); name = a[2]; next } { sub(/^ +/, ""); printf "%s\ttui_wait '\''yay -S %s'\''\t%s\t\n", name, name, substr($0, 1, 48) }' | head -40 | k4rows
-    fi
-    [ -n "$any" ] || hdr "No repository package matches “$q”"; }
-  pkg_rows_installed() {
-    pacman -Q 2>/dev/null | grep -i -- "$1" | head -100 | awk '{ printf "%s\ttui_wait '\''sudo pacman -Rns %s'\''\t%s\t\n", $1, $1, $2 }' | k4rows; }
   # the status bar: k4's or Omarchy's own (hidden through its bar-off toggle)
   bar_kind() { local k; k=$(cat "$STATE/bar" 2>/dev/null || echo k4); [ "$k" = k4 ] && command -v k4 >/dev/null && echo k4 || echo omarchy; }
   bar_running() { pgrep -f '^k4 --bar' >/dev/null || [ ! -e "$HOME/.local/state/omarchy/toggles/bar-off" ]; }
@@ -2036,7 +2133,7 @@ case "${1:-}" in
   bar-start) bar_start ;;
   power) power_menu ;;   # the system menu (k4 --power; Super+Esc via k4-power)
   power-tiles) power_tiles ;;   # what k4 --power reads (dry runs: sway-menu power-tiles | k4 --power --dry-run x.png)
-  call) case "${2:-}" in toggle_night|toggle_idle|toggle_dnd|record_toggle|kb_cycle) "$2" ;; *) echo "sway-menu call: not callable: ${2:-}" >&2; exit 2 ;; esac ;;   # the k4 bar's indicator clicks   # the status bar picked in Toggle › Status bar (Hyprland autostart runs it)
+  call) case "${2:-}" in toggle_night|toggle_idle|toggle_dnd|record_toggle|kb_cycle) "$2" ;; wifi_join) shift 2; wifi_join "$@" ;; *) echo "sway-menu call: not callable: ${2:-}" >&2; exit 2 ;; esac ;;   # the k4 bar's indicator clicks   # the status bar picked in Toggle › Status bar (Hyprland autostart runs it)
   idle) idle ;;
   pkg-install) pkg_install ;;
   pkg-remove) pkg_remove ;;

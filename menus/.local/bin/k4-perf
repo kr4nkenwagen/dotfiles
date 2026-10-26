@@ -21,7 +21,7 @@ human() {  # bytes -> 2.3 GB / 840 MB / 12 KB
   awk -v b="${1:-0}" 'BEGIN { if (b >= 1e9) printf "%.1f GB", b / 1e9; else if (b >= 1e6) printf "%.0f MB", b / 1e6; else printf "%.0f KB", b / 1e3 }'; }
 du_b() { du -sb "$@" 2>/dev/null | awk '{ s += $1 } END { print s + 0 }'; }
 
-awake_on() { if [ -n "$OMARCHY" ]; then [ -f "$HOME/.local/state/omarchy/indicators/stay-awake" ]; else ! pgrep -x swayidle >/dev/null; fi; }
+awake_on() { if [ -n "$OMARCHY" ]; then [ -f "$HOME/.local/state/omarchy/indicators/stay-awake" ]; else ! pgrep -x swayidle >/dev/null && ! pgrep -x hypridle >/dev/null; fi; }
 
 util_list() {
   local t n b
@@ -38,7 +38,12 @@ util_list() {
   b=$(journalctl --disk-usage 2>/dev/null | grep -oE '[0-9.]+[KMGT]' | head -1)
   u 0 "Free up space" journal "Trim system logs" "Keep the last 2 weeks of journal · sudo" "${b:+${b}B}" term
   b=$(awk '/^Cached:/ { printf "%.1f GB", $2 / 1048576 }' /proc/meminfo)
-  u 0 "Memory" drop "Drop file caches" "Frees cached RAM · asks for your password" "$b" term
+  u 0 "Free up space" drop "Drop file caches" "Frees cached RAM · asks for your password" "$b" term
+  # snapshots (k4-snap: the list in its own window)
+  if command -v k4-snap >/dev/null; then
+    u 0 "Snapshots" snapnow "Take a snapshot" "snapper · a few seconds · / only, not /home" "n" ask
+    u 0 "Snapshots" snaps "Snapshots" "$(k4-snap summary 2>/dev/null)" "›"
+  fi
   # fix things
   u 1 "Fix things" audio "Restart audio" "pipewire, wireplumber · fixes no sound" ""
   u 1 "Fix things" network "Restart networking" "NetworkManager · drops the connection for ~5 s" "" ask
@@ -78,6 +83,8 @@ util() {
     profile) case "$v" in "Power saver") v=power-saver ;; Balanced) v=balanced ;; Performance) v=performance ;; esac
              powerprofilesctl set "$v" 2>/dev/null && echo "Power profile · ${2:-$v}" || echo "Could not set the power profile" ;;
     awake) sway-menu call toggle_idle >/dev/null 2>&1; awake_on && echo "Staying awake until you turn it off" || echo "Stay awake off" ;;
+    snapnow) k4-snap act create ;;
+    snaps) bg k4-snap window; echo k4:close ;;
     btop) if command -v ghostty >/dev/null; then bg ghostty --class=TUI.float -e btop; else bg xdg-terminal-exec btop; fi; echo k4:close ;;
     *) echo "unknown utility: $id" ;;
   esac; }

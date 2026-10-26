@@ -6,11 +6,19 @@
 # Already cloned:
 #   ./init.sh
 #
+# Plain Arch (archinstall, minimal profile, a user with sudo) gets a desktop too: it asks
+# Sway or Hyprland (or DESKTOP=sway|hyprland), remembers the answer, and sets up the same
+# k4 desktop as the other machines, with greetd to log in. Hyprland here is standalone,
+# not Omarchy (Omarchy installs from its ISO; init.sh then takes the Omarchy profile).
+#
 # Ubuntu is the work-laptop profile: dev tools, shell, Sway desktop, ghostty, nvim, qutebrowser.
 # Themes are Omarchy's (themes/ in this repo), applied by sway-theme-set; no games,
 # chat, media or personal repos. Sway is used instead of Hyprland because Ubuntu
 # LTS (24.04) has no Hyprland in apt.
 set -euo pipefail
+# The whole script is one block, so bash reads all of it before running anything: with
+# curl | bash, a command that reads stdin would otherwise eat the rest of the script.
+{
 
 DOTFILES_DIR="${DOTFILES_DIR:-$HOME/repos/dotfiles}"
 DOTFILES_REPO="${DOTFILES_REPO:-https://github.com/kr4nkenwagen/dotfiles}"
@@ -53,6 +61,24 @@ OS="$(detect_os)"
 info "Detected: $OS"
 [ "$(id -u)" -ne 0 ] || die "Run as your normal user, not root."
 
+# Plain Arch: Sway or Hyprland. From DESKTOP, else the last answer, else asked on the terminal.
+DESKTOP_FILE="$HOME/.local/state/dotfiles/desktop"
+choose_desktop() {
+  local d="${DESKTOP:-}" a
+  [ -n "$d" ] || d="$(cat "$DESKTOP_FILE" 2>/dev/null || true)"
+  if [ -z "$d" ]; then
+    { : </dev/tty; } 2>/dev/null || die "No terminal to ask on: set DESKTOP=sway or DESKTOP=hyprland"
+    printf '\033[1;34m:: Desktop: [s]way or [h]yprland? \033[0m' >/dev/tty
+    read -r a </dev/tty
+    case "$a" in s|S|sway|Sway) d=sway ;; h|H|hyprland|Hyprland) d=hyprland ;; *) die "Answer s or h" ;; esac
+  fi
+  case "$d" in sway|hyprland) ;; *) die "DESKTOP must be sway or hyprland, not '$d'" ;; esac
+  mkdir -p "${DESKTOP_FILE%/*}"
+  printf '%s\n' "$d" > "$DESKTOP_FILE"
+  DESKTOP="$d"
+}
+if [ "$OS" = arch ]; then choose_desktop; info "Desktop: $DESKTOP"; else DESKTOP=""; fi
+
 case "$(uname -m)" in
   x86_64)  DEB_ARCH=amd64; GO_ARCH=amd64; NVIM_ARCH=x86_64; RUST_TARGET=x86_64-unknown-linux-gnu ;;
   aarch64) DEB_ARCH=arm64; GO_ARCH=arm64; NVIM_ARCH=arm64;  RUST_TARGET=aarch64-unknown-linux-gnu ;;
@@ -82,10 +108,23 @@ arch_packages=(
   stow tmux qutebrowser fish ghostty
   ttf-terminus-nerd ttf-space-mono-nerd ttf-bigblueterminal-nerd
   "${ligature_nerd_font_pkgs[@]}"
-  python-adblock uv ollama nodejs python-pip libffi openssl platformio mise clang
+  python-adblock uv ollama nodejs python-pip libffi openssl platformio-core mise clang
   rtorrent adw-gtk-theme mpv steam clipse ranger aerc gdb tenere mcfly
-  discordo yq python-libtmux ripgrep youtube-dl go git neovim
+  discordo-git yq python-libtmux ripgrep yt-dlp go git neovim
 )
+
+# Plain Arch desktop (Omarchy brings its own): what the Sway and Hyprland profiles share,
+# the k4 tools' helpers, and k4's build dependencies.
+arch_desktop_packages=(
+  pipewire pipewire-pulse wireplumber networkmanager bluez bluez-utils power-profiles-daemon
+  brightnessctl playerctl pavucontrol wl-clipboard wtype grim slurp wf-recorder libnotify
+  qrencode zbar chafa libvips socat jq noto-fonts-emoji xdg-desktop-portal-gtk polkit-gnome
+  gnome-keyring xdg-terminal-exec fuzzel mako awww bluetui impala wiremix lazygit starship
+  carapace-bin dust eza bat fd fzf zoxide btop keychain fwupd wayland libxkbcommon
+  greetd greetd-tuigreet openssh noto-fonts xdg-user-dirs
+)
+arch_sway_packages=(sway swaylock swayidle swaybg waybar xdg-desktop-portal-wlr)
+arch_hyprland_packages=(hyprland hyprlock hypridle hyprsunset xdg-desktop-portal-hyprland hyprpolkitagent)
 
 # Ubuntu dev tools and shell. Go, Neovim, fonts and a few binaries apt lacks
 # are handled in ubuntu_extras. Packages missing on a release are skipped with a warning.
@@ -97,7 +136,7 @@ ubuntu_packages=(
   fontconfig wl-clipboard btop lazygit ranger
 )
 
-# Ubuntu Sway desktop. Pairs with the ubuntu stow package (sway/swaylock/waybar/fuzzel/mako, Tokyo Night).
+# Ubuntu Sway desktop. Pairs with the wayland and sway stow packages (sway/swaylock/waybar/fuzzel/mako, themed by sway-theme-set).
 ubuntu_desktop_packages=(
   sway swaylock swayidle swaybg xdg-desktop-portal-wlr xdg-desktop-portal-gtk lxpolkit
   waybar mako-notifier fuzzel xdg-terminal-exec wireplumber
@@ -107,11 +146,13 @@ ubuntu_desktop_packages=(
   libwayland-dev libxkbcommon-dev clang
 )
 
+# wayland: the theming both non-Omarchy desktops share (sway-theme-set, its templates);
+# sway and hyprland: each desktop's own config.
 stow_dirs=(fish nvim tmux theme menus)
 case "$OS" in
   omarchy) stow_dirs+=(qutebrowser aerc ghostty hypr omarchy vesktop) ;;
-  arch)    stow_dirs+=(qutebrowser aerc ghostty) ;;
-  ubuntu)  stow_dirs+=(ghostty qutebrowser ubuntu) ;;
+  arch)    stow_dirs+=(qutebrowser aerc ghostty wayland "$DESKTOP") ;;
+  ubuntu)  stow_dirs+=(ghostty qutebrowser wayland sway) ;;
 esac
 
 personal_repos=(CherryScript2 kr4nkengine pass astrokr4nk ai-docstring.nvim)
@@ -125,6 +166,52 @@ ensure_yay() {
   git clone https://aur.archlinux.org/yay-bin.git "$tmp/yay-bin"
   (cd "$tmp/yay-bin" && makepkg -si --noconfirm)
   rm -rf "$tmp"
+}
+
+# Repository packages in one pacman call; the AUR's one at a time through yay, so one that
+# fails to build doesn't stop the rest. Names neither knows are skipped with a warning.
+pac_install_available() {
+  local repo=() aur=() missing=() failed=() p
+  for p in "$@"; do
+    if pacman -Si "$p" >/dev/null 2>&1; then repo+=("$p")
+    elif yay -Si "$p" >/dev/null 2>&1; then aur+=("$p")
+    else missing+=("$p"); fi
+  done
+  [ ${#missing[@]} -eq 0 ] || warn "Not in the repositories or the AUR, skipping: ${missing[*]}"
+  [ ${#repo[@]} -eq 0 ] || sudo pacman -S --needed --noconfirm "${repo[@]}"
+  for p in "${aur[@]}"; do
+    pacman -Qq "$p" >/dev/null 2>&1 && continue
+    yay -S --needed --noconfirm "$p" || failed+=("$p")
+  done
+  [ ${#failed[@]} -eq 0 ] || warn "AUR packages that failed to install: ${failed[*]}"
+}
+
+# Steam is in multilib, which a fresh Arch install leaves commented out.
+enable_multilib() {
+  grep -q '^\[multilib\]' /etc/pacman.conf && return
+  info "Enabling the multilib repository"
+  sudo cp /etc/pacman.conf /etc/pacman.conf.bak-dotfiles
+  sudo sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' /etc/pacman.conf
+  sudo pacman -Sy --noconfirm
+}
+
+# Plain Arch: the services the desktop needs, and greetd (tuigreet lists every Wayland
+# session and remembers the last one). An already enabled display manager is left alone.
+arch_services() {
+  local s
+  for s in NetworkManager bluetooth power-profiles-daemon; do
+    sudo systemctl enable "$s" >/dev/null 2>&1 || warn "could not enable $s"
+  done
+  local dm; dm="$(systemctl show -p Id --value display-manager.service 2>/dev/null || true)"
+  if [ -n "$dm" ] && [ "$dm" != display-manager.service ] && [ "$dm" != greetd.service ]; then
+    warn "$dm is already the login manager; leaving it"
+    return
+  fi
+  info "Setting up greetd"
+  printf '%s\n' '[terminal]' 'vt = 1' '' '[default_session]' \
+    'command = "tuigreet --time --remember --remember-session --asterisks --sessions /usr/share/wayland-sessions"' \
+    'user = "greeter"' | sudo tee /etc/greetd/config.toml >/dev/null
+  sudo systemctl enable greetd >/dev/null 2>&1 || warn "could not enable greetd"
 }
 
 apt_has() { apt-cache show "$1" >/dev/null 2>&1; }
@@ -342,10 +429,19 @@ ubuntu_desktop() {
 
 install_packages() {
   case "$OS" in
-    omarchy|arch)
+    omarchy)
       ensure_yay
       yay -Syu --noconfirm
-      yay -S --needed --noconfirm "${arch_packages[@]}"
+      pac_install_available "${arch_packages[@]}"
+      ;;
+    arch)
+      enable_multilib
+      ensure_yay
+      yay -Syu --noconfirm
+      local desk=("${arch_sway_packages[@]}")
+      [ "$DESKTOP" = hyprland ] && desk=("${arch_hyprland_packages[@]}")
+      pac_install_available "${arch_packages[@]}" "${arch_desktop_packages[@]}" "${desk[@]}"
+      arch_services
       ;;
     ubuntu)
       sudo apt-get update
@@ -359,6 +455,12 @@ install_packages() {
 ########
 # MAIN #
 ########
+if [ "$OS" = arch ]; then
+  # A fresh install has no git or base-devel (yay builds with it), maybe no sudo.
+  have sudo || die "sudo is missing: as root, install sudo and add your user to the wheel group (archinstall does this)"
+  info "Installing git, curl and base-devel"
+  sudo pacman -Syu --needed --noconfirm git curl base-devel
+fi
 for cmd in git curl; do
   have "$cmd" || {
     [ "$OS" = ubuntu ] && sudo apt-get install -y "$cmd" || die "$cmd is required"
@@ -412,7 +514,9 @@ find ~ ~/.config ~/.local/bin -maxdepth 1 -xtype l -lname "*${DOTFILES_DIR##*/}*
 
 # Unstow packages that belong to other profiles. An older init.sh stowed the
 # Omarchy hypr config everywhere, which breaks a non-Omarchy machine.
-all_stow_dirs=(fish nvim tmux theme menus aerc qutebrowser ghostty hypr omarchy vesktop ubuntu)
+all_stow_dirs=(fish nvim tmux theme menus aerc qutebrowser ghostty hypr omarchy vesktop wayland sway hyprland)
+# ubuntu/ became wayland/ + sway/ (same files): drop links into the old package first.
+find ~/.config ~/.local/bin -xtype l -lname '*dotfiles/ubuntu/*' -print -delete 2>/dev/null | sed 's/^/:: removed old link /' || true
 unstow=()
 for d in "${all_stow_dirs[@]}"; do
   [ -d "$d" ] || continue
@@ -508,7 +612,7 @@ if [ "$OS" = omarchy ]; then
   omarchy-theme-bg-next
 fi
 
-if [ "$OS" = ubuntu ]; then
+if [ "$OS" != omarchy ]; then
   info "Applying theme"
   # nvim loads the theme's neovim.lua through this link, the same one Omarchy creates.
   mkdir -p ~/.config/nvim/lua/plugins
@@ -518,6 +622,9 @@ if [ "$OS" = ubuntu ]; then
   # Inside a running session this also retints everything live.
   sway-theme-set "$(cat ~/.local/state/omarchy/current/theme.name 2>/dev/null || echo tokyo-night)" \
     || warn "theme not applied"
+fi
+
+if [ "$OS" = ubuntu ]; then
   info "Skipping personal repos on the work profile"
 else
   info "Cloning personal repos"
@@ -525,12 +632,16 @@ else
     if [ -d ~/repos/$repo ]; then
       warn "$repo already exists, skipping"
     else
-      git clone "git@github.com:kr4nkenwagen/$repo" ~/repos/"$repo" \
+      # no key yet (a fresh machine): fail at once instead of waiting on a prompt
+      GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new" \
+        git clone "git@github.com:kr4nkenwagen/$repo" ~/repos/"$repo" \
         || warn "could not clone $repo (is your SSH key set up?)"
     fi
   done
 fi
 
-ok "Done ($OS). Log out and back in to pick up all changes."
+ok "Done ($OS${DESKTOP:+ · $DESKTOP}). Log out and back in to pick up all changes."
 [ "$OS" = ubuntu ] && info "Pick the Sway session on the login screen."
+[ "$OS" = arch ] && info "Reboot; greetd asks you to log in (F3 picks the session)."
 exit 0
+}
