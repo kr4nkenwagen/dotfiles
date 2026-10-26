@@ -115,9 +115,28 @@ apply_bg() {  # apply_bg FILE
     swaymsg output '*' bg "$1" fill >/dev/null || plog "apply_bg: swaymsg failed"
   fi
 }
+SCREEN_BG="$HOME/.cache/sway-menu/screen"
+screen_size() { swaymsg -t get_outputs 2>/dev/null | jq -r '[.[] | select(.active) | .current_mode | select(.)] | (map(.width) | max | tostring) + "x" + (map(.height) | max | tostring)'; }
+screen_copy() {  # screen_copy FILE: a copy scaled to cover the largest output, cached (5K PNGs took awww
+  # most of a second to decode and scale on every switch); the file itself when that is not possible
+  local f="$1" wh w h iw out
+  command -v vipsthumbnail >/dev/null || { printf '%s' "$f"; return; }
+  wh=$(screen_size); w=${wh%x*}; h=${wh#*x}
+  [[ $w =~ ^[0-9]+$ && $h =~ ^[0-9]+$ ]] || { printf '%s' "$f"; return; }
+  iw=$(vipsheader -f width "$f" 2>/dev/null) || { printf '%s' "$f"; return; }
+  [ "$iw" -gt $(( w * 5 / 4 )) ] || { printf '%s' "$f"; return; }   # already about screen size
+  out="$SCREEN_BG/$(printf '%s:%s:%s' "$wh" "$f" "$(stat -L -c '%s:%Y' "$f")" | md5sum | cut -c1-32).png"
+  if [ ! -f "$out" ]; then mkdir -p "$SCREEN_BG"
+    vipsthumbnail "$f" --size "$wh" --smartcrop centre -o "$out[strip,compression=1]" 2>>"$PICK_LOG" || { rm -f "$out"; printf '%s' "$f"; return; }
+    find "$SCREEN_BG" -type f -mtime +60 -delete 2>/dev/null
+  fi
+  printf '%s' "$out"; }
 set_background() { local f; f=$(readlink -f "$1"); [ -f "$f" ] || { plog "set_background: not a file: $1"; return; }
-  mkdir -p "$(dirname "$BG_LINK")"; ln -nsf "$f" "$BG_LINK"; apply_bg "$f"; }
-wallpaper_restore() { rm -f "$STATE/background.conf"; apply_bg "$(wallpaper)"; }   # background.conf: older versions persisted the choice there
+  mkdir -p "$(dirname "$BG_LINK")"; ln -nsf "$f" "$BG_LINK"
+  # inside k4 the paint runs on its own, so the menu answers at once
+  if [ -n "${K4_RUN:-}" ]; then ( apply_bg "$(screen_copy "$f")" ) </dev/null >/dev/null 2>&1 & disown
+  else apply_bg "$(screen_copy "$f")"; fi; }
+wallpaper_restore() { rm -f "$STATE/background.conf"; apply_bg "$(screen_copy "$(wallpaper)")"; }   # background.conf: older versions persisted the choice there
 idle() {
   exec swayidle -w \
     timeout 300 "$0 lock" \
@@ -735,6 +754,23 @@ k4_main() { local out   # k4_main [SECTION|PAGE]: open there
     *) eval "$(printf '%s' "$out" | base64 -d)" ;;
   esac
 }
+# The background grid's I lines from bg_list on stdin. Thumbnail names match thumb_path
+# (md5 of "sq<px>:<path>:<size>:<mtime>", lstat like `stat -c`); ids are shell actions, base64.
+K4_WALL_PL=$(cat <<'PL'
+my ($px, $thumbs, $cur, $self) = @ARGV;
+sub shq { my $s = shift; $s =~ s/'/'\\''/g; "'$s'" }
+my @missing;
+while (my $f = <STDIN>) {
+  chomp $f; my @st = lstat $f or next;
+  my $t = "$thumbs/" . md5_hex("sq$px:$f:$st[7]:$st[9]") . ".png";
+  if (! -f $t) { push @missing, $f; $t = $f }
+  my $r = realpath($f) // $f; (my $name = $r) =~ s{.*/}{};    # theme-bg-sync links are <source>-<file>
+  my $id = encode_base64("set_background " . shq($f) . "; notify Background " . shq($name), "");
+  print join("\t", "I", $id, $name, $t, ($r eq $cur ? "current" : ""), "stay"), "\n";
+}
+if (@missing && open(my $w, "|-", "setsid", "-f", $self, "thumbs-warm-files")) { print $w "$_\n" for @missing; close $w }
+PL
+)
 # Items apply in place (stay): the footer says what changed and k4 recolours itself.
 k4_view() { local n d f r t cur
   case "$1" in
@@ -745,12 +781,9 @@ k4_view() { local n d f r t cur
         printf 'I\t%s\t%s\t%s\t%s\t%s\n' "$(k4id "sway-theme-set $(printf %q "$n") >/dev/null 2>&1; notify Theme $(printf %q "$(theme_pretty "$n")")")" \
           "$(theme_pretty "$n")" "$d/preview.png" "$([ "$n" = "$cur" ] && echo current)" "stay${pal[$d]:+;palette=${pal[$d]}}"
       done ;;
-    wall) cur=$(wallpaper)
-      while IFS= read -r f; do
-        t=$(thumb_path "$f"); [ -f "$t" ] || t=$f
-        r=$(readlink -f "$f")   # theme-bg-sync links are named <source>-<file>; show the file's own name
-        printf 'I\t%s\t%s\t%s\t%s\t%s\n' "$(k4id "set_background $(printf %q "$f"); notify Background $(printf %q "${r##*/}")")" "${r##*/}" "$t" "$([ "$r" = "$cur" ] && echo current)" stay
-      done < <(bg_list) ;;
+    wall) # one perl for all of them (157 wallpapers took 1.2 s of forks); missing thumbnails are
+      # made in the background and used from the next open
+      bg_list | perl -MMIME::Base64 -MDigest::MD5=md5_hex -MCwd=realpath -e "$K4_WALL_PL" "$THUMB_PX" "$THUMBS" "$(readlink -f "$(wallpaper)")" "$SELF" ;;
   esac; }
 theme_palettes() {  # theme_palettes DIR...: DIR<TAB>bg,fg,red,green,yellow,blue,magenta,cyan from each colors.toml (one awk)
   local d files=(); for d in "$@"; do [ -f "$d/colors.toml" ] && files+=("$d/colors.toml"); done
@@ -1225,6 +1258,7 @@ case "${1:-}" in
   wallpaper-random) bg_random ;;
   wallpaper-restore) wallpaper_restore ;;
   thumbs-warm) thumbs_warm ;;
+  thumbs-warm-files) mapfile -t files; [ ${#files[@]} -gt 0 ] && thumbs_warm "${files[@]}" ;;   # k4's grid: the missing ones, on stdin
   tui) shift; tui "$@" ;;   # floating terminal with the PATH above (sway binds use this for ~/.local/bin tools)
   thumb-make) mkdir -p "$(dirname "$3")"; thumb_make "${2:?file}" "${3:?out}" ;;
   wifi) if [ "$LAUNCHER" = k4 ]; then k4_main wifi; else wifi_menu; fi ;;
