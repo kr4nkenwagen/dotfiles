@@ -187,7 +187,11 @@ leaves_capture() { local p="${1:-}" rec="Start"; recording && rec="Stop"
 # ---------- Toggle ----------
 toggle_night() { if pgrep -x wlsunset >/dev/null; then pkill -x wlsunset; else bg wlsunset -t 4000; fi; }
 toggle_idle()  { if pgrep -x swayidle >/dev/null; then pkill -x swayidle; notify "Idle lock" "Off"; else bg "$0" idle; notify "Idle lock" "On"; fi; }
-toggle_bar()   { if pgrep -x waybar >/dev/null; then pkill -x waybar; else bg waybar; fi; }
+bar_kind() { local k; k=$(cat "$STATE/bar" 2>/dev/null || echo k4); [ "$k" = k4 ] && command -v k4 >/dev/null && echo k4 || echo waybar; }
+bar_running() { pgrep -x waybar >/dev/null || pgrep -f '^k4 --bar' >/dev/null; }
+bar_start() { if [ "$(bar_kind)" = k4 ]; then pkill -x waybar; bg k4-bar; else pkill -f '^k4 --bar'; bg waybar -c "$THEME/waybar.jsonc" -s "$THEME/waybar.css"; fi; }
+toggle_bar()   { if bar_running; then pkill -x waybar; pkill -f '^k4 --bar'; else bar_start; fi; }
+set_bar_kind() { mkdir -p "$STATE"; [ "${K4_VALUE:-}" = Waybar ] && echo waybar > "$STATE/bar" || echo k4 > "$STATE/bar"; bar_start; notify "Status bar" "${K4_VALUE:-k4}"; }
 toggle_dnd()   { if makoctl mode | grep -qx do-not-disturb; then makoctl mode -r do-not-disturb; else makoctl mode -a do-not-disturb; fi >/dev/null; }
 onoff() { "$@" >/dev/null 2>&1 && echo on || echo off; }
 leaves_toggle() { local p="${1:-}"
@@ -760,8 +764,9 @@ k4_tree() { local s name key desc icon
   printf 'G\twall\tBackground\t%s\t%q k4-view wall\n' "the theme's backgrounds + extras" "$SELF"
   printf 'R\t%q k4-run\n' "$SELF"
 }
-k4_main() { local out   # k4_main [SECTION|PAGE]: open there
-  out=$(k4_tree | k4 --menu ${1:+--open "$1"}) || return 0
+k4_main() { local out popup=()   # k4_main [SECTION|PAGE]: open there (under a bar module when the k4 bar ran us)
+  [ -n "${K4_BAR_X:-}" ] && [ -n "${K4_BAR_WIDTH:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && popup=(--popup-x "$K4_BAR_X" --popup-w "$K4_BAR_WIDTH")
+  out=$(k4_tree | k4 --menu ${1:+--open "$1"} "${popup[@]}") || return 0
   case "$out" in
     url:*) open_url "${out#url:}" ;;
     *) eval "$(printf '%s' "$out" | base64 -d)" ;;
@@ -825,6 +830,8 @@ k4_pages() { case "$1" in   # the P/F records of a section (printed after it, so
   setup) page inputs "Input devices" "Keyboard layout and touchpad"
          page timezone Timezone "Setting it asks for sudo in a terminal" ;;
   install) page nerdfonts "Nerd Fonts" "Latest release; installs in the background" ;;
+  system) page calendar Calendar "The month with ISO weeks · ← → steps the month"
+          [ -n "$(ls -d /sys/class/power_supply/BAT* 2>/dev/null)" ] && page battery Battery "Charge, time left, power and profile" ;;
   esac; }
 k4_page() { local p="$1"; shift
   case "$p" in
@@ -883,6 +890,8 @@ k4_page() { local p="$1"; shift
   timezone) local cur; cur=$(timedatectl show -p Timezone --value 2>/dev/null)
         timedatectl list-timezones 2>/dev/null | awk -v c="$cur" '{ printf "%s\ttui_wait '\''sudo timedatectl set-timezone %s && echo Timezone: %s'\''\t%s\t%s\n", $0, $0, $0, ($0 == c ? "current" : ""), ($0 == c ? "current" : "") }' | k4rows ;;
   netspeed) speed_page net ;;
+  calendar) calendar_page ;;
+  battery) battery_page ;;
   diskspeed) speed_page disk ;;
   apt) local q="${1:-}" p; local -A inst=()
         while IFS= read -r p; do inst[$p]=1; done < <(dpkg-query -W -f '${Package}\n' 2>/dev/null)
@@ -1215,6 +1224,60 @@ speed_page() {  # speed_page net|disk: the last result, and a row that runs the 
   if [ "$1" = net ]; then stay "Run the test" net_speed_run "about 15 s · uses ~35 MB" "current"
   else stay "Run the test" disk_speed_run "writes 512 MB, then deletes it" "current"; fi; }
 
+# ---------- Calendar and Battery (popups of the k4 bar's clock and battery) ----------
+CAL_OFF="$HOME/.cache/sway-menu/calendar-offset"
+calendar_set() {  # the month stepper: K4_VALUE is the month shown next, "Month YYYY"
+  local now want; now=$(date +%Y%m); want=$(date -d "1 ${K4_VALUE:-}" +%Y%m 2>/dev/null) || return
+  mkdir -p "${CAL_OFF%/*}"; echo $(( (${want:0:4} - ${now:0:4}) * 12 + 10#${want:4:2} - 10#${now:4:2} )) > "$CAL_OFF"; }
+calendar_page() {  # the month as rows: W<iso week>  then seven days, today in [ ]
+  local off first y m today label prev next d wd i line
+  off=$(cat "$CAL_OFF" 2>/dev/null || echo 0)
+  first=$(date -d "$(date +%Y-%m-01) $off month" +%Y-%m-01)
+  label=$(date -d "$first" '+%B %Y'); prev=$(date -d "$first -1 month" '+%B %Y'); next=$(date -d "$first +1 month" '+%B %Y')
+  today=$(date +%F)
+  printf 'D\t%s\t%s\t\n' "Today: $(date '+%A %-d %B · week %V · day %-j')" "$label"
+  choice "Month" calendar_set "$label" "$prev|$label|$next" "mark=󰃭;markc=accent"
+  stay "Today" 'rm -f "$HOME/.cache/sway-menu/calendar-offset"; notify Calendar "$(date "+%B %Y")"' "$(date '+%a %-d %b')"
+  hdr "$label"
+  printf 'E\t%s\n' "     $(printf ' %2s ' Mo Tu We Th Fr Sa Su)"
+  wd=$(date -d "$first" +%u); d=$(date -d "$first -$((wd - 1)) days" +%F)
+  for i in 1 2 3 4 5 6; do
+    line=""
+    for _ in 1 2 3 4 5 6 7; do
+      local day; day=$(date -d "$d" +%-d)
+      if [ "$(date -d "$d" +%m)" != "$(date -d "$first" +%m)" ]; then line+="  · "   # (printf pads bytes, and · is two)
+      elif [ "$d" = "$today" ]; then line+=$(printf '[%2s]' "$day")
+      else line+=$(printf ' %2s ' "$day"); fi
+      d=$(date -d "$d +1 day" +%F)
+    done
+    printf 'E\t%s\n' "W$(date -d "$d -1 day" +%V)  $line"
+    [ "$(date -d "$d" +%m)" != "$(date -d "$first" +%m)" ] && [ "$i" -ge 4 ] && break
+  done; }
+battery_page() {
+  local b c st en ef efd pn cyc t
+  b=$(ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -1); [ -n "$b" ] || { hdr "No battery"; return; }
+  c=$(cat "$b/capacity"); st=$(cat "$b/status")
+  en=$(cat "$b/energy_now" 2>/dev/null || cat "$b/charge_now" 2>/dev/null); ef=$(cat "$b/energy_full" 2>/dev/null || cat "$b/charge_full" 2>/dev/null)
+  efd=$(cat "$b/energy_full_design" 2>/dev/null || cat "$b/charge_full_design" 2>/dev/null)
+  pn=$(cat "$b/power_now" 2>/dev/null || cat "$b/current_now" 2>/dev/null); cyc=$(cat "$b/cycle_count" 2>/dev/null)
+  if [ -n "$pn" ] && [ "${pn:-0}" -gt 0 ] && [ -n "$en" ]; then
+    if [ "$st" = Charging ]; then t=$(awk -v e="$en" -v f="$ef" -v p="$pn" 'BEGIN { h = (f - e) / p; printf "%d h %02d min to full", h, (h - int(h)) * 60 }')
+    else t=$(awk -v e="$en" -v p="$pn" 'BEGIN { h = e / p; printf "%d h %02d min left", h, (h - int(h)) * 60 }'); fi
+  fi
+  printf 'D\t%s\t%s\t\n' "$st${t:+ · $t}" "$c%"
+  hdr "Battery"
+  printf 'B\t%s\t%s\t%s\n' "Charge" "$c" "$c%"
+  stay "Status" "notify Battery '$st'" "$st"
+  [ -n "${t:-}" ] && stay "Time" "notify Battery '$t'" "$t"
+  [ -n "$pn" ] && [ -f "$b/power_now" ] && stay "Power draw" ':' "$(awk -v p="$pn" 'BEGIN { printf "%.1f W", p / 1e6 }')"
+  [ -n "$ef" ] && [ -n "$efd" ] && [ "${efd:-0}" -gt 0 ] && stay "Health" ':' "$(awk -v f="$ef" -v d="$efd" 'BEGIN { printf "%d%% of design", f * 100 / d }')"
+  [ -n "$cyc" ] && [ "$cyc" -gt 0 ] && stay "Cycles" ':' "$cyc"
+  if command -v powerprofilesctl >/dev/null; then
+    hdr "Power profile"
+    choice "Profile" pp_set "$(pp_now)" "Balanced|Performance|Power saver" "mark=󰓅"
+  fi; }
+pp_set() { local i; for i in "${!PP_NAMES[@]}"; do [ "${PP_NAMES[$i]}" = "${K4_VALUE:-}" ] && { powerprofilesctl set "${PP[$i]}" && notify "Power profile" "${PP_NAMES[$i]}"; return; }; done; }
+
 K4_CONFIRM_LOGOUT='confirm=Log out?|Closes every window and ends the sway session.'
 K4_CONFIRM_REBOOT='confirm=Reboot now?|Unsaved work in open apps will be lost.'
 K4_CONFIRM_SHUTDOWN='confirm=Shut down now?|Unsaved work in open apps will be lost.'
@@ -1246,7 +1309,8 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            item "Record output" record_toggle "$([ "$rec" = Stop ] && echo recording)"
            item "Pick color" color_picker
            command -v emoji-menu >/dev/null && item "Emoji" : "insert or copy" emoji ;;
-  toggle) tog "Waybar" 'toggle_bar; notify Waybar "$(onoff pgrep -x waybar)"' "$(onoff pgrep -x waybar)"
+  toggle) tog "Bar" 'toggle_bar; sleep 0.2; notify Bar "$(onoff bar_running)"' "$(onoff bar_running)"
+          choice "Status bar" set_bar_kind "$([ "$(bar_kind)" = k4 ] && echo k4 || echo Waybar)" "k4|Waybar"
           tog "Starfield" 'starfield-toggle >/dev/null; notify Starfield "$(starfield-toggle status)"' "$(starfield-toggle status 2>/dev/null || echo on)"
           tog "Launcher" toggle_launcher "$([ "$LAUNCHER" = k4 ] && echo on || echo off)"
           tog "Idle lock" toggle_idle "$(onoff pgrep -x swayidle)"
@@ -1444,6 +1508,9 @@ case "${1:-}" in
   font) if [ "${2:-pick}" = pick ] && [ "$LAUNCHER" = k4 ]; then k4_main font; else sway-font-set "${2:-pick}"; fi ;;
   background) set_background "${2:?image path}" ;;
   display|network|audio|bluetooth|weather) if [ "$LAUNCHER" = k4 ]; then k4_main "$1"; else submenu "$1"; fi ;;
+  menu) main_menu ;;                                    # the k4 bar's menu button
+  calendar|battery|toggle|update|system) k4_main "$1" ;; # the k4 bar's popups
+  kb-next) kb_cycle ;;
   timezone) if [ "$LAUNCHER" = k4 ]; then k4_main timezone; else tz_menu; fi ;;
   k4-section) k4_section "${2:?section}" ;;
   k4-page) shift; k4_page "${1:?page}" "${@:2}" ;;

@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# k4-bar: the status bar drawn by k4 (k4 --bar), one per output, the modules of Omarchy's
+# Quickshell bar; clicks open the matching k4 page as a popup under the module.
+#   k4-bar                 (re)start a bar on every active output (the sway config runs it)
+#   k4-bar stop
+#   k4-bar spec            the module list k4 --bar reads
+#   k4-bar status MODULE   one module's line (Waybar JSON); --follow keeps printing on changes
+# Modules (left · center · right): menu, workspaces, window · media, clock · indicators,
+# updates, weather, microphone, audio, network, bluetooth, brightness, keyboard, battery.
+set -u
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/snap/bin:$PATH"
+SELF=$(readlink -f "$0")
+STATE="$HOME/.local/state/sway"
+
+json() { jq -cn --arg t "$1" --arg tt "${2:-}" --arg c "${3:-}" '{text: $t, tooltip: $tt, class: $c}'; }
+follow() {  # follow CMD-THAT-PRINTS-EVENTS: print the module now and after every burst of events
+  "$SELF" status "$MOD"
+  "$@" 2>/dev/null | while read -r -t 86400 _; do
+    while read -r -t 0.15 _; do :; done   # coalesce a burst
+    "$SELF" status "$MOD"
+  done; }
+
+status() {
+  MOD=$1
+  case "$1" in
+  media)
+    command -v playerctl >/dev/null || { json ""; return; }
+    local st t a
+    st=$(playerctl status 2>/dev/null) || { json ""; return; }
+    t=$(playerctl metadata title 2>/dev/null); a=$(playerctl metadata artist 2>/dev/null)
+    [ -n "$t" ] || { json ""; return; }
+    json "$([ "$st" = Playing ] && echo 󰎈 || echo 󰏤) ${a:+$a — }${t:0:40}" "$a — $t" "$(echo "$st" | tr '[:upper:]' '[:lower:]')" ;;
+  indicators)
+    local out=() tips=()
+    makoctl mode 2>/dev/null | grep -qx do-not-disturb && { out+=(󰂛); tips+=("Do not disturb"); }
+    pgrep -x wlsunset >/dev/null && { out+=(󰔎); tips+=("Night light"); }
+    [ -f "$HOME/.cache/sway-menu/recording.pid" ] && kill -0 "$(cat "$HOME/.cache/sway-menu/recording.pid")" 2>/dev/null && { out+=(󰑊); tips+=("Recording"); }
+    pgrep -x swayidle >/dev/null || { out+=(󰅶); tips+=("Stay awake (idle lock off)"); }
+    local IFS=' '; json "${out[*]:-}" "$(printf '%s\n' "${tips[@]:-}")" "$([ "${out[*]:-}" = 󰑊 ] && echo critical)" ;;
+  updates)
+    local n; n=$(apt list --upgradable 2>/dev/null | grep -c upgradable) || true
+    [ "${n:-0}" -gt 0 ] && json "󰚰 $n" "$n updates waiting" warning || json "" ;;
+  weather)
+    sway-weather 2>/dev/null | jq -c '{text, tooltip, class}' 2>/dev/null || json "" ;;
+  microphone)
+    local v m; v=$(wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null) || { json ""; return; }
+    m=$(printf '%s' "$v" | awk '{ printf "%d", $2 * 100 + 0.5 }')
+    if [[ $v == *MUTED* ]]; then json 󰍭 "Microphone muted" muted; else json 󰍬 "Microphone $m%"; fi ;;
+  audio)
+    local v p; v=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null) || { json ""; return; }
+    p=$(printf '%s' "$v" | awk '{ printf "%d", $2 * 100 + 0.5 }')
+    if [[ $v == *MUTED* ]]; then json "󰝟 $p%" "Output muted" muted
+    else json "$([ "$p" -ge 66 ] && echo 󰕾 || { [ "$p" -ge 33 ] && echo 󰖀 || echo 󰕿; }) $p%" "$(wpctl inspect @DEFAULT_AUDIO_SINK@ 2>/dev/null | sed -n 's/.*node.description = "\(.*\)"/\1/p' | head -1)"; fi ;;
+  network)
+    local dev type state ssid sig
+    IFS=: read -r dev type state < <(nmcli -t -f DEVICE,TYPE,STATE dev 2>/dev/null | awk -F: '$3 == "connected" && ($2 == "wifi" || $2 == "ethernet") { print; exit }')
+    if [ "${type:-}" = wifi ]; then
+      IFS=: read -r ssid sig < <(nmcli -t -f ACTIVE,SSID,SIGNAL dev wifi 2>/dev/null | awk -F: '$1 == "yes" { print $2 ":" $3; exit }')
+      json "$( [ "${sig:-0}" -ge 75 ] && echo 󰤨 || { [ "${sig:-0}" -ge 50 ] && echo 󰤥 || { [ "${sig:-0}" -ge 25 ] && echo 󰤢 || echo 󰤟; }; }) $ssid" "$ssid  $sig%  ($dev)"
+    elif [ "${type:-}" = ethernet ]; then json 󰈀 "Ethernet ($dev)"
+    elif [ "$(nmcli radio wifi 2>/dev/null)" = disabled ]; then json 󰖪 "Wi-Fi off" off
+    else json 󰤭 Disconnected disconnected; fi ;;
+  bluetooth)
+    command -v bluetoothctl >/dev/null || { json ""; return; }
+    if ! bluetoothctl show 2>/dev/null | grep -q "Powered: yes"; then json 󰂲 "Bluetooth off" off; return; fi
+    local n; n=$(bluetoothctl devices Connected 2>/dev/null | grep -c '^Device') || true
+    if [ "${n:-0}" -gt 0 ]; then json "󰂱 $n" "$(bluetoothctl devices Connected | cut -d' ' -f3-)"; else json 󰂯 "Bluetooth on"; fi ;;
+  brightness)
+    local p; p=$(brightnessctl -m 2>/dev/null | awk -F, 'NR == 1 { gsub(/%/, "", $4); print $4 }')
+    [ -n "$p" ] && ls /sys/class/backlight/* >/dev/null 2>&1 || { json ""; return; }
+    json "$([ "$p" -ge 66 ] && echo 󰃠 || { [ "$p" -ge 33 ] && echo 󰃟 || echo 󰃞; }) $p%" "Brightness $p%" ;;
+  keyboard)
+    local l; l=$(swaymsg -t get_inputs 2>/dev/null | jq -r '[.[] | select(.type == "keyboard") | .xkb_active_layout_name // empty] | first // empty')
+    json "$(printf '%s' "${l:-}" | cut -c1-2 | tr '[:upper:]' '[:lower:]')" "$l" ;;
+  battery)
+    local b; b=$(ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -1)
+    [ -n "$b" ] || { json ""; return; }
+    local c st icon cls=""; c=$(cat "$b/capacity"); st=$(cat "$b/status")
+    icon=$(awk -v c="$c" 'BEGIN { split("󰁺 󰁻 󰁼 󰁽 󰁾 󰁿 󰂀 󰂁 󰂂 󰁹", i, " "); print i[int((c + 9) / 10) < 1 ? 1 : (int((c + 9) / 10) > 10 ? 10 : int((c + 9) / 10))] }')
+    case "$st" in Charging) icon=󰂄; cls=charging ;; Full) icon=󰁹 ;; *) [ "$c" -le 10 ] && cls=critical || { [ "$c" -le 25 ] && cls=warning; } ;; esac
+    json "$icon $c%" "$st · $c%" "$cls" ;;
+  esac; }
+
+follow_status() {  # status, then again on every change of what it shows
+  MOD=$1
+  case "$1" in
+    media) follow playerctl --follow status ;;
+    microphone|audio) follow sh -c 'pactl subscribe | grep --line-buffered -E "sink|source|server"' ;;
+    network) follow nmcli monitor ;;
+    keyboard) follow swaymsg -m -t subscribe '["input"]' ;;
+    *) status "$1" ;;
+  esac; }
+
+# id side kind arg interval tone left right middle up down ("-" = none)
+spec() {
+  local p="$SELF popup"
+  printf 'B\theight=26\n'
+  m() { local IFS=$'\t'; printf 'M\t%s\n' "$*"; }
+  m menu left text 󰀻 0 accent "$p menu" "${TERMINAL:-ghostty}" - - -
+  m workspaces left workspaces - 0 - - - - - -
+  m window left window - 0 - - - - - -
+  m media center exec "$SELF status media --follow" 0 fg "playerctl play-pause" "$p spotify" "playerctl next" "playerctl previous" "playerctl next"
+  m clock center clock "%A %H:%M|%d %B · W%V" 0 bright "$p calendar" - "$p timezone" - -
+  m indicators right exec "$SELF status indicators" 2 yellow "$p toggle" - - - -
+  m updates right exec "$SELF status updates" 3600 yellow "$p update" - - - -
+  m weather right exec "$SELF status weather" 900 orange "$p weather" "notify-send Weather \"\$(sway-weather --tooltip)\"" "rm -f ~/.cache/sway-weather.json" - -
+  m microphone right exec "$SELF status microphone --follow" 0 fg "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle" - "$p audio" "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SOURCE@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-"
+  m audio right exec "$SELF status audio --follow" 0 magenta "$p audio" "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle" "$p audio" "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
+  m network right exec "$SELF status network --follow" 0 cyan "$p network" "nmcli radio wifi \"\$(nmcli radio wifi | grep -q enabled && echo off || echo on)\"" - - -
+  m bluetooth right exec "$SELF status bluetooth" 5 blue "$p bluetooth" "bluetoothctl power \"\$(bluetoothctl show | grep -q 'Powered: yes' && echo off || echo on)\"" - - -
+  m brightness right exec "$SELF status brightness" 2 yellow "$p display" - - "brightnessctl set 5%+" "brightnessctl set 5%-"
+  m keyboard right exec "$SELF status keyboard --follow" 0 dim "sway-menu kb-next" - - - -
+  m battery right exec "$SELF status battery" 30 green "$p battery" - - - -
+}
+
+popup() {  # popup PAGE: the k4 page under the clicked module; a second click closes it
+  if pgrep -f "^k4 --menu" >/dev/null; then pkill -f "^k4 --menu"; exit 0; fi
+  case "$1" in
+    spotify) command -v spotify-menu >/dev/null && exec spotify-menu ;;
+    *) exec sway-menu "$1" ;;
+  esac; }
+
+start() {
+  stop
+  command -v k4 >/dev/null || { echo "k4-bar: k4 is not installed" >&2; exit 1; }
+  local o spec; spec=$(spec)
+  for o in $(swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | select(.active) | .name'); do
+    printf '%s\n' "$spec" | setsid -f k4 --bar --output "$o" >/dev/null 2>&1
+  done; }
+stop() { pkill -f '^k4 --bar' 2>/dev/null; return 0; }
+
+case "${1:-}" in
+  "") start ;;
+  stop) stop ;;
+  spec) spec ;;
+  status) if [ "${3:-}" = --follow ]; then follow_status "${2:?module}"; else status "${2:?module}"; fi ;;
+  popup) popup "${2:?page}" ;;
+  *) sed -n '2,9p' "$0" >&2; exit 2 ;;
+esac

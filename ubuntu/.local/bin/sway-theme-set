@@ -92,6 +92,7 @@ apply_live() {
   # thumbnails for the picker, built in the background while the rest reloads
   command -v sway-menu >/dev/null && (sway-menu thumbs-warm >/dev/null 2>&1 &)
   pkill -SIGUSR2 -x waybar 2>/dev/null || true     # reloads its style
+  pgrep -f '^k4 --bar' >/dev/null && { command -v k4-bar >/dev/null && setsid -f k4-bar >/dev/null 2>&1; } || true   # the k4 bar reads the theme and font at start
   command -v makoctl >/dev/null && makoctl reload 2>/dev/null || true
   pkill -SIGUSR2 -x ghostty 2>/dev/null || true    # re-reads config incl. the theme file
   command -v theme-sync-tmux >/dev/null && theme-sync-tmux || true

@@ -32,7 +32,7 @@ state_set() {  # state_set JQ-FILTER
   local cur; cur=$(cat "$STATE" 2>/dev/null); [ -n "$cur" ] || cur='{}'
   printf '%s' "$cur" | jq "$1" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
 }
-refresh() { pkill -RTMIN+8 -x waybar 2>/dev/null; }
+refresh() { pkill -RTMIN+8 -x waybar 2>/dev/null; return 0; }   # (the k4 bar runs its module again after a click)
 
 location() {  # prints "name<TAB>lat<TAB>lon"
   local n la lo

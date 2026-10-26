@@ -52,7 +52,8 @@ input type:pointer {
 # Autostart
 exec dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP=sway
 # exec_always so a reload restarts the bar and picks up config changes.
-exec_always sh -c 'pkill -x waybar; sleep 0.3; exec waybar -c $theme/waybar.jsonc -s $theme/waybar.css'
+# The status bar: k4's (k4-bar, one per output) unless Toggle › Status bar picked Waybar or k4 is missing
+exec_always sh -c 'pkill -x waybar; pkill -f "^k4 --bar"; sleep 0.3; if [ "$(cat ~/.local/state/sway/bar 2>/dev/null || echo k4)" = k4 ] && command -v k4 >/dev/null; then exec ~/.local/bin/k4-bar; else exec waybar -c $theme/waybar.jsonc -s $theme/waybar.css; fi'
 exec mako -c $theme/mako.ini
 exec lxpolkit
 exec nm-applet
