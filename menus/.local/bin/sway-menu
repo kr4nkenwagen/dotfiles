@@ -863,7 +863,7 @@ k4_pages() { case "$1" in   # the P/F records of a section (printed after it, so
          page gaps "Gaps & borders" "Space around windows and their border"
          page opacity Opacity "Terminal and browser background" ;;
   display) page scale Scale "The focused output" ;;
-  network) page wifi "Wi-Fi" "Networks: Enter connects; secured ones ask for the password"
+  network) page wifi "Network" "Ethernet, DNS and Wi-Fi: Enter connects; secured networks ask for the password"
              printf 'O\tpane\n' ;;   # in the right pane, next to the sections
   bluetooth) page bt "Bluetooth" "Devices: connect, pair and forget" ;;
   setup) page inputs "Input devices" "Keyboard layout and touchpad"
@@ -878,42 +878,90 @@ wifi_dev() { nmcli -t -f DEVICE,TYPE dev 2>/dev/null | awk -F: '$2 == "wifi" { p
 wifi_glyph() { local n=${1:-0}; if [ "$n" -ge 75 ]; then echo 󰤨; elif [ "$n" -ge 50 ]; then echo 󰤥; elif [ "$n" -ge 25 ]; then echo 󰤢; else echo 󰤟; fi; }
 wifi_band() { local f=${1%% *}; [ "${f:-0}" -ge 5900 ] && echo "6 GHz" || { [ "${f:-0}" -ge 4900 ] && echo "5 GHz" || echo "2.4 GHz"; }; }
 wifi_rescan() { nmcli dev wifi rescan >/dev/null 2>&1; sleep 2; notify "Scanning…" "$(nmcli -t -f SSID dev wifi list 2>/dev/null | grep -c .) networks"; }
-wifi_popup() {
+# Ethernet and DNS for the network popup
+eth_info() {  # DEVICE STATE CONNECTION: the first ethernet device ("-" for none)
+  nmcli -t -f DEVICE,TYPE,STATE,CONNECTION dev 2>/dev/null | awk -F: '$2 == "ethernet" { print $1 "\t" $3 "\t" ($4 == "" ? "-" : $4); exit }'; }
+route_dev() { ip route show default 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }'; }
+eth_speed() { local s; s=$(cat "/sys/class/net/$1/speed" 2>/dev/null); [ -n "$s" ] && [ "$s" -gt 0 ] 2>/dev/null || return; [ "$s" -ge 1000 ] && echo "$((s / 1000)) Gb/s" || echo "$s Mb/s"; }
+eth_prefer() { local m; m=$(nmcli -g ipv4.route-metric con show id "$1" 2>/dev/null); [ -z "$m" ] || [ "$m" -lt 0 ] || [ "$m" -lt 600 ]; }   # NetworkManager's own order: ethernet 100, Wi-Fi 600
+eth_prefer_toggle() {  # eth_prefer_toggle CONNECTION DEVICE
+  if eth_prefer "$1"; then nmcli con mod id "$1" ipv4.route-metric 700 ipv6.route-metric 700; notify "Wi-Fi is used first" "Ethernet on standby"
+  else nmcli con mod id "$1" ipv4.route-metric -1 ipv6.route-metric -1; notify "Ethernet is used first" "when plugged in"; fi
+  nmcli dev reapply "$2" >/dev/null 2>&1; }
+DNS_CHIPS=(Default Google Cloudflare Quad9); DNS_CHIP_SERVERS=("" "8.8.8.8 8.8.4.4" "1.1.1.1 1.0.0.1" "9.9.9.9 149.112.112.112")
+dns_chip_now() { local c="$1" d i; d=$(nmcli -g ipv4.dns con show id "$c" 2>/dev/null | tr ',' ' ')
+  for i in "${!DNS_CHIP_SERVERS[@]}"; do [ "$d" = "${DNS_CHIP_SERVERS[$i]}" ] && { echo "${DNS_CHIPS[$i]}"; return; }; done; echo Default; }
+dns_choose() {  # dns_choose CONNECTION DEVICE: $K4_VALUE (Default Google Cloudflare Quad9), applied without reconnecting
+  local c="$1" dev="$2" i
+  for i in "${!DNS_CHIPS[@]}"; do [ "${DNS_CHIPS[$i]}" = "${K4_VALUE:-}" ] || continue
+    if [ -z "${DNS_CHIP_SERVERS[$i]}" ]; then nmcli con mod id "$c" ipv4.dns "" ipv4.ignore-auto-dns no
+    else nmcli con mod id "$c" ipv4.dns "${DNS_CHIP_SERVERS[$i]}" ipv4.ignore-auto-dns yes; fi
+    nmcli dev reapply "$dev" >/dev/null 2>&1
+    notify "DNS" "${DNS_CHIPS[$i]} · $(nmcli -g IP4.DNS dev show "$dev" 2>/dev/null | head -1) · for $c"; return
+  done; }
+wifi_popup() {  # the bar's network popup: Ethernet, DNS, Wi-Fi (the design's Network popup)
   local dev on cur="" csig cfreq crate csec conn ssid sig freq rate sec n flags sub lock
+  local edev est econ eup="" eprim="" rdev espeed
   printf 'O\twidth=424;height=524;refresh=8\n'
-  dev=$(wifi_dev)
-  if [ -z "$dev" ]; then
-    printf 'D\tNo Wi-Fi\t\t\nST\tno adapter\tdim\n'
-    printf 'N\tNo Wi-Fi adapter\tThis computer has no wireless device. Ethernet and VPN live in the launcher under Network.\tmuted\n'
-    stay "Network settings" 'echo k4:launcher network' "⌃↵ launcher"
-    hints "↵" Run; return
+  dev=$(wifi_dev); rdev=$(route_dev)
+  IFS=$'\t' read -r edev est econ < <(eth_info); [ "$econ" = - ] && econ=""
+  [ "$est" = connected ] && eup=1
+  [ -n "$eup" ] && [ "$rdev" = "$edev" ] && eprim=1
+  espeed=$([ -n "$eup" ] && eth_speed "$edev")
+  if [ -z "$dev" ] && [ -z "$edev" ]; then
+    printf 'D\tOffline\t\t\nST\tno adapter\tdim\n'
+    printf 'N\tNo network adapter\tThis computer has neither Wi-Fi nor Ethernet. VPN lives in the launcher under Network.\tmuted\n'
+    stay "Network settings" 'echo k4:launcher network' "⌃↵ launcher"; return
   fi
-  on=$(nmcli radio wifi 2>/dev/null)
-  kbind w wifi_power_toggle; kbind r wifi_rescan
+  on=$([ -n "$dev" ] && nmcli radio wifi 2>/dev/null)
+  [ -n "$dev" ] && kbind w wifi_power_toggle && kbind r wifi_rescan
+  [ -n "$edev" ] && kbind e eth_toggle
+  local -A saved=()
+  local rows=()
+  if [ "$on" = enabled ]; then
+    while IFS= read -r n; do saved[$n]=1; done < <(nmcli -g NAME,TYPE con show 2>/dev/null | awk -F: '$2 == "802-11-wireless" { print $1 }')
+    mapfile -t rows < <(nmcli -t -f IN-USE,SSID,SIGNAL,FREQ,RATE,SECURITY dev wifi list --rescan auto 2>/dev/null \
+      | sed 's/\\:/\x01/g' | awk -F: '$2 != "" && !seen[$2]++ { gsub(/\x01/, ":", $2); print ($1 == "*" ? "*" : "-") "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" ($6 == "" ? "--" : $6) }')
+    for n in "${rows[@]}"; do IFS=$'\t' read -r conn ssid sig freq rate sec <<<"$n"; [ "$conn" = '*' ] && { cur=$ssid; csig=$sig; cfreq=$freq; crate=$rate; csec=$sec; }; done
+  fi
+  [ -n "$eup" ] && [ -z "$cur" ] && eprim=1
+  local portal=""; [ -n "$cur" ] && [ -z "$eprim" ] && [ "$(nmcli networking connectivity 2>/dev/null)" = portal ] && portal=1
+  # title and status: what the traffic goes over
+  if [ -n "$eprim" ]; then printf 'D\tEthernet\t\t\nST\twired%s\tdim\n' "${espeed:+ · $espeed}"
+  elif [ -n "$cur" ]; then printf 'D\t%s\t\t\n' "$cur"
+    if [ -n "$portal" ]; then printf 'ST\tsign-in needed\tyellow\n'; else printf 'ST\t%s · %s%%\tdim\n' "$(wifi_band "$cfreq")" "$csig"; fi
+  elif [ -n "$dev" ] && [ "$on" != enabled ]; then printf 'D\t%s\t\t\nST\toff\tdim\n' "$([ -n "$eup" ] && echo Ethernet || echo Offline)"
+  else printf 'D\tNot connected\t\t\nST\tnot connected\tdim\n'; fi
+  # the DNS chips: for the connection in use
+  local dcon ddev
+  if [ -n "$eprim" ]; then dcon=$econ; ddev=$edev; elif [ -n "$cur" ]; then dcon=$(active_con "$dev"); ddev=$dev; fi
+  dns_row() {
+    [ -n "$dcon" ] || return 0
+    choice "DNS" "dns_choose $(printf %q "$dcon") $ddev" "$(dns_chip_now "$dcon")" "Default|Google|Cloudflare|Quad9" \
+      "chips;line2=$(nmcli -g IP4.DNS dev show "$ddev" 2>/dev/null | head -1)$([ -n "$eprim" ] && echo ' · wired')"; }
+  # Ethernet first
+  if [ -n "$edev" ]; then
+    case "$est" in
+      connected) item "Ethernet" "k4page Ethernet '' eth-net $(printf %q "$edev")" "›" "" \
+                   "stay;mark=󰈀;markc=accent;bold;labelc=accent;tall;line2=connected${espeed:+ · $espeed} · $([ -n "$eprim" ] && echo 'in use' || echo 'standby, Wi-Fi preferred')" ;;
+      unavailable) stay "Ethernet" "notify $(printf %q "No cable in $edev") '· plug one in and it connects by itself'" "" "mark=󰈀;markc=muted;tall;line2=cable unplugged · $edev" ;;
+      *) stay "Ethernet" "nmcli dev connect $edev >/dev/null 2>&1 && notify 'Ethernet on' \"· connected\$(s=\$(cat /sys/class/net/$edev/speed 2>/dev/null); [ \"\${s:-0}\" -gt 0 ] && echo \", \$((s / 1000)) Gb/s\")\"" "" "mark=󰈀;markc=muted;tall;line2=turned off · ↵ to turn on" ;;
+    esac
+    [ -n "$eup" ] && dns_row
+  fi
+  [ -n "$dev" ] || { stay "Network settings" 'echo k4:launcher network' "⌃↵ launcher"; hints "↑↓" Move "↵" Select "← →" DNS "e" Ethernet; return; }
   tog "Wi-Fi" wifi_power_toggle "$([ "$on" = enabled ] && echo on || echo off)"
   if [ "$on" != enabled ]; then
-    printf 'D\tOff\t\t\nST\toff\tdim\n'
-    printf 'N\tWi-Fi is off\tTurn it on to see networks. Ethernet and VPN are not affected. Airplane mode lives in the launcher under Network.\tmuted\n'
-    hints "↵" "Turn Wi-Fi on"; return
+    printf 'N\tWi-Fi is off\t%s\tmuted\n' "$([ -n "$eup" ] && echo 'You are online over Ethernet. Turn Wi-Fi on to see networks.' || echo 'Turn it on to see networks. Ethernet and VPN are not affected. Airplane mode lives in the launcher under Network.')"
+    hints "↑↓" Move "↵" Select "w" "Wi-Fi on" "e" Ethernet; return
   fi
-  local -A saved=()
-  while IFS= read -r n; do saved[$n]=1; done < <(nmcli -g NAME,TYPE con show 2>/dev/null | awk -F: '$2 == "802-11-wireless" { print $1 }')
-  local rows=()
-  # IN-USE SSID SIGNAL FREQ RATE SECURITY (escaped colons in SSIDs kept)
-  mapfile -t rows < <(nmcli -t -f IN-USE,SSID,SIGNAL,FREQ,RATE,SECURITY dev wifi list --rescan auto 2>/dev/null \
-    | sed 's/\\:/\x01/g' | awk -F: '$2 != "" && !seen[$2]++ { gsub(/\x01/, ":", $2); print ($1 == "*" ? "*" : "-") "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" ($6 == "" ? "--" : $6) }')
-  for n in "${rows[@]}"; do IFS=$'\t' read -r conn ssid sig freq rate sec <<<"$n"; [ "$conn" = '*' ] && { cur=$ssid; csig=$sig; cfreq=$freq; crate=$rate; csec=$sec; }; done
-  local portal=""; [ -n "$cur" ] && [ "$(nmcli networking connectivity 2>/dev/null)" = portal ] && portal=1
-  printf 'D\t%s\t\t\n' "${cur:-Not connected}"
-  if [ -n "$portal" ]; then printf 'ST\tsign-in needed\tyellow\n'
-  elif [ -n "$cur" ]; then printf 'ST\t%s · %s%%\tdim\n' "$(wifi_band "$cfreq")" "$csig"
-  else printf 'ST\tnot connected\tdim\n'; fi
   if [ -n "$cur" ]; then
     hdr "Connected"
     item "$cur" "k4page $(printf %q "$cur") '' wifi-net $(printf %q "$cur")" "›" "" \
       "stay;mark=$(wifi_glyph "$csig");markc=accent;bold;labelc=accent;line2=$([ -n "$portal" ] && echo 'connected · no internet yet' || echo connected) · $(wifi_band "$cfreq") · ${crate% *} Mb/s$([ -n "$portal" ] && echo ';line2c=yellow')$(wifi_secured "$csec" && echo ';lock')"
     [ -n "$portal" ] && item "Sign in to $cur" 'open_url http://neverssl.com; notify Opened "sign-in page in your browser"' "browser ↗" "" "stay;bold;labelc=yellow;line2=This network shows a sign-in page first"
   fi
+  [ -z "$eup" ] && dns_row
   printf 'H\tNetworks\t\t↻ scanning\taccent\n'
   for n in "${rows[@]}"; do
     IFS=$'\t' read -r conn ssid sig freq rate sec <<<"$n"
@@ -932,7 +980,28 @@ wifi_popup() {
   done
   ask_item "Connect to hidden network…" wifi_hidden "" "Network name|The name (SSID) of the hidden network"
   stay "Network settings" 'echo k4:launcher network' "⌃↵ launcher"
-  hints "↑↓" Move "↵" Connect "r" Rescan "w" "Wi-Fi on/off"; }
+  hints "↑↓" Move "↵" Connect "← →" DNS "r" Rescan "w" "Wi-Fi"; }
+eth_net_page() {  # eth_net_page DEVICE: the wired connection's details and what to do with it
+  local dev="$1" con st speed duplex method ip gw dns mac
+  printf 'O\twidth=424;height=524\n'
+  IFS=$'\t' read -r _ st con < <(eth_info); [ "$con" = - ] && con=""
+  speed=$(eth_speed "$dev"); duplex=$(cat "/sys/class/net/$dev/duplex" 2>/dev/null)
+  method=$(nmcli -g ipv4.method con show id "$con" 2>/dev/null); [ "$method" = auto ] && method=DHCP; [ "$method" = manual ] && method=Manual
+  ip=$(nmcli -g IP4.ADDRESS dev show "$dev" 2>/dev/null | head -1); gw=$(nmcli -g IP4.GATEWAY dev show "$dev" 2>/dev/null)
+  dns=$(nmcli -g IP4.DNS dev show "$dev" 2>/dev/null | head -1); mac=$(cat "/sys/class/net/$dev/address" 2>/dev/null | tr '[:lower:]' '[:upper:]')
+  printf 'D\tEthernet\t\t\nST\twired%s\tdim\n' "${speed:+ · $speed}"
+  local kv k v
+  for kv in "Speed|${speed:-?}${duplex:+ · $duplex duplex}" "Interface|$dev" "Method|$method" "IP|${ip%%/*}" "Gateway|$gw" "DNS|${dns:+$dns · $(dns_chip_now "$con")}" "MAC|$mac"; do
+    k=${kv%%|*}; v=${kv#*|}; [ -n "$v" ] || continue
+    stay "$v" "copy_val $(printf %q "$k") $(printf %q "$v")" "" "field=$k"
+  done
+  hdr "Ethernet"
+  tog "Use Ethernet" "nmcli dev disconnect $dev >/dev/null 2>&1; notify 'Ethernet off' \"\$(c=\$(nmcli -t -f ACTIVE,SSID dev wifi 2>/dev/null | awk -F: '\$1 == \"yes\" { print \$2; exit }'); [ -n \"\$c\" ] && echo \"· now on \$c\")\"; echo k4:back" on "" "$([ -z "$(nmcli -t -f ACTIVE dev wifi 2>/dev/null | grep -x yes)" ] && echo 'confirm=Turn Ethernet off?|Nothing else connects this computer, so you will be offline.')"
+  [ -n "$con" ] && tog "Prefer Ethernet over Wi-Fi" "eth_prefer_toggle $(printf %q "$con") $dev" "$(eth_prefer "$con" && echo on || echo off)"
+  [ -n "$con" ] && stay "Renew address (DHCP)" "nmcli dev reapply $dev >/dev/null 2>&1 || nmcli con up id $(printf %q "$con") >/dev/null 2>&1; sleep 1; notify Renewed \"\$(nmcli -g IP4.ADDRESS dev show $dev | head -1 | cut -d/ -f1)\""
+  if command -v nm-connection-editor >/dev/null; then stay "Advanced settings" 'bg nm-connection-editor' "nm-connection-editor ↗"
+  else stay "Advanced settings" 'tui nmtui-edit' "nmtui ↗"; fi
+  hints "↑↓" Move "↵" "Copy / run" "⌫" Back; }
 wifi_net_page() {  # wifi_net_page SSID: the connected network's details and what to do with it
   local ssid="$1" dev sig freq chan rate sec ip gw dns dbm auto
   printf 'O\twidth=424;height=524\n'
@@ -1090,6 +1159,7 @@ k4_page() { local p="$1"; shift
   case "$p" in
   wifi) wifi_popup ;;
   wifi-net) wifi_net_page "$@" ;;
+  eth-net) eth_net_page "$@" ;;
   wifi-qr) wifi_qr_page "$@" ;;
   bt) bt_popup ;;
   bt-dev) bt_dev_page "$@" ;;
