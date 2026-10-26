@@ -51,3 +51,30 @@ hl.config({
 --     column_width = 0.97,
 --   },
 -- })
+
+-- See-through windows show the wallpaper, never the windows behind them: blur with xray
+-- samples only the wallpaper and the bottom layers. Kept to the least blur Hyprland allows and
+-- no colour change, so the wallpaper looks as it is.
+-- https://wiki.hypr.land/Configuring/Basics/Variables/#blur
+hl.config({
+	decoration = {
+		blur = {
+			enabled = true,
+			xray = true,
+			new_optimizations = true,
+			size = 1,
+			passes = 1,
+			noise = 0.0,
+			contrast = 1.0,
+			brightness = 1.0,
+			vibrancy = 0.0,
+			vibrancy_darkness = 0.0,
+			popups = true,
+		},
+	},
+})
+
+-- k4's launcher, popups, OSD and the bar's tooltip and hover preview do the same (their clear
+-- parts left alone). The overview and the click catcher are not blurred: they cover the whole
+-- output and their dimming should show the windows.
+hl.layer_rule({ match = { namespace = "^(k4|k4-osd|k4-bar)$" }, blur = true, ignore_alpha = 0.05 })
