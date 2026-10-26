@@ -157,6 +157,7 @@ o.bind("SUPER + CTRL + C", "Capture (k4)", "sway-menu capture")
 -- centre, and Omarchy's comma keys on k4's service.
 o.bind("SUPER + N", "Notifications (k4)", "k4-notify center")
 o.bind("SUPER + period", "Tray (k4)", "k4-tray popup")
+o.bind("SUPER + SHIFT + ESCAPE", "System performance (k4)", "k4-perf popup")
 hl.unbind("SUPER + comma")
 o.bind("SUPER + comma", "Dismiss last notification", "k4-notify dismiss")
 hl.unbind("SUPER + SHIFT + comma")

@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# k4-perf: the System popup (k4 --perf, the Kestrel design's performance and utilities) and
+# the bar's performance module. k4 reads CPU, memory, disk, network and processes itself; this
+# gives it the utilities (what each frees, measured now) and runs them.
+#   k4-perf popup [PAGE]      the popup (from a bar click: under it; again: closes it)
+#   k4-perf bar               the bar module: CPU in use, memory in use; yellow / red when high
+#   k4-perf util-list         U lines for k4 (plus R and L)
+#   k4-perf util ID [VALUE]   run one; its last line is k4's footer ("k4:close" when it opened a terminal)
+export PATH="$HOME/.local/bin:$PATH"
+SELF=$(command -v k4-perf || echo "$0")
+OMARCHY=""; command -v omarchy-theme-set >/dev/null 2>&1 && OMARCHY=1
+ARCH=""; command -v pacman >/dev/null && ARCH=1
+RUN="${XDG_RUNTIME_DIR:-/tmp}"
+
+bg() { setsid -f "$@" >/dev/null 2>&1 </dev/null; }
+tui_wait() {  # a floating terminal for what needs a password or shows output
+  local cmd="$1; printf '\n[done] press enter to close'; read -r _"
+  if command -v ghostty >/dev/null; then bg ghostty --class=TUI.float -e sh -c "$cmd"
+  else bg xdg-terminal-exec --app-id=TUI.float sh -c "$cmd"; fi; }
+human() {  # bytes -> 2.3 GB / 840 MB / 12 KB
+  awk -v b="${1:-0}" 'BEGIN { if (b >= 1e9) printf "%.1f GB", b / 1e9; else if (b >= 1e6) printf "%.0f MB", b / 1e6; else printf "%.0f KB", b / 1e3 }'; }
+du_b() { du -sb "$@" 2>/dev/null | awk '{ s += $1 } END { print s + 0 }'; }
+
+awake_on() { if [ -n "$OMARCHY" ]; then [ -f "$HOME/.local/state/omarchy/indicators/stay-awake" ]; else ! pgrep -x swayidle >/dev/null; fi; }
+
+util_list() {
+  local t n b
+  printf 'R\t%s util\nL\t%s util-list\n' "$SELF" "$SELF"
+  u() { local IFS=$'\t'; printf 'U\t%s\n' "$*"; }
+  # free up space
+  t="$HOME/.local/share/Trash"; n=$(find "$t/files" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l); b=$(du_b "$t")
+  u 0 "Free up space" trash "Empty trash" "$n files in ~/.local/share/Trash" "$(human "$b")" ask
+  if [ -n "$ARCH" ]; then b=$(du_b /var/cache/pacman/pkg); u 0 "Free up space" pkgcache "Clean package cache" "paccache · keeps the last 2 versions · sudo" "$(human "$b")" term
+  else b=$(du_b /var/cache/apt/archives); u 0 "Free up space" pkgcache "Clean package cache" "apt clean · old .deb files · sudo" "$(human "$b")" term; fi
+  b=$(du_b "$HOME/.cache/thumbnails"); u 0 "Free up space" thumbs "Clear thumbnails" "~/.cache/thumbnails · made again when needed" "$(human "$b")"
+  if [ -n "$ARCH" ]; then n=$(pacman -Qdtq 2>/dev/null | wc -l); u 0 "Free up space" orphans "Remove unused packages" "pacman -Rns orphans · $n packages · sudo" "$n" "ask;term"
+  else n=$(apt-get -s autoremove 2>/dev/null | grep -c '^Remv'); u 0 "Free up space" orphans "Remove unused packages" "apt autoremove · $n packages · sudo" "$n" "ask;term"; fi
+  b=$(journalctl --disk-usage 2>/dev/null | grep -oE '[0-9.]+[KMGT]' | head -1)
+  u 0 "Free up space" journal "Trim system logs" "Keep the last 2 weeks of journal · sudo" "${b:+${b}B}" term
+  b=$(awk '/^Cached:/ { printf "%.1f GB", $2 / 1048576 }' /proc/meminfo)
+  u 0 "Memory" drop "Drop file caches" "Frees cached RAM · asks for your password" "$b" term
+  # fix things
+  u 1 "Fix things" audio "Restart audio" "pipewire, wireplumber · fixes no sound" ""
+  u 1 "Fix things" network "Restart networking" "NetworkManager · drops the connection for ~5 s" "" ask
+  u 1 "Fix things" bar "Reload k4 bar" "Rereads config and theme" ""
+  [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && u 1 "Fix things" xkill "Kill a window" "Click the window to close it by force" "pick"
+  n=$(journalctl -p err -b -q -n 1000 --no-pager 2>/dev/null | wc -l); [ "$n" -ge 1000 ] && n="1000+"   # newest first: a cap keeps it quick
+  u 1 "Fix things" errors "Errors since boot" "journalctl -p err -b" "$n"
+  # power
+  if command -v powerprofilesctl >/dev/null; then
+    local cur i=0 k=1
+    cur=$(powerprofilesctl get 2>/dev/null)
+    for p in power-saver balanced performance; do [ "$p" = "$cur" ] && k=$i; i=$((i + 1)); done
+    u 1 "Power" profile "Power profile" "← → Power saver · Balanced · Performance" "" "step=Power saver|Balanced|Performance;cur=$k"
+  fi
+  u 1 "Power" awake "Stay awake" "No screen lock or suspend" "" "tog=$(awake_on && echo 1 || echo 0)"
+  u 1 "Power" btop "Open btop" "Full monitor in a terminal" "↗"
+  return 0; }
+
+util() {
+  local id="$1" v="${2:-}" before after
+  case "$id" in
+    trash) before=$(du_b "$HOME/.local/share/Trash")
+           rm -rf "$HOME/.local/share/Trash/files/"* "$HOME/.local/share/Trash/info/"* 2>/dev/null
+           echo "Trash emptied · freed $(human "$before")" ;;
+    pkgcache) if [ -n "$ARCH" ]; then tui_wait 'command -v paccache >/dev/null && sudo paccache -rk2 || sudo pacman -Sc'
+              else tui_wait 'sudo apt-get clean'; fi; echo k4:close ;;
+    thumbs) before=$(du_b "$HOME/.cache/thumbnails"); rm -rf "$HOME/.cache/thumbnails/"* 2>/dev/null; echo "Thumbnails cleared · freed $(human "$before")" ;;
+    orphans) if [ -n "$ARCH" ]; then tui_wait 'o=$(pacman -Qdtq); [ -n "$o" ] && sudo pacman -Rns $o || echo "Nothing to remove"'
+             else tui_wait 'sudo apt-get autoremove'; fi; echo k4:close ;;
+    journal) tui_wait 'sudo journalctl --vacuum-time=2weeks'; echo k4:close ;;
+    drop) tui_wait 'sync && echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null && free -h'; echo k4:close ;;
+    audio) systemctl --user restart pipewire pipewire-pulse wireplumber 2>/dev/null && echo "Audio restarted" || echo "Could not restart audio" ;;
+    network) nmcli networking off && sleep 1 && nmcli networking on && echo "Networking restarted" || echo "Could not restart networking" ;;
+    bar) bg k4-bar; echo "k4 bar reloaded" ;;
+    xkill) bg hyprctl kill; echo k4:close ;;
+    errors) tui_wait 'journalctl -p err -b --no-pager | less -R'; echo k4:close ;;
+    profile) case "$v" in "Power saver") v=power-saver ;; Balanced) v=balanced ;; Performance) v=performance ;; esac
+             powerprofilesctl set "$v" 2>/dev/null && echo "Power profile · ${2:-$v}" || echo "Could not set the power profile" ;;
+    awake) sway-menu call toggle_idle >/dev/null 2>&1; awake_on && echo "Staying awake until you turn it off" || echo "Stay awake off" ;;
+    btop) if command -v ghostty >/dev/null; then bg ghostty --class=TUI.float -e btop; else bg xdg-terminal-exec btop; fi; echo k4:close ;;
+    *) echo "unknown utility: $id" ;;
+  esac; }
+
+bar() {  # CPU since the last call (a sample kept in $XDG_RUNTIME_DIR), memory in use
+  local f="$RUN/k4-perf.cpu" t i pt pi cpu mt ma mem pct temp top tone="" tone2="" class="" tip
+  read -r _ a b c d e g h _ < /proc/stat; t=$((a + b + c + d + e + g + h)); i=$((d + e))
+  { read -r pt pi < "$f"; } 2>/dev/null; echo "$t $i" > "$f"
+  cpu=0; [ -n "$pt" ] && [ "$t" -gt "$pt" ] && cpu=$(( 100 * ((t - pt) - (i - pi)) / (t - pt) ))
+  read -r mt ma < <(awk '/^MemTotal/ { t = $2 } /^MemAvailable/ { a = $2 } END { print t, a }' /proc/meminfo)
+  mem=$(awk -v t="$mt" -v a="$ma" 'BEGIN { printf "%.1fG", (t - a) / 1048576 }'); pct=$(( 100 * (mt - ma) / mt ))
+  temp=""; for h in /sys/class/hwmon/hwmon*; do case "$(cat "$h/name" 2>/dev/null)" in k10temp|coretemp|zenpower) temp=$(( $(cat "$h/temp1_input") / 1000 )) ;; esac; done
+  top=$(ps -eo comm,%cpu --sort=-%cpu --no-headers 2>/dev/null | head -1 | awk '{ printf "%s %s%%", $1, $2 }')
+  [ "$cpu" -ge 70 ] && tone=yellow; [ "$pct" -ge 90 ] && tone2=red
+  [ -n "$temp" ] && [ "$temp" -ge 90 ] && class=critical
+  tip="load $(cut -d' ' -f1-3 /proc/loadavg)${temp:+ · ${temp}°C} · busiest $top"
+  jq -cn --arg t "${cpu}%" --arg t2 "$mem" --arg tip "$tip" --arg tone "$tone" --arg tone2 "$tone2" --arg class "$class" \
+    '{icon: "󰍛", text: $t, text2: $t2, tooltip: $tip} + (if $tone != "" then {text_tone: $tone, icon_tone: $tone} else {} end)
+     + (if $tone2 != "" then {text2_tone: $tone2} else {} end) + (if $class != "" then {class: $class} else {} end)'; }
+
+popup() {
+  pkill -f '^k4 --perf' && exit 0
+  local pop=()
+  [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,right,${K4_BAR_POS:-top}")
+  printf 'R\t%s util\nL\t%s util-list\n' "$SELF" "$SELF" | k4 --perf ${1:+--open "$1"} "${pop[@]}"; }
+
+case "${1:-popup}" in
+  util-list) util_list ;;
+  util) util "${2:?id}" "${3:-}" ;;
+  bar) bar ;;
+  popup) popup "${2:-}" ;;
+  *) echo "usage: k4-perf popup [overview|processes|utilities]|bar|util-list|util ID [VALUE]" >&2; exit 2 ;;
+esac

@@ -141,7 +141,7 @@ bindsym $mod+Shift+s move scratchpad
 
 # Session
 bindsym $mod+Escape exec k4-power   # the system menu (k4): lock (L), suspend, … shut down; again closes it
-bindsym $mod+Shift+Escape exit
+bindsym $mod+Shift+Escape exec ~/.local/bin/k4-perf popup   # performance, processes and utilities (k4); log out is in Super+Esc
 bindsym $mod+Ctrl+r reload
 
 # Screenshots (copied to clipboard)

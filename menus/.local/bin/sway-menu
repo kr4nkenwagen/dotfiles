@@ -1676,6 +1676,7 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
              command -v k4-clip >/dev/null && item "Clipboard history" k4-clip "Super+Ctrl+V"
              command -v k4-notify >/dev/null && item "Notifications" 'k4-notify center' "Super+N"
              command -v k4-tray >/dev/null && item "Tray" 'k4-tray popup' "Super+."
+             command -v k4-perf >/dev/null && item "System performance" 'k4-perf popup' "Super+Shift+Esc"
              [ -s "$HOME/.local/state/sway/tray-hidden" ] && stay "Show hidden tray apps" 'rm -f "$HOME/.local/state/sway/tray-hidden"; notify Tray "hidden apps are back"' "$(wc -l < "$HOME/.local/state/sway/tray-hidden") hidden" ;;
   toggle) tog "Bar" 'toggle_bar; sleep 0.2; notify Bar "$(onoff bar_running)"' "$(onoff bar_running)"
           choice "Status bar" set_bar_kind "$([ "$(bar_kind)" = k4 ] && echo k4 || echo "$BAR_ALT")" "k4|$BAR_ALT"

@@ -199,6 +199,7 @@ spec() {
   m pin2 right exec "k4-tray pinned 2" 3 - "k4-tray pin-click 2" "k4-tray pin-click 2 menu" - - - "px=4"
   m tray right exec "k4-tray status" 3 - "k4-tray popup" "k4-tray popup" - - - "px=6"   # the tray: chevron, count, red count needing you
   m updates right exec "$SELF status updates" 3600 - "$p update" "$SELF status updates >/dev/null" - - - -
+  m perf right exec "k4-perf bar" 2 - "k4-perf popup" "k4-perf util btop" - - - "px=7"   # CPU and memory in use; the System popup
   m weather right exec "$SELF status weather" 900 - "$p weather" "rm -f ~/.cache/sway-weather.json" - - - -
   m microphone right exec "$SELF status microphone --follow" 0 - "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle" - "$p audio" "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SOURCE@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-" "flash"
   m audio right exec "$SELF status audio --follow" 0 - "$p audio" "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle" - "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-" -
