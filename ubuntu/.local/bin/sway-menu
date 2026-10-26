@@ -37,7 +37,8 @@ DEFAULT_WALLPAPER="$DOTFILES/wallpapers/neon-city.png"
 WALLPAPER_DIRS=("$THEME/backgrounds" "$HOME/.config/omarchy/backgrounds/$(cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null)" "$DOTFILES/wallpapers")  # theme + extras from theme-bg-sync
 THUMBS="$HOME/.cache/sway-menu/thumbs"
 PICK_LOG="$HOME/.cache/sway-menu/pick.log"   # every pick and paint step, for diagnosing the picker
-plog() { mkdir -p "${PICK_LOG%/*}"; printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >> "$PICK_LOG"; }
+plog() { mkdir -p "${PICK_LOG%/*}"; printf '%s %s\n' "$(date +%H:%M:%S.%3N)" "$*" >> "$PICK_LOG"; }
+ms() { echo $(( $(date +%s%N) / 1000000 )); }   # for step timings in the pick log
 
 # ---------- tiny menu framework: parallel arrays of labels and actions ----------
 # Launcher: k4 (~/repos/k4, Odin) when chosen and installed, else fuzzel. The choice lives in
@@ -92,16 +93,20 @@ wallpaper() {  # current wallpaper: the Omarchy-style symlink, else the default
 lock() { swaylock -f -C "$THEME/swaylock.conf" -i "$(wallpaper)" -s fill; }
 # awww (ex-swww) paints with a transition when installed; otherwise sway's own swaybg.
 bg_tool() { command -v awww || command -v swww || true; }
-apply_bg() {  # apply_bg FILE
-  local t; t=$(bg_tool); plog "apply_bg: $1 tool=${t:-swaybg}"
+apply_bg() {  # apply_bg FILE (each step's time goes to the pick log)
+  local t t0; t=$(bg_tool); plog "apply_bg: $1 tool=${t:-swaybg}"
   if [ -n "$t" ]; then
+    t0=$(ms)
     if ! "$t" query >/dev/null 2>&1; then
+      plog "apply_bg: $t daemon not running, starting it"
       "${t}-daemon" >/dev/null 2>&1 & disown
       local i; for i in $(seq 30); do "$t" query >/dev/null 2>&1 && break; sleep 0.1; done
     fi
+    plog "apply_bg: daemon ready in $(( $(ms) - t0 )) ms"; t0=$(ms)
     # with a transition first, then plain (older/newer CLIs differ in flags); stderr goes to the pick log
     if "$t" img "$1" --transition-type grow --transition-pos center --transition-duration 1 --transition-fps 60 2>>"$PICK_LOG" \
        || { plog "apply_bg: $t img with transition failed, retrying plain"; "$t" img "$1" 2>>"$PICK_LOG"; }; then
+      plog "apply_bg: $t img returned in $(( $(ms) - t0 )) ms"
       # a swaybg left from an older config or from the fallback below would sit on top of
       # awww's surface and hide every later change; sway does not respawn it
       pkill -x swaybg 2>/dev/null || true
@@ -119,23 +124,29 @@ SCREEN_BG="$HOME/.cache/sway-menu/screen"
 screen_size() { swaymsg -t get_outputs 2>/dev/null | jq -r '[.[] | select(.active) | .current_mode | select(.)] | (map(.width) | max | tostring) + "x" + (map(.height) | max | tostring)'; }
 screen_copy() {  # screen_copy FILE: a copy scaled to cover the largest output, cached (5K PNGs took awww
   # most of a second to decode and scale on every switch); the file itself when that is not possible
-  local f="$1" wh w h iw out
+  local f="$1" wh w h iw ih out
   command -v vipsthumbnail >/dev/null || { printf '%s' "$f"; return; }
   wh=$(screen_size); w=${wh%x*}; h=${wh#*x}
   [[ $w =~ ^[0-9]+$ && $h =~ ^[0-9]+$ ]] || { printf '%s' "$f"; return; }
   iw=$(vipsheader -f width "$f" 2>/dev/null) || { printf '%s' "$f"; return; }
-  [ "$iw" -gt $(( w * 5 / 4 )) ] || { printf '%s' "$f"; return; }   # already about screen size
+  ih=$(vipsheader -f height "$f" 2>/dev/null) || { printf '%s' "$f"; return; }
+  # any other size makes awww resize it while "caching" (seconds on a laptop): hand it the
+  # exact screen size, so it only has to copy pixels
+  [ "$iw" = "$w" ] && [ "$ih" = "$h" ] && { printf '%s' "$f"; return; }
   out="$SCREEN_BG/$(printf '%s:%s:%s' "$wh" "$f" "$(stat -L -c '%s:%Y' "$f")" | md5sum | cut -c1-32).png"
   if [ ! -f "$out" ]; then mkdir -p "$SCREEN_BG"
-    vipsthumbnail "$f" --size "$wh" --smartcrop centre -o "$out[strip,compression=1]" 2>>"$PICK_LOG" || { rm -f "$out"; printf '%s' "$f"; return; }
+    local t0; t0=$(ms)
+    vipsthumbnail "$f" --size "$wh" --smartcrop centre -o "$out[strip,compression=1]" 2>/dev/null || { rm -f "$out"; printf '%s' "$f"; return; }
+    plog "screen_copy: ${iw}x$ih -> $wh in $(( $(ms) - t0 )) ms"
     find "$SCREEN_BG" -type f -mtime +60 -delete 2>/dev/null
   fi
   printf '%s' "$out"; }
 set_background() { local f; f=$(readlink -f "$1"); [ -f "$f" ] || { plog "set_background: not a file: $1"; return; }
   mkdir -p "$(dirname "$BG_LINK")"; ln -nsf "$f" "$BG_LINK"
   # inside k4 the paint runs on its own, so the menu answers at once
-  if [ -n "${K4_RUN:-}" ]; then ( apply_bg "$(screen_copy "$f")" ) </dev/null >/dev/null 2>&1 & disown
-  else apply_bg "$(screen_copy "$f")"; fi; }
+  if [ -n "${K4_RUN:-}" ]; then ( bg_paint "$f" ) </dev/null >/dev/null 2>&1 & disown
+  else bg_paint "$f"; fi; }
+bg_paint() { local t0 c; t0=$(ms); c=$(screen_copy "$1"); plog "screen copy ready in $(( $(ms) - t0 )) ms: $c"; apply_bg "$c"; }
 wallpaper_restore() { rm -f "$STATE/background.conf"; apply_bg "$(screen_copy "$(wallpaper)")"; }   # background.conf: older versions persisted the choice there
 idle() {
   exec swayidle -w \
@@ -1331,6 +1342,9 @@ case "${1:-}" in
   wallpaper-random) bg_random ;;
   wallpaper-restore) wallpaper_restore ;;
   thumbs-warm) thumbs_warm ;;
+  bg-time) # bg-time [FILE]: set a background (default: a random one) and print each step's time
+    f=${2:-$(bg_list | shuf -n1)}; : > "$PICK_LOG.time"; PICK_LOG="$PICK_LOG.time"; s0=$(ms)
+    set_background "$f"; cat "$PICK_LOG"; echo "total $(( $(ms) - s0 )) ms"; rm -f "$PICK_LOG" ;;
   thumbs-warm-files) mapfile -t files; [ ${#files[@]} -gt 0 ] && thumbs_warm "${files[@]}" ;;   # k4's grid: the missing ones, on stdin
   tui) shift; tui "$@" ;;   # floating terminal with the PATH above (sway binds use this for ~/.local/bin tools)
   thumb-make) mkdir -p "$(dirname "$3")"; thumb_make "${2:?file}" "${3:?out}" ;;
