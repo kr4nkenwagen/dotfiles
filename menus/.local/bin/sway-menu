@@ -1945,6 +1945,22 @@ if [ -n "$OMARCHY" ]; then
       *) k4_page_base "$@" ;;
     esac; }
 fi
+# Capture rows freeze or grab the screen at once: they wait until the k4 window that ran them is
+# gone, Hyprland's fade-out too, or the frozen screen shows the menu over what you want.
+k4_gone() { local i
+  if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+    for i in $(seq 20); do
+      hyprctl layers -j 2>/dev/null | jq -e '[.. | objects | select((.namespace? // "") | test("^k4(-catcher)?$"))] | length == 0' >/dev/null && break
+      sleep 0.05
+    done
+    sleep 0.25   # the fade-out (Omarchy's layersOut animation)
+  else
+    for i in $(seq 20); do pgrep -f '^k4 --menu' >/dev/null || break; sleep 0.05; done
+  fi; }
+for f in shot shot_region shot_window qr_scan color_picker; do
+  eval "$(declare -f "$f" | sed "1s/^$f/wm_$f/")"
+  eval "$f() { k4_gone; wm_$f \"\$@\"; }"
+done
 # Do not disturb through k4's notification service when it runs (k4-notify), else the platform's
 eval "$(declare -f dnd_on | sed '1s/^dnd_on/wm_dnd_on/')"; eval "$(declare -f toggle_dnd | sed '1s/^toggle_dnd/wm_toggle_dnd/')"
 k4_notify_up() { command -v k4 >/dev/null && k4 --notify-ctl status >/dev/null 2>&1; }
