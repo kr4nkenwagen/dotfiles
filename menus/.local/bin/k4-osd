@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# k4-osd: volume, microphone, brightness and layout keys with k4's on-screen display (the
+# Kestrel bar design: 300×48 above the bottom of the focused output for 1.2 s; a repeat updates
+# it in place). Bound to the media keys in the sway config and Hyprland's bindings.lua.
+#   k4-osd volume up|down|mute [STEP]     output volume, 5% steps up to 150%
+#   k4-osd mic mute
+#   k4-osd brightness up|down [STEP]
+#   k4-osd layout next
+# On Omarchy without the k4 bar running, Omarchy's own commands (and their OSD) do it instead.
+set -u
+export PATH="$HOME/.local/bin:$PATH"
+OMARCHY=""; command -v omarchy-theme-set >/dev/null 2>&1 && OMARCHY=1
+show() { setsid -f k4 --osd "$1" >/dev/null 2>&1 </dev/null; }
+pct() { awk '{ printf "%d", $2 * 100 + 0.5 }'; }
+vol_icon() { if [ "$1" -ge 66 ]; then echo 󰕾; elif [ "$1" -ge 33 ]; then echo 󰖀; else echo 󰕿; fi; }
+
+if [ -n "$OMARCHY" ] && ! pgrep -f '^k4 --bar' >/dev/null; then
+  case "${1:-} ${2:-}" in
+    "volume up") exec omarchy-audio-output-volume raise ;;
+    "volume down") exec omarchy-audio-output-volume lower ;;
+    "volume mute") exec omarchy-audio-output-volume mute-toggle ;;
+    "mic mute") exec omarchy-audio-input-mute ;;
+    "brightness up") exec omarchy-brightness-display +5% ;;
+    "brightness down") exec omarchy-brightness-display 5%- ;;
+  esac
+fi
+
+case "${1:-}" in
+  volume)
+    case "${2:-}" in
+      up) wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ "${3:-5}%+" ;;
+      down) wpctl set-volume @DEFAULT_AUDIO_SINK@ "${3:-5}%-" ;;
+      mute) wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;;
+    esac
+    v=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null) || exit 0
+    p=$(printf '%s' "$v" | pct)
+    if [[ $v == *MUTED* ]]; then show "󰝟|$p|150|muted|dim|red||muted"
+    else show "$(vol_icon "$p")|$p|150|$p%|$([ "$p" -gt 100 ] && echo red)"; fi ;;
+  mic)
+    wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle
+    v=$(wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null) || exit 0
+    if [[ $v == *MUTED* ]]; then show "󰍭|-1||muted|red|red|Microphone"
+    else show "󰍬|-1||live|||Microphone"; fi ;;
+  brightness)
+    case "${2:-}" in
+      up) brightnessctl -q set "${3:-5}%+" ;;
+      down) brightnessctl -q set "${3:-5}%-" ;;
+    esac
+    p=$(brightnessctl -m 2>/dev/null | awk -F, 'NR == 1 { gsub(/%/, "", $4); print $4 }')
+    [ -n "$p" ] && show "󰃠|$p|100|$p%" ;;
+  layout)
+    if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+      hyprctl switchxkblayout all next >/dev/null
+      l=$(hyprctl -j devices | jq -r '[.keyboards[] | select(.main) | .active_keymap] | first // ""')
+    else
+      swaymsg input type:keyboard xkb_switch_layout next >/dev/null
+      l=$(swaymsg -t get_inputs | jq -r '[.[] | select(.type == "keyboard" and .xkb_active_layout_name) | .xkb_active_layout_name] | first // ""')
+    fi
+    show "|-1||$(printf '%s' "$l" | cut -c1-2 | tr '[:upper:]' '[:lower:]')|||Keyboard layout" ;;
+  *) sed -n '2,9p' "$0" >&2; exit 2 ;;
+esac

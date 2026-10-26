@@ -89,9 +89,15 @@ part() {
 }
 missing() { missing_body "use it from here" "" "https://example.com"; }
 k4_tree() { part; printf 'R\tk4-exec\n'; }
-k4_open() {  # k4_open SECTION_ID: standalone menu opened inside this section
-  local out; out=$(k4_tree | k4 --menu --open "$1") || return 0
-  case "$out" in url:*) open_url "${out#url:}" ;; *) k4-exec "$out" ;; esac; }
+k4_open() {  # k4_open SECTION_ID: standalone menu opened inside this section (a popup under a k4 bar module)
+  local out popup=()
+  [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && popup=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,${K4_BAR_SIDE:-left},${K4_BAR_POS:-top}" --compact)
+  out=$(k4_tree | k4 --menu --open "$1" "${popup[@]}") || return 0
+  case "$out" in
+    url:*) open_url "${out#url:}" ;;
+    launcher:*) unset K4_BAR_MX; k4_open "${out#launcher:}" ;;
+    *) k4-exec "$out" ;;
+  esac; }
 k4_dispatch() {
   case "${1:-}" in
     "") k4_open "$K4_ID" ;;

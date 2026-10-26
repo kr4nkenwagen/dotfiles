@@ -125,3 +125,14 @@ o.bind("SUPER + CTRL + E", "Emoji (k4)", "emoji-menu")
 o.bind("SUPER + CTRL + G", "Steam", "steam-menu")
 -- Every app integration (Steam, GitHub, Spotify, Docker, Ollama, Clipboard) in one k4 menu.
 o.bind("SUPER + CTRL + M", "Apps (k4)", "k4-apps")
+
+-- Media keys through k4-osd: k4's on-screen display while the k4 bar runs (Omarchy's otherwise).
+for _, k in ipairs({ "XF86AudioRaiseVolume", "XF86AudioLowerVolume", "XF86AudioMute", "XF86AudioMicMute", "XF86MonBrightnessUp", "XF86MonBrightnessDown" }) do
+	hl.unbind(k)
+end
+o.bind("XF86AudioRaiseVolume", "Volume up", "k4-osd volume up", { locked = true, repeating = true })
+o.bind("XF86AudioLowerVolume", "Volume down", "k4-osd volume down", { locked = true, repeating = true })
+o.bind("XF86AudioMute", "Mute", "k4-osd volume mute", { locked = true })
+o.bind("XF86AudioMicMute", "Mute microphone", "k4-osd mic mute", { locked = true })
+o.bind("XF86MonBrightnessUp", "Brightness up", "k4-osd brightness up", { locked = true, repeating = true })
+o.bind("XF86MonBrightnessDown", "Brightness down", "k4-osd brightness down", { locked = true, repeating = true })

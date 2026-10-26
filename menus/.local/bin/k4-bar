@@ -5,8 +5,9 @@
 #   k4-bar stop
 #   k4-bar spec            the module list k4 --bar reads
 #   k4-bar status MODULE   one module's line (Waybar JSON); --follow keeps printing on changes
-# Modules (left · center · right): menu, workspaces, window · media, clock · indicators,
-# updates, weather, microphone, audio, network, bluetooth, brightness, keyboard, battery.
+# Modules (left · center · right): menu, workspaces, window · clock, media · indicators (do not
+# disturb, night light, recording, stay awake: each shown only when on), updates, weather,
+# microphone, audio, network, bluetooth, brightness, battery, keyboard (the Kestrel bar design).
 set -u
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/snap/bin:$PATH"
 SELF=$(readlink -f "$0")
@@ -14,85 +15,130 @@ STATE="$HOME/.local/state/sway"
 OMARCHY=""; command -v omarchy-theme-set >/dev/null 2>&1 && OMARCHY=1
 HYPR=""; [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && HYPR=1
 
-json() { jq -cn --arg t "$1" --arg tt "${2:-}" --arg c "${3:-}" '{text: $t, tooltip: $tt, class: $c}'; }
+# one module line: k4's JSON (Waybar's text/tooltip/class plus icon, tones, text2, level, battery)
+# out KEY VALUE…: percentage, level and battery are numbers; no pairs prints {} (hidden)
+out() { local args=() expr="" k v
+  while [ $# -ge 2 ]; do k=$1 v=$2; shift 2
+    [ -n "$v" ] || continue
+    case "$k" in percentage|level|battery) args+=(--argjson "$k" "$v") ;; *) args+=(--arg "$k" "$v") ;; esac
+    expr+="$k: \$$k, "
+  done
+  jq -cn "${args[@]}" "{${expr%, }}"; }
 follow() {  # follow CMD-THAT-PRINTS-EVENTS: print the module now and after every burst of events
   "$SELF" status "$MOD"
   "$@" 2>/dev/null | while read -r -t 86400 _; do
     while read -r -t 0.15 _; do :; done   # coalesce a burst
     "$SELF" status "$MOD"
   done; }
+vol_icon() { if [ "$1" -ge 66 ]; then echo 󰕾; elif [ "$1" -ge 33 ]; then echo 󰖀; else echo 󰕿; fi; }
 
 status() {
   MOD=$1
   case "$1" in
-  media)
-    command -v playerctl >/dev/null || { json ""; return; }
+  media)  # any MPRIS player: note and title · artist; paused dims; nothing playing hides
+    command -v playerctl >/dev/null || { out; return; }
     local st t a
-    st=$(playerctl status 2>/dev/null) || { json ""; return; }
+    st=$(playerctl status 2>/dev/null) || { out; return; }
     t=$(playerctl metadata title 2>/dev/null); a=$(playerctl metadata artist 2>/dev/null)
-    [ -n "$t" ] || { json ""; return; }
-    json "$([ "$st" = Playing ] && echo 󰎈 || echo 󰏤) ${a:+$a — }${t:0:40}" "$a — $t" "$(echo "$st" | tr '[:upper:]' '[:lower:]')" ;;
-  indicators)
-    local out=() tips=()
-    if [ -n "$OMARCHY" ]; then
-      case "$(omarchy-shell notifications isDnd 2>/dev/null)" in on|true) out+=(󰂛); tips+=("Do not disturb") ;; esac
-      local t; t=$(hyprctl hyprsunset temperature 2>/dev/null | grep -oE '^[0-9]+' | head -1)
-      [ -n "$t" ] && [ "$t" -lt 6000 ] && { out+=(󰔎); tips+=("Night light"); }
-      pgrep -f '^gpu-screen-recorder' >/dev/null && { out+=(󰑊); tips+=("Recording"); }
-      [ -f "$HOME/.local/state/omarchy/indicators/stay-awake" ] && { out+=(󰅶); tips+=("Stay awake (idle lock off)"); }
-    else
-      makoctl mode 2>/dev/null | grep -qx do-not-disturb && { out+=(󰂛); tips+=("Do not disturb"); }
-      pgrep -x wlsunset >/dev/null && { out+=(󰔎); tips+=("Night light"); }
-      [ -f "$HOME/.cache/sway-menu/recording.pid" ] && kill -0 "$(cat "$HOME/.cache/sway-menu/recording.pid")" 2>/dev/null && { out+=(󰑊); tips+=("Recording"); }
-      pgrep -x swayidle >/dev/null || { out+=(󰅶); tips+=("Stay awake (idle lock off)"); }
-    fi
-    local IFS=' '; json "${out[*]:-}" "$(printf '%s\n' "${tips[@]:-}")" "$([ "${out[*]:-}" = 󰑊 ] && echo critical)" ;;
+    [ -n "$t" ] || { out; return; }
+    if [ "$st" = Playing ]; then out icon 󰝚 icon_tone accent text "$t" text2 "$a" tooltip "$t — $a"
+    else out icon 󰏤 text "$t" text2 "$a" class dim tooltip "Paused · $t — $a"; fi ;;
+  dnd)
+    if [ -n "$OMARCHY" ]; then case "$(omarchy-shell notifications isDnd 2>/dev/null)" in on|true) ;; *) out; return ;; esac
+    else makoctl mode 2>/dev/null | grep -qx do-not-disturb || { out; return; }; fi
+    out icon 󰍶 tooltip "Do not disturb · click turns it off" ;;
+  night)
+    if [ -n "$OMARCHY" ]; then local t; t=$(hyprctl hyprsunset temperature 2>/dev/null | grep -oE '^[0-9]+' | head -1); [ -n "$t" ] && [ "$t" -lt 6000 ] || { out; return; }
+    else pgrep -x wlsunset >/dev/null || { out; return; }; fi
+    out icon 󰖔 tooltip "Night light · click turns it off" ;;
+  rec)  # counts up while recording
+    local pid=""
+    if [ -n "$OMARCHY" ]; then pid=$(pgrep -f '^gpu-screen-recorder' | head -1)
+    elif [ -f "$HOME/.cache/sway-menu/recording.pid" ]; then pid=$(cat "$HOME/.cache/sway-menu/recording.pid"); kill -0 "$pid" 2>/dev/null || pid=""; fi
+    [ -n "$pid" ] || { out; return; }
+    local s; s=$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' '); s=${s:-0}
+    out icon 󰑋 icon_tone red text "$(printf '%02d:%02d' $((s / 60)) $((s % 60)))" text_tone red tooltip "Recording · click stops it" ;;
+  awake)
+    if [ -n "$OMARCHY" ]; then [ -f "$HOME/.local/state/omarchy/indicators/stay-awake" ] || { out; return; }
+    else pgrep -x swayidle >/dev/null && { out; return; }; fi
+    out icon 󰅶 tooltip "Stay awake (idle lock off) · click turns the lock back on" ;;
   updates)
     local n
     if command -v checkupdates >/dev/null; then n=$(checkupdates --nocolor 2>/dev/null | wc -l)
     else n=$(apt list --upgradable 2>/dev/null | grep -c upgradable) || true; fi
-    [ "${n:-0}" -gt 0 ] && json "󰚰 $n" "$n updates waiting" warning || json "" ;;
-  weather)
-    sway-weather 2>/dev/null | jq -c '{text, tooltip, class}' 2>/dev/null || json "" ;;
-  microphone)
-    local v m; v=$(wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null) || { json ""; return; }
-    m=$(printf '%s' "$v" | awk '{ printf "%d", $2 * 100 + 0.5 }')
-    if [[ $v == *MUTED* ]]; then json 󰍭 "Microphone muted" muted; else json 󰍬 "Microphone $m%"; fi ;;
-  audio)
-    local v p; v=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null) || { json ""; return; }
+    [ "${n:-0}" -gt 0 ] || { out; return; }
+    out icon 󰇚 icon_tone blue text "$([ "$n" -gt 99 ] && echo 99+ || echo "$n")" tooltip "$n updates waiting · click updates · right click checks now" ;;
+  weather)  # icon and temperature; offline: the last value, dim, with a yellow !
+    local j; j=$(sway-weather 2>/dev/null) || { out icon 󰑓 text "–°" class dim; return; }
+    local text cls tip icon temp
+    text=$(jq -r '.text // ""' <<<"$j"); cls=$(jq -r '.class // ""' <<<"$j"); tip=$(jq -r '.tooltip // ""' <<<"$j")
+    icon=${text%% *}; temp=${text#* }; [ "$temp" = "$text" ] && temp=""
+    case "$cls" in
+      stale) out icon "$icon" text "$temp" class dim text2 "!" text2_tone yellow tooltip "$(sed -n '2p;$p' <<<"$tip")" ;;
+      error) out icon 󰼯 text "–°" class dim tooltip "Weather unavailable" ;;
+      *) out icon "$icon" text "$temp" tooltip "$(sed -n 2p <<<"$tip" | sed 's/^[^ ]* //') · fetched $(date -r "$HOME/.cache/sway-weather.json" +%H:%M 2>/dev/null)" ;;
+    esac ;;
+  microphone)  # icon only; the wheel shows the level for a moment (flash)
+    local v p; v=$(wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null) || { out; return; }
     p=$(printf '%s' "$v" | awk '{ printf "%d", $2 * 100 + 0.5 }')
-    if [[ $v == *MUTED* ]]; then json "󰝟 $p%" "Output muted" muted
-    else json "$([ "$p" -ge 66 ] && echo 󰕾 || { [ "$p" -ge 33 ] && echo 󰖀 || echo 󰕿; }) $p%" "$(wpctl inspect @DEFAULT_AUDIO_SINK@ 2>/dev/null | sed -n 's/.*node.description = "\(.*\)"/\1/p' | head -1)"; fi ;;
-  network)
-    local dev type state ssid sig
+    if [[ $v == *MUTED* ]]; then out icon 󰍭 icon_tone red tooltip "Microphone muted · click unmutes" percentage "$p"
+    else out icon 󰍬 tooltip "Microphone $p% · click mutes · scroll changes it" percentage "$p"; fi ;;
+  audio)
+    local v p name; v=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null) || { out icon 󰝟 text "no output" class dim tooltip "No output device"; return; }
+    p=$(printf '%s' "$v" | awk '{ printf "%d", $2 * 100 + 0.5 }')
+    name=$(wpctl inspect @DEFAULT_AUDIO_SINK@ 2>/dev/null | sed -n 's/.*node.description = "\(.*\)"/\1/p' | head -1)
+    if [[ $v == *MUTED* ]]; then out icon 󰝟 icon_tone red text muted text_tone dim tooltip "$name · muted" percentage "$p"
+    elif [ "$p" -eq 0 ]; then out icon 󰕿 text "0%" class dim tooltip "$name · 0%" percentage 0
+    elif [ "$p" -gt 100 ]; then out icon 󰕾 text "$p%" text_tone yellow tooltip "$name · $p% (boosted)  ·  scroll to change" percentage "$p"
+    else out icon "$(vol_icon "$p")" text "$p%" tooltip "$name · $p%  ·  scroll to change" percentage "$p"; fi ;;
+  network)  # icon only; SSID, signal and IP in the tooltip; a VPN adds the shield
+    local dev type state ssid sig ip vpn=""
     IFS=: read -r dev type state < <(nmcli -t -f DEVICE,TYPE,STATE dev 2>/dev/null | awk -F: '$3 == "connected" && ($2 == "wifi" || $2 == "ethernet") { print; exit }')
+    nmcli -t -f TYPE,STATE connection show --active 2>/dev/null | grep -qE '^(vpn|wireguard):' && vpn=󰒃
+    ip=$( [ -n "${dev:-}" ] && ip -4 -br addr show "$dev" 2>/dev/null | awk '{ sub(/\/.*/, "", $3); print $3 }')
     if [ "${type:-}" = wifi ]; then
       IFS=: read -r ssid sig < <(nmcli -t -f ACTIVE,SSID,SIGNAL dev wifi 2>/dev/null | awk -F: '$1 == "yes" { print $2 ":" $3; exit }')
-      json "$( [ "${sig:-0}" -ge 75 ] && echo 󰤨 || { [ "${sig:-0}" -ge 50 ] && echo 󰤥 || { [ "${sig:-0}" -ge 25 ] && echo 󰤢 || echo 󰤟; }; }) $ssid" "$ssid  $sig%  ($dev)"
-    elif [ "${type:-}" = ethernet ]; then json 󰈀 "Ethernet ($dev)"
-    elif [ "$(nmcli radio wifi 2>/dev/null)" = disabled ]; then json 󰖪 "Wi-Fi off" off
-    else json 󰤭 Disconnected disconnected; fi ;;
+      local i=󰤟; [ "${sig:-0}" -ge 25 ] && i=󰤢; [ "${sig:-0}" -ge 50 ] && i=󰤥; [ "${sig:-0}" -ge 75 ] && i=󰤨
+      out icon "$i" text2 "$vpn" text2_tone accent tooltip "$ssid · $sig% · $ip${vpn:+ · VPN on}"
+    elif [ "${type:-}" = ethernet ]; then out icon 󰈀 text2 "$vpn" text2_tone accent tooltip "Ethernet ($dev) · $ip${vpn:+ · VPN on}"
+    elif [ "$(nmcli radio wifi 2>/dev/null)" = disabled ]; then out icon 󰤮 class dim tooltip "Wi-Fi off · right click turns it on"
+    else out icon 󰤭 icon_tone red tooltip Disconnected; fi ;;
   bluetooth)
-    command -v bluetoothctl >/dev/null || { json ""; return; }
-    if ! bluetoothctl show 2>/dev/null | grep -q "Powered: yes"; then json 󰂲 "Bluetooth off" off; return; fi
-    local n; n=$(bluetoothctl devices Connected 2>/dev/null | grep -c '^Device') || true
-    if [ "${n:-0}" -gt 0 ]; then json "󰂱 $n" "$(bluetoothctl devices Connected | cut -d' ' -f3-)"; else json 󰂯 "Bluetooth on"; fi ;;
-  brightness)
+    command -v bluetoothctl >/dev/null || { out; return; }
+    if ! bluetoothctl show 2>/dev/null | grep -q "Powered: yes"; then out icon 󰂲 class dim tooltip "Bluetooth off · right click turns it on"; return; fi
+    local mac name n=0 tips="" low=""
+    while read -r _ mac name; do
+      n=$((n + 1))
+      local b; b=$(bluetoothctl info "$mac" 2>/dev/null | sed -n 's/.*Battery Percentage: 0x[0-9a-f]* (\([0-9]*\)).*/\1/p')
+      tips+="$name${b:+ · $b%}"$'\n'
+      [ -n "$b" ] && [ "$b" -le 20 ] && low="$b%"
+    done < <(bluetoothctl devices Connected 2>/dev/null | grep '^Device')
+    if [ "$n" -eq 0 ]; then out icon 󰂯 tooltip "Bluetooth on · nothing connected"
+    else out icon 󰂱 icon_tone accent text "$([ "$n" -gt 1 ] && echo "$n")" text2 "$low" text2_tone yellow tooltip "${tips%$'\n'}"; fi ;;
+  brightness)  # icon with a level bar; the wheel shows the number for a moment
+    ls /sys/class/backlight/* >/dev/null 2>&1 || { out; return; }
     local p; p=$(brightnessctl -m 2>/dev/null | awk -F, 'NR == 1 { gsub(/%/, "", $4); print $4 }')
-    [ -n "$p" ] && ls /sys/class/backlight/* >/dev/null 2>&1 || { json ""; return; }
-    json "$([ "$p" -ge 66 ] && echo 󰃠 || { [ "$p" -ge 33 ] && echo 󰃟 || echo 󰃞; }) $p%" "Brightness $p%" ;;
-  keyboard)
-    local l
-    if [ -n "$HYPR" ]; then l=$(hyprctl -j devices 2>/dev/null | jq -r '[.keyboards[] | select(.main) | .active_keymap] | first // empty')
-    else l=$(swaymsg -t get_inputs 2>/dev/null | jq -r '[.[] | select(.type == "keyboard") | .xkb_active_layout_name // empty] | first // empty'); fi
-    json "$(printf '%s' "${l:-}" | cut -c1-2 | tr '[:upper:]' '[:lower:]')" "$l" ;;
-  battery)
+    [ -n "$p" ] || { out; return; }
+    out icon 󰃠 level "$p" percentage "$p" tooltip "Brightness $p%  ·  scroll to change" ;;
+  keyboard)  # the layout code, dim; with more than two layouts its position follows
+    local name idx n
+    if [ -n "$HYPR" ]; then
+      IFS=$'\t' read -r name idx n < <(hyprctl -j devices 2>/dev/null | jq -r '[.keyboards[] | select(.main)] | first // {} | [.active_keymap // "", (.active_layout_index // 0), ((.layout // "") | split(",") | length)] | @tsv')
+    else
+      IFS=$'\t' read -r name idx n < <(swaymsg -t get_inputs 2>/dev/null | jq -r '[.[] | select(.type == "keyboard" and .xkb_active_layout_name)] | first // {} | [.xkb_active_layout_name // "", (.xkb_active_layout_index // 0), ((.xkb_layout_names // []) | length)] | @tsv')
+    fi
+    [ -n "${name:-}" ] || { out; return; }
+    out text "$(printf '%s' "$name" | cut -c1-2 | tr '[:upper:]' '[:lower:]')" class dim text2 "$([ "${n:-0}" -gt 2 ] && echo "$((idx + 1))/$n")" tooltip "$name · click for the next layout" ;;
+  battery)  # the glyph and percentage; yellow at 25%, a red block at 10%; hidden without one
     local b; b=$(ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -1)
-    [ -n "$b" ] || { json ""; return; }
-    local c st icon cls=""; c=$(cat "$b/capacity"); st=$(cat "$b/status")
-    icon=$(awk -v c="$c" 'BEGIN { split("󰁺 󰁻 󰁼 󰁽 󰁾 󰁿 󰂀 󰂁 󰂂 󰁹", i, " "); print i[int((c + 9) / 10) < 1 ? 1 : (int((c + 9) / 10) > 10 ? 10 : int((c + 9) / 10))] }')
-    case "$st" in Charging) icon=󰂄; cls=charging ;; Full) icon=󰁹 ;; *) [ "$c" -le 10 ] && cls=critical || { [ "$c" -le 25 ] && cls=warning; } ;; esac
-    json "$icon $c%" "$st · $c%" "$cls" ;;
+    [ -n "$b" ] || { out; return; }
+    local c st cls=""; c=$(cat "$b/capacity"); st=$(cat "$b/status")
+    case "$st" in
+      Charging) out icon 󱐋 icon_tone accent battery "$c" text "$c%" tooltip "Charging · $c%" ;;
+      Full|"Not charging") out icon 󰚥 icon_tone dim battery "$c" text full text_tone dim tooltip "Full · on AC" ;;
+      *) [ "$c" -le 10 ] && cls=critical || { [ "$c" -le 25 ] && cls=warning; }
+         out battery "$c" text "$c%" class "$cls" tooltip "$st · $c%" ;;
+    esac ;;
   esac; }
 
 follow_status() {  # status, then again on every change of what it shows
@@ -106,26 +152,29 @@ follow_status() {  # status, then again on every change of what it shows
     *) status "$1" ;;
   esac; }
 
-# id side kind arg interval tone left right middle up down ("-" = none)
+# id side kind arg interval tone left right middle up down flags ("-" = none)
 spec() {
-  local p="$SELF popup"
-  printf 'B\theight=26\n'
+  local p="$SELF popup" c="sway-menu call"
+  printf 'B\theight=26\tposition=%s\ttransparent=%s\n' "$(cat "$STATE/bar-position" 2>/dev/null || echo top)" "$([ "$(cat "$STATE/bar-background" 2>/dev/null)" = transparent ] && echo 1 || echo 0)"
   m() { local IFS=$'\t'; printf 'M\t%s\n' "$*"; }
-  m menu left text 󰀻 0 accent "$p menu" "${TERMINAL:-ghostty}" - - -
-  m workspaces left workspaces - 0 - - - - - -
-  m window left window - 0 - - - - - -
-  m media center exec "$SELF status media --follow" 0 fg "playerctl play-pause" "$p spotify" "playerctl next" "playerctl previous" "playerctl next"
-  m clock center clock "%A %H:%M|%d %B · W%V" 0 bright "$p calendar" - "$p timezone" - -
-  m indicators right exec "$SELF status indicators" 2 yellow "$p toggle" - - - -
-  m updates right exec "$SELF status updates" 3600 yellow "$p update" - - - -
-  m weather right exec "$SELF status weather" 900 orange "$p weather" "notify-send Weather \"\$(sway-weather --tooltip)\"" "rm -f ~/.cache/sway-weather.json" - -
-  m microphone right exec "$SELF status microphone --follow" 0 fg "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle" - "$p audio" "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SOURCE@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-"
-  m audio right exec "$SELF status audio --follow" 0 magenta "$p audio" "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle" "$p audio" "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
-  m network right exec "$SELF status network --follow" 0 cyan "$p network" "nmcli radio wifi \"\$(nmcli radio wifi | grep -q enabled && echo off || echo on)\"" - - -
-  m bluetooth right exec "$SELF status bluetooth" 5 blue "$p bluetooth" "bluetoothctl power \"\$(bluetoothctl show | grep -q 'Powered: yes' && echo off || echo on)\"" - - -
-  m brightness right exec "$SELF status brightness" 2 yellow "$p display" - - "brightnessctl set 5%+" "brightnessctl set 5%-"
-  m keyboard right exec "$SELF status keyboard --follow" 0 dim "sway-menu kb-next" - - - -
-  m battery right exec "$SELF status battery" 30 green "$p battery" - - - -
+  m menu left icon 󰕰 0 accent "$p menu" "${TERMINAL:-ghostty}" - - - "px=9"
+  m workspaces left workspaces - 0 - - - - - - -
+  m window left window - 0 - - - - - - -
+  m clock center clock "%H:%M;%a %d %b|%Y-%m-%d %H:%M:%S;w%V" 0 - "$p calendar" - - - - "px=10"
+  m media center exec "$SELF status media --follow" 0 - "$p spotify" - "playerctl play-pause" "playerctl previous" "playerctl next" "maxw=200;maxw2=140;compact"
+  m dnd right exec "$SELF status dnd" 2 - "$c toggle_dnd" - - - - "px=5"
+  m night right exec "$SELF status night" 3 - "$c toggle_night" - - - - "px=5"
+  m rec right exec "$SELF status rec" 1 - "$c record_toggle" - - - - "px=5"
+  m awake right exec "$SELF status awake" 3 - "$c toggle_idle" - - - - "px=5"
+  m updates right exec "$SELF status updates" 3600 - "$p update" "$SELF status updates >/dev/null" - - - -
+  m weather right exec "$SELF status weather" 900 - "$p weather" "rm -f ~/.cache/sway-weather.json" - - - -
+  m microphone right exec "$SELF status microphone --follow" 0 - "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle" - "$p audio" "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SOURCE@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-" "flash"
+  m audio right exec "$SELF status audio --follow" 0 - "$p audio" "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle" - "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-" -
+  m network right exec "$SELF status network --follow" 0 - "$p network" "nmcli radio wifi \"\$(nmcli radio wifi | grep -q enabled && echo off || echo on)\"" - - - -
+  m bluetooth right exec "$SELF status bluetooth" 5 - "$p bluetooth" "bluetoothctl power \"\$(bluetoothctl show | grep -q 'Powered: yes' && echo off || echo on)\"" - - - -
+  m brightness right exec "$SELF status brightness" 2 - "$p display" - - "brightnessctl set 5%+" "brightnessctl set 5%-" "flash"
+  m battery right exec "$SELF status battery" 30 - "$p battery" - - - - -
+  m keyboard right exec "$SELF status keyboard --follow" 0 - "$c kb_cycle" - - - - -
 }
 
 popup() {  # popup PAGE: the k4 page under the clicked module; a second click closes it

@@ -800,10 +800,15 @@ k4_tree() { local s name key desc icon
   printf 'R\t%q k4-run\n' "$SELF"
 }
 k4_main() { local out popup=()   # k4_main [SECTION|PAGE]: open there (under a bar module when the k4 bar ran us)
-  [ -n "${K4_BAR_X:-}" ] && [ -n "${K4_BAR_WIDTH:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && popup=(--popup-x "$K4_BAR_X" --popup-w "$K4_BAR_WIDTH")
+  # from a bar module: under it; a page alone in the popup frame (the menu button: the launcher)
+  if [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ]; then
+    popup=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,${K4_BAR_SIDE:-left},${K4_BAR_POS:-top}")
+    [ -n "${1:-}" ] && popup+=(--compact)
+  fi
   out=$(k4_tree | k4 --menu ${1:+--open "$1"} "${popup[@]}") || return 0
   case "$out" in
     url:*) open_url "${out#url:}" ;;
+    launcher:*) unset K4_BAR_MX; k4_main "${out#launcher:}" ;;   # ⌃↵ in a popup: the same page in the launcher
     *) eval "$(printf '%s' "$out" | base64 -d)" ;;
   esac
 }
@@ -1147,9 +1152,9 @@ audio_rows() {
     | (.properties."application.name") as $app | (.properties."media.name" // "") as $m
     | [.index, ($app + (if $m != "" and ($m | ascii_downcase) != ($app | ascii_downcase) and ($m | test("^(Playback|playback|audio stream|Audio Stream|AudioStream|WEBRTC VoiceEngine)$") | not) then " · " + $m else "" end)),
        (.volume | to_entries[0].value.value_percent | sub("%"; "")), (if .mute then "yes" else "no" end)] | @tsv')
-  desc "Output, input and every application's level" "" "Search audio…"
   # output
   def=$(audio_sink); IFS=$'\t' read -r pct mute < <(audio_level sink "$def")
+  desc "$(pactl -f json list sinks 2>/dev/null | jq -r --arg n "$(pactl get-default-sink 2>/dev/null)" '.[] | select(.name == $n) | .description // .name' | head -1) · ${pct:-0}%$([ "$mute" = yes ] && echo ' · muted')" "" "Search audio…"
   on=$([ "$mute" = yes ] && echo on || echo off)
   hdr "Output · ${pct:-0}%$([ "$mute" = yes ] && echo ' · muted')"
   item "Volume" "audio_set sink $(printf %q "$def") Output" "" "" "slider=${pct:-0};max=150;step=5;toggle=$on;mark=$([ "$mute" = yes ] && echo 󰝟 || echo 󰕾)$([ "$mute" = yes ] && echo ';dim')"
@@ -1254,57 +1259,39 @@ speed_page() {  # speed_page net|disk: the last result, and a row that runs the 
   else stay "Run the test" disk_speed_run "writes 512 MB, then deletes it" "current"; fi; }
 
 # ---------- Calendar and Battery (popups of the k4 bar's clock and battery) ----------
-CAL_OFF="$HOME/.cache/sway-menu/calendar-offset"
-calendar_set() {  # the month stepper: K4_VALUE is the month shown next, "Month YYYY"
-  local now want; now=$(date +%Y%m); want=$(date -d "1 ${K4_VALUE:-}" +%Y%m 2>/dev/null) || return
-  mkdir -p "${CAL_OFF%/*}"; echo $(( (${want:0:4} - ${now:0:4}) * 12 + 10#${want:4:2} - 10#${now:4:2} )) > "$CAL_OFF"; }
-calendar_page() {  # the month as rows: W<iso week>  then seven days, today in [ ]
-  local off first y m today label prev next d wd i line
-  off=$(cat "$CAL_OFF" 2>/dev/null || echo 0)
-  first=$(date -d "$(date +%Y-%m-01) $off month" +%Y-%m-01)
-  label=$(date -d "$first" '+%B %Y'); prev=$(date -d "$first -1 month" '+%B %Y'); next=$(date -d "$first +1 month" '+%B %Y')
-  today=$(date +%F)
-  printf 'D\t%s\t%s\t\n' "Today: $(date '+%A %-d %B · week %V · day %-j')" "$label"
-  choice "Month" calendar_set "$label" "$prev|$label|$next" "mark=󰃭;markc=accent"
-  stay "Today" 'rm -f "$HOME/.cache/sway-menu/calendar-offset"; notify Calendar "$(date "+%B %Y")"' "$(date '+%a %-d %b')"
-  hdr "$label"
-  printf 'E\t%s\n' "     $(printf ' %2s ' Mo Tu We Th Fr Sa Su)"
-  wd=$(date -d "$first" +%u); d=$(date -d "$first -$((wd - 1)) days" +%F)
-  for i in 1 2 3 4 5 6; do
-    line=""
-    for _ in 1 2 3 4 5 6 7; do
-      local day; day=$(date -d "$d" +%-d)
-      if [ "$(date -d "$d" +%m)" != "$(date -d "$first" +%m)" ]; then line+="  · "   # (printf pads bytes, and · is two)
-      elif [ "$d" = "$today" ]; then line+=$(printf '[%2s]' "$day")
-      else line+=$(printf ' %2s ' "$day"); fi
-      d=$(date -d "$d +1 day" +%F)
-    done
-    printf 'E\t%s\n' "W$(date -d "$d -1 day" +%V)  $line"
-    [ "$(date -d "$d" +%m)" != "$(date -d "$first" +%m)" ] && [ "$i" -ge 4 ] && break
-  done; }
-battery_page() {
-  local b c st en ef efd pn cyc t
+calendar_page() {  # k4 draws the month grid itself (O cal): ← → months, ↑↓ weeks, t today
+  printf 'O\tcal;width=340\n'
+  printf 'D\t%s\t%s\t\n' "$(date '+%A %-d %B')" "week $(date +%V)"; }
+battery_page() {  # the design's battery popup: the charge large, draw, health, power profile
+  local b c st en ef efd pn cyc t w line title
   b=$(ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -1); [ -n "$b" ] || { hdr "No battery"; return; }
+  printf 'O\twidth=380\n'
   c=$(cat "$b/capacity"); st=$(cat "$b/status")
   en=$(cat "$b/energy_now" 2>/dev/null || cat "$b/charge_now" 2>/dev/null); ef=$(cat "$b/energy_full" 2>/dev/null || cat "$b/charge_full" 2>/dev/null)
   efd=$(cat "$b/energy_full_design" 2>/dev/null || cat "$b/charge_full_design" 2>/dev/null)
   pn=$(cat "$b/power_now" 2>/dev/null || cat "$b/current_now" 2>/dev/null); cyc=$(cat "$b/cycle_count" 2>/dev/null)
   if [ -n "$pn" ] && [ "${pn:-0}" -gt 0 ] && [ -n "$en" ]; then
-    if [ "$st" = Charging ]; then t=$(awk -v e="$en" -v f="$ef" -v p="$pn" 'BEGIN { h = (f - e) / p; printf "%d h %02d min to full", h, (h - int(h)) * 60 }')
-    else t=$(awk -v e="$en" -v p="$pn" 'BEGIN { h = e / p; printf "%d h %02d min left", h, (h - int(h)) * 60 }'); fi
+    if [ "$st" = Charging ]; then t=$(awk -v e="$en" -v f="$ef" -v p="$pn" 'BEGIN { h = (f - e) / p; printf "%d h %02d min", h, (h - int(h)) * 60 }')
+    else t=$(awk -v e="$en" -v p="$pn" 'BEGIN { h = e / p; printf "%d h %02d min", h, (h - int(h)) * 60 }'); fi
   fi
-  printf 'D\t%s\t%s\t\n' "$st${t:+ · $t}" "$c%"
-  hdr "Battery"
-  printf 'B\t%s\t%s\t%s\n' "Charge" "$c" "$c%"
-  stay "Status" "notify Battery '$st'" "$st"
-  [ -n "${t:-}" ] && stay "Time" "notify Battery '$t'" "$t"
-  [ -n "$pn" ] && [ -f "$b/power_now" ] && stay "Power draw" ':' "$(awk -v p="$pn" 'BEGIN { printf "%.1f W", p / 1e6 }')"
-  [ -n "$ef" ] && [ -n "$efd" ] && [ "${efd:-0}" -gt 0 ] && stay "Health" ':' "$(awk -v f="$ef" -v d="$efd" 'BEGIN { printf "%d%% of design", f * 100 / d }')"
-  [ -n "$cyc" ] && [ "$cyc" -gt 0 ] && stay "Cycles" ':' "$cyc"
+  w=$([ -n "$pn" ] && [ -f "$b/power_now" ] && awk -v p="$pn" 'BEGIN { printf "%.1f W", p / 1e6 }')
+  case "$st" in
+    Charging) title="Charging · $c%"; line="Charging${t:+ · $t to full}"; w="${w:+$w in}" ;;
+    Full|"Not charging") title="Full · on AC"; line="Plugged in · full, not charging" ;;
+    *) title="$c%${t:+ · $t}"; line="$st${t:+ · $t left}"; w="${w:+$w out}" ;;
+  esac
+  printf 'D\t%s\t%s\t\n' "$title" "$c%"
+  printf 'X\t%s\t%s\t%s\n' "$c" "$line" "$([ "$st" = Charging ] && echo charging)"
+  [ -n "$w" ] && stay "Power draw" ':' "$w"
+  [ -n "$ef" ] && [ -n "$efd" ] && [ "${efd:-0}" -gt 0 ] && stay "Health" ':' "$(awk -v f="$ef" -v d="$efd" 'BEGIN { printf "%d%%", f * 100 / d }')${cyc:+ · $cyc cycles}"
   if command -v powerprofilesctl >/dev/null; then
     hdr "Power profile"
-    choice "Profile" pp_set "$(pp_now)" "Balanced|Performance|Power saver" "mark=󰓅"
-  fi; }
+    choice "Profile" pp_set "$(pp_now)" "Balanced|Performance|Power saver"
+  fi
+  item "Open Setup" : "↗" "" "jump=setup"; }
+# the k4 bar's position and background (k4-bar spec reads them), restarted to apply
+bar_pref() { mkdir -p "$STATE"; printf '%s\n' "${K4_VALUE,,}" > "$STATE/$1"; pgrep -f '^k4 --bar' >/dev/null && bg k4-bar; notify "Status bar" "$K4_VALUE"; }
+bar_pref_now() { local v; v=$(cat "$STATE/$1" 2>/dev/null); v=${v:-${2,,}}; printf '%s' "${v^}"; }
 pp_set() { local i; for i in "${!PP_NAMES[@]}"; do [ "${PP_NAMES[$i]}" = "${K4_VALUE:-}" ] && { powerprofilesctl set "${PP[$i]}" && notify "Power profile" "${PP_NAMES[$i]}"; return; }; done; }
 
 K4_CONFIRM_LOGOUT="confirm=Log out?|Closes every window and ends the $WM_TITLE session."
@@ -1341,6 +1328,10 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            command -v emoji-menu >/dev/null && item "Emoji" : "insert or copy" emoji ;;
   toggle) tog "Bar" 'toggle_bar; sleep 0.2; notify Bar "$(onoff bar_running)"' "$(onoff bar_running)"
           choice "Status bar" set_bar_kind "$([ "$(bar_kind)" = k4 ] && echo k4 || echo "$BAR_ALT")" "k4|$BAR_ALT"
+          if [ "$(bar_kind)" = k4 ]; then
+            choice "Bar position" 'bar_pref bar-position' "$(bar_pref_now bar-position Top)" "Top|Bottom"
+            choice "Bar background" 'bar_pref bar-background' "$(bar_pref_now bar-background Opaque)" "Opaque|Transparent"
+          fi
           tog "Starfield" 'starfield-toggle >/dev/null; notify Starfield "$(starfield-toggle status)"' "$(starfield-toggle status 2>/dev/null || echo on)"
           tog "Launcher" toggle_launcher "$([ "$LAUNCHER" = k4 ] && echo on || echo off)"
           tog "Idle lock" toggle_idle "$(onoff idle_on)"
@@ -1603,7 +1594,8 @@ fi
 
 case "${1:-}" in
   lock) lock ;;
-  bar-start) bar_start ;;   # the status bar picked in Toggle › Status bar (Hyprland autostart runs it)
+  bar-start) bar_start ;;
+  call) case "${2:-}" in toggle_night|toggle_idle|toggle_dnd|record_toggle|kb_cycle) "$2" ;; *) echo "sway-menu call: not callable: ${2:-}" >&2; exit 2 ;; esac ;;   # the k4 bar's indicator clicks   # the status bar picked in Toggle › Status bar (Hyprland autostart runs it)
   idle) idle ;;
   pkg-install) pkg_install ;;
   pkg-remove) pkg_remove ;;
