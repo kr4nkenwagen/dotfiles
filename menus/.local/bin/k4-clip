@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# k4-clip: the clipboard history in k4's Clipboard window (k4 --clip, the Kestrel design's),
+# over clipse's history: ↵ pastes into the window you were in, ⇧↵ copies, ^P pins, Del deletes.
+# Super+Ctrl+V opens it; again closes it.
+export PATH="$HOME/.local/bin:$PATH"
+pkill -f '^k4 --clip' && exit 0
+out=$(clipse-menu clip-list | k4 --clip) || exit 0
+IFS=$'\t' read -r verb id <<<"$out"
+[ -n "$verb" ] && [ -n "$id" ] && exec clipse-menu clip-act "$verb" "$id"

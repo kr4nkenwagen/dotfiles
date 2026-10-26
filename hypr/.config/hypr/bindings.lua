@@ -146,10 +146,10 @@ o.bind("SUPER + TAB", "Overview (k4)", "k4-overview")
 hl.unbind("SUPER + ESCAPE")
 o.bind("SUPER + ESCAPE", "System menu (k4)", "k4-power")
 
--- Super+Ctrl+V: clipse's clipboard history in k4; Super+Ctrl+C: k4's Capture menu (screenshots,
+-- Super+Ctrl+V: the clipboard history (clipse) in k4's Clipboard window; Super+Ctrl+C: k4's Capture menu (screenshots,
 -- recordings, the color picker), both in place of Omarchy's.
 hl.unbind("SUPER + CTRL + V")
-o.bind("SUPER + CTRL + V", "Clipboard (k4)", "clipse-menu")
+o.bind("SUPER + CTRL + V", "Clipboard (k4)", "k4-clip")
 hl.unbind("SUPER + CTRL + C")
 o.bind("SUPER + CTRL + C", "Capture (k4)", "sway-menu capture")
 

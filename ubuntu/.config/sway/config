@@ -75,7 +75,7 @@ bindsym $mod+Shift+t exec $tui btop
 bindsym $mod+Shift+e exec $tui ranger
 bindsym $mod+Shift+v exec $tui clipse
 bindsym $mod+Ctrl+e exec ~/.local/bin/emoji-menu   # emoji picker (k4), as Omarchy's Super+Ctrl+E
-bindsym $mod+Ctrl+v exec ~/.local/bin/clipse-menu  # clipboard history (k4 + clipse), as on Omarchy
+bindsym $mod+Ctrl+v exec ~/.local/bin/k4-clip  # clipboard history (k4 + clipse), as on Omarchy
 bindsym $mod+Ctrl+c exec ~/.local/bin/sway-menu capture   # k4's Capture menu, as on Omarchy
 bindsym $mod+n exec ~/.local/bin/k4-notify center     # k4's notification centre (k4-notify replaces mako)
 bindsym $mod+comma exec ~/.local/bin/k4-notify dismiss

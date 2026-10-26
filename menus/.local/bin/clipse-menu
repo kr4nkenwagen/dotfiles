@@ -5,7 +5,7 @@ K4_NAME=clipse-menu K4_ID=clipboard K4_TITLE=Clipboard K4_KEY=P K4_ICON=󰅌 K4_
 . "$HOME/.local/share/k4/lib.sh"
 available() { command -v clipse >/dev/null; }
 missing() { missing_body "copy from your clipboard history here" "$(install_cmd clipse '' 'go install github.com/savedra1/clipse@latest')" "https://github.com/savedra1/clipse"; }
-HIST="$HOME/.config/clipse/clipboard_history.json"
+HIST="${CLIPSE_HISTORY:-$HOME/.config/clipse/clipboard_history.json}"   # CLIPSE_HISTORY: tests
 recording() { pgrep -f 'clipse (-listen|--listen)|wl-paste.*clipse' >/dev/null; }
 summary() { local n; n=$(jq '.clipboardHistory | length' "$HIST" 2>/dev/null || echo 0); echo "$n entries$(recording || echo ' · not recording')"; }
 
@@ -55,4 +55,55 @@ section() {
   stay "Clear history…" 'clipse -clear && notify Cleared "history (pinned kept)"' "asks first" "confirm=Clear the clipboard history?|Pinned entries stay."
   item "Open clipse" 'tui clipse; close_k4' "" "" "$([ "$total" -eq 0 ] && echo current)"
 }
+# ---------- k4 --clip (the Kestrel design's Clipboard window; k4-clip opens it) ----------
+# clip-list: S recording · R/L the runner and loader · E id epoch pinned kind label lines chars image body
+# (body: lines joined by \x1f, capped); newest first as clipse keeps them.
+clip_list() {
+  local off; off=$(date +%z | sed -E 's/^([+-])([0-9]{2})([0-9]{2})$/\1(\2*3600+\3*60)/'); off=$(( off ))
+  printf 'S\t%s\n' "$(recording && echo 1 || echo 0)"
+  printf 'R\t%s clip-act\nL\t%s clip-list\n' "$SELF_PATH" "$SELF_PATH"
+  [ -f "$HIST" ] || return 0
+  jq -r --argjson off "$off" '.clipboardHistory[] |
+    ((.recorded[0:19] | strptime("%Y-%m-%d %H:%M:%S") | mktime) - $off) as $t |
+    (if (.filePath // "null") != "null" then .filePath else "" end) as $img |
+    (.value // "") as $v |
+    ($v | gsub("\r"; "") | split("\n")) as $all |
+    ($all | map(select(test("\\S")))) as $lines |
+    select($img != "" or ($lines | length) > 0) |
+    (if $img != "" then "image" elif ($lines | length) > 1 then "block" else "text" end) as $k |
+    ["E", .recorded, ($t | tostring), (if .pinned then "1" else "0" end), $k,
+     (if $img != "" then ($img | split("/") | last) else ($lines[0] | gsub("\t"; " ") | .[0:200]) end),
+     ($all | length | tostring), ($v | length | tostring), $img,
+     ($v[0:6000] | gsub("\t"; "    ") | gsub("\r"; "") | gsub("\n"; "\u001f"))] | @tsv' "$HIST" 2>/dev/null; }
+clip_value() { jq -j --arg r "$1" '.clipboardHistory[] | select(.recorded == $r) | .value' "$HIST"; }
+clip_file() { jq -r --arg r "$1" '.clipboardHistory[] | select(.recorded == $r) | .filePath // ""' "$HIST"; }
+clip_copy() {  # clip_copy ID [plain]: the entry back on the clipboard
+  local f; f=$(clip_file "$1")
+  if [ -n "$f" ] && [ "$f" != null ] && [ -f "$f" ]; then wl-copy < "$f"
+  elif [ -n "${2:-}" ]; then clip_value "$1" | wl-copy --type text/plain
+  else clip_value "$1" | wl-copy; fi; }
+clip_edit() {  # clip_edit JQ-FILTER ID: change the history file in place (clipse's listener rereads it)
+  local tmp="$HIST.k4.$$"
+  jq --arg r "$2" "$1" "$HIST" > "$tmp" && mv "$tmp" "$HIST"; }
+clip_act() {  # clip_act VERB ID
+  local verb="$1" id="$2" f t
+  case "$verb" in
+    paste|plain) clip_copy "$id" ${verb/paste/}; sleep 0.15; wtype -M shift -k Insert -m shift 2>/dev/null ;;   # into the window k4 left
+    copy) clip_copy "$id" ;;
+    pin) clip_edit '.clipboardHistory |= map(if .recorded == $r then .pinned = (.pinned | not) else . end)' "$id"
+         [ "$(jq -r --arg r "$id" '.clipboardHistory[] | select(.recorded == $r) | .pinned' "$HIST")" = true ] && echo "Pinned" || echo "Unpinned" ;;
+    delete) f=$(clip_file "$id"); clip_edit '.clipboardHistory |= map(select(.recorded != $r))' "$id"
+            [ -n "$f" ] && [ "$f" != null ] && rm -f "$f"; echo "Deleted from history" ;;
+    extra)
+      f=$(clip_file "$id")
+      if [ -n "$f" ] && [ "$f" != null ] && [ -f "$f" ]; then   # an image: saved to Pictures
+        mkdir -p "$HOME/Pictures"; t="$HOME/Pictures/clip-$(date +%Y%m%d-%H%M%S).${f##*.}"; cp "$f" "$t"; notify Saved "${t/#$HOME/\~}"
+      else   # text: opened in the editor
+        t=$(mktemp --suffix=.txt "${XDG_RUNTIME_DIR:-/tmp}/clip-XXXXXX"); clip_value "$id" > "$t"; tui "${EDITOR:-nvim}" "$t"
+      fi ;;
+  esac; }
+case "${1:-}" in
+  clip-list) SELF_PATH=$(command -v clipse-menu || echo "$0"); clip_list; exit 0 ;;
+  clip-act) clip_act "${2:?verb}" "${3:?id}"; exit 0 ;;
+esac
 k4_dispatch "$@"
