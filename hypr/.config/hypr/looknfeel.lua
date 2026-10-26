@@ -52,9 +52,9 @@ hl.config({
 --   },
 -- })
 
--- See-through windows show the wallpaper, never the windows behind them: blur with xray
--- samples only the wallpaper and the bottom layers. Kept to the least blur Hyprland allows and
--- no colour change, so the wallpaper looks as it is.
+-- See-through windows show the wallpaper, never the windows behind them. Hyprland only has
+-- that as blur's xray (it samples the wallpaper and the bottom layers), so blur is on with no
+-- passes and no colour change: the wallpaper as it is, not blurred.
 -- https://wiki.hypr.land/Configuring/Basics/Variables/#blur
 hl.config({
 	decoration = {
@@ -62,8 +62,8 @@ hl.config({
 			enabled = true,
 			xray = true,
 			new_optimizations = true,
-			size = 1,
-			passes = 1,
+			size = 0,
+			passes = 0,
 			noise = 0.0,
 			contrast = 1.0,
 			brightness = 1.0,
