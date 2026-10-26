@@ -40,6 +40,41 @@ PICK_LOG="$HOME/.cache/sway-menu/pick.log"   # every pick and paint step, for di
 plog() { mkdir -p "${PICK_LOG%/*}"; printf '%s %s\n' "$(date +%H:%M:%S.%3N)" "$*" >> "$PICK_LOG"; }
 ms() { echo $(( $(date +%s%N) / 1000000 )); }   # for step timings in the pick log
 
+# ---------- platform: Ubuntu/Sway here; Omarchy/Hyprland overrides these at the end ----------
+OMARCHY=""; command -v omarchy-theme-set >/dev/null 2>&1 && OMARCHY=1
+WM=sway; [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && WM=hyprland
+update_cmd() { echo "tui_wait 'sudo apt update && sudo apt full-upgrade'"; }
+theme_apply() { sway-theme-set "$1"; }
+theme_next() { sway-theme-set next; }
+font_apply() { sway-font-set "$1"; }
+font_list() { sway-font-set list; }
+font_current() { sway-font-set current; }
+night_on() { pgrep -x wlsunset >/dev/null; }
+idle_on() { pgrep -x swayidle >/dev/null; }
+dnd_on() { makoctl mode 2>/dev/null | grep -qx do-not-disturb; }
+outputs_tsv() { swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | [.name, (.active|tostring), (.focused|tostring), (.scale // 1|tostring)] | @tsv'; }   # name active focused scale
+wm_reload() { swaymsg reload >/dev/null; }
+wm_exit() { swaymsg exit; }
+WM_CONFIG="$HOME/.config/sway/config"
+launch_app() { bg gtk-launch "$1"; }
+PKG_TOOL=apt
+WM_TITLE=Sway; [ "$WM" = hyprland ] && WM_TITLE=Hyprland; WM_WIKI=https://github.com/swaywm/sway/wiki; BAR_ALT=Waybar; SHOT_TOOL="grim + slurp"; REC_TOOL=wf-recorder
+sys_reboot() { systemctl reboot; }
+sys_poweroff() { systemctl poweroff; }
+firmware_cmd() { echo "tui_wait 'command -v fwupdmgr >/dev/null || sudo apt install -y fwupd; fwupdmgr refresh --force; sudo fwupdmgr update'"; }
+pkg_rows_search() {  # pkg_rows_search QUERY: the Packages page (apt; Omarchy: pacman + AUR)
+  local q="$1" p; local -A inst=()
+        while IFS= read -r p; do inst[$p]=1; done < <(dpkg-query -W -f '${Package}\n' 2>/dev/null)
+        apt-cache search --names-only -- "$q" 2>/dev/null | awk '{ print length($1) "\t" $0 }' | sort -n | cut -f2- | head -100 \
+          | while IFS= read -r p; do n=${p%% - *}; d=${p#* - }; printf '%s\ttui_wait '\''sudo apt install %s'\''\t%s\t\n' "$n" "$n" "${inst[$n]:+installed · }${d:0:48}"; done | k4rows
+        [ -n "$(apt-cache search --names-only -- "$q" 2>/dev/null | head -1)" ] || hdr "No package matches “$q”"
+}
+pkg_rows_installed() {  # pkg_rows_installed QUERY: the Remove page
+  local q="$1"
+        dpkg-query -W -f '${binary:Package}\t${Version}\n' 2>/dev/null | grep -i -- "$q" | head -100 \
+          | awk -F'\t' '{ printf "%s\ttui_wait '\''sudo apt remove %s'\''\t%s\t\n", $1, $1, $2 }' | k4rows
+}
+
 # ---------- tiny menu framework: parallel arrays of labels and actions ----------
 # Launcher: k4 (~/repos/k4, Odin) when chosen and installed, else fuzzel. The choice lives in
 # $STATE/launcher (Toggle › Launcher) and SWAY_MENU_LAUNCHER overrides it.
@@ -760,7 +795,7 @@ k4_tree() { local s name key desc icon
     printf 'L\t%q k4-section %s\n' "$SELF" "$s"
     k4_pages "$s"
   done
-  printf 'V\ttheme\tTheme\tsway · waybar · terminal\t%q k4-view theme\n' "$SELF"
+  printf 'V\ttheme\tTheme\t%s · bar · terminal\t%q k4-view theme\n' "$WM" "$SELF"
   printf 'G\twall\tBackground\t%s\t%q k4-view wall\n' "the theme's backgrounds + extras" "$SELF"
   printf 'R\t%q k4-run\n' "$SELF"
 }
@@ -796,7 +831,7 @@ k4_view() { local n d f r t cur
       while IFS=$'\t' read -r n d; do names+=("$n"); dirs+=("$d"); done < <(theme_list)
       while IFS=$'\t' read -r d f; do pal[$d]=$f; done < <(theme_palettes "${dirs[@]}")
       for i in "${!names[@]}"; do n=${names[$i]}; d=${dirs[$i]}
-        printf 'I\t%s\t%s\t%s\t%s\t%s\n' "$(k4id "sway-theme-set $(printf %q "$n") >/dev/null 2>&1; notify Theme $(printf %q "$(theme_pretty "$n")")")" \
+        printf 'I\t%s\t%s\t%s\t%s\t%s\n' "$(k4id "theme_apply $(printf %q "$n") >/dev/null 2>&1; notify Theme $(printf %q "$(theme_pretty "$n")")")" \
           "$(theme_pretty "$n")" "$d/preview.png" "$([ "$n" = "$cur" ] && echo current)" "stay${pal[$d]:+;palette=${pal[$d]}}"
       done ;;
     wall) # one perl for all of them (157 wallpapers took 1.2 s of forks); missing thumbnails are
@@ -819,7 +854,7 @@ k4_pages() { case "$1" in   # the P/F records of a section (printed after it, so
   capture) command -v emoji-menu >/dev/null && emoji-menu page ;;
   about) page netspeed "Network speed" "Download, upload and latency against Cloudflare"
          page diskspeed "Disk speed" "Sequential write and read where your home lives" ;;
-  style) printf 'F\tfont\tFont\tApplies to sway, waybar, terminal and k4\t%q k4-page font\n' "$SELF"
+  style) printf 'F\tfont\tFont\tApplies to %s, the bar, terminal and k4\t%q k4-page font\n' "$WM" "$SELF"
          page gaps "Gaps & borders" "Space around windows and their border"
          page opacity Opacity "Terminal and browser background" ;;
   display) page scale Scale "The focused output" ;;
@@ -853,10 +888,10 @@ k4_page() { local p="$1"; shift
         stay "Rescan" 'nmcli dev wifi rescan >/dev/null 2>&1; sleep 3; notify Wi-Fi Rescanned'
         ask_item "Connect to hidden…" wifi_hidden "" "Network name|The SSID of the hidden network"
         stay "Disconnect" wifi_disconnect ;;
-  font) local cur f; cur=$(sway-font-set current 2>/dev/null)
+  font) local cur f; cur=$(font_current 2>/dev/null)
         while IFS= read -r f; do
-          printf '%s\t%s\t\t%s\n' "$f" "sway-font-set $(printf %q "$f") >/dev/null 2>&1; notify Font $(printf %q "$f")" "stay$([ "$f" = "$cur" ] && echo ';current')"
-        done < <(sway-font-set list) | k4rows ;;
+          printf '%s\t%s\t\t%s\n' "$f" "font_apply $(printf %q "$f") >/dev/null 2>&1; notify Font $(printf %q "$f")" "stay$([ "$f" = "$cur" ] && echo ';current')"
+        done < <(font_list) | k4rows ;;
   gaps) local g row n i o b meta; g=$(gaps_now); g=${g:-5}
         for row in "None|0|0|1|no gaps · 1 px border" "Small|5|10|2|5 px · 2 px border (default)" "Medium|10|20|2|10 px · 2 px border" "Large|16|32|3|16 px · 3 px border"; do
           IFS='|' read -r n i o b meta <<<"$row"
@@ -893,14 +928,8 @@ k4_page() { local p="$1"; shift
   calendar) calendar_page ;;
   battery) battery_page ;;
   diskspeed) speed_page disk ;;
-  apt) local q="${1:-}" p; local -A inst=()
-        while IFS= read -r p; do inst[$p]=1; done < <(dpkg-query -W -f '${Package}\n' 2>/dev/null)
-        apt-cache search --names-only -- "$q" 2>/dev/null | awk '{ print length($1) "\t" $0 }' | sort -n | cut -f2- | head -100 \
-          | while IFS= read -r p; do n=${p%% - *}; d=${p#* - }; printf '%s\ttui_wait '\''sudo apt install %s'\''\t%s\t\n' "$n" "$n" "${inst[$n]:+installed · }${d:0:48}"; done | k4rows
-        [ -n "$(apt-cache search --names-only -- "$q" 2>/dev/null | head -1)" ] || hdr "No package matches “$q”" ;;
-  apt-installed) local q="${1:-}"
-        dpkg-query -W -f '${binary:Package}\t${Version}\n' 2>/dev/null | grep -i -- "$q" | head -100 \
-          | awk -F'\t' '{ printf "%s\ttui_wait '\''sudo apt remove %s'\''\t%s\t\n", $1, $1, $2 }' | k4rows ;;
+  apt) pkg_rows_search "${1:-}" ;;
+  apt-installed) pkg_rows_installed "${1:-}" ;;
   flatpak) local q="${1:-}"
         flatpak search --columns=application,name "$q" 2>/dev/null | head -60 \
           | awk -F'\t' '$1 ~ /\./ { printf "%s\ttui_wait '\''flatpak install -y flathub %s'\''\t%s\t\n", $2, $1, $1 }' | k4rows ;;
@@ -1278,7 +1307,7 @@ battery_page() {
   fi; }
 pp_set() { local i; for i in "${!PP_NAMES[@]}"; do [ "${PP_NAMES[$i]}" = "${K4_VALUE:-}" ] && { powerprofilesctl set "${PP[$i]}" && notify "Power profile" "${PP_NAMES[$i]}"; return; }; done; }
 
-K4_CONFIRM_LOGOUT='confirm=Log out?|Closes every window and ends the sway session.'
+K4_CONFIRM_LOGOUT="confirm=Log out?|Closes every window and ends the $WM_TITLE session."
 K4_CONFIRM_REBOOT='confirm=Reboot now?|Unsaved work in open apps will be lost.'
 K4_CONFIRM_SHUTDOWN='confirm=Shut down now?|Unsaved work in open apps will be lost.'
 
@@ -1297,34 +1326,35 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
           hints "↑↓" Move "↵" Open Esc "Shortcuts: a, then${keys}"
         fi
         hdr "Installed apps"
-        while IFS=$'\t' read -r n id; do item "$n" "bg gtk-launch $(printf %q "$id")" "" "" app; done < <(apps_list)
+        while IFS=$'\t' read -r n id; do item "$n" "launch_app $(printf %q "$id")" "" "" app; done < <(apps_list)
         if [ ${#miss[@]} -gt 0 ]; then hdr "Not installed"
           for n in "${miss[@]}"; do IFS=$'\t' read -r id title key <<<"$n"; item "$title" : "not installed" "$id" "dim;key=$key"; done; fi ;;
-  learn) item "Sway wiki" 'open_url https://github.com/swaywm/sway/wiki'
+  learn) item "$WM_TITLE wiki" "open_url $WM_WIKI"
+         [ -n "$OMARCHY" ] && item "Omarchy manual" 'open_url https://learn.omacom.io/2/the-omarchy-manual'
          item "Dotfiles repo" 'open_url https://github.com/kr4nkenwagen/dotfiles' ;;
-  capture) item "Screenshot region" shot_region "grim + slurp"
+  capture) item "Screenshot region" shot_region "$SHOT_TOOL"
            item "Screenshot window" shot_window
            item "Screenshot output" shot
-           item "Record region" 'record_toggle region' "$([ "$rec" = Stop ] && echo recording || echo wf-recorder)"
+           item "Record region" 'record_toggle region' "$([ "$rec" = Stop ] && echo recording || echo "$REC_TOOL")"
            item "Record output" record_toggle "$([ "$rec" = Stop ] && echo recording)"
            item "Pick color" color_picker
            command -v emoji-menu >/dev/null && item "Emoji" : "insert or copy" emoji ;;
   toggle) tog "Bar" 'toggle_bar; sleep 0.2; notify Bar "$(onoff bar_running)"' "$(onoff bar_running)"
-          choice "Status bar" set_bar_kind "$([ "$(bar_kind)" = k4 ] && echo k4 || echo Waybar)" "k4|Waybar"
+          choice "Status bar" set_bar_kind "$([ "$(bar_kind)" = k4 ] && echo k4 || echo "$BAR_ALT")" "k4|$BAR_ALT"
           tog "Starfield" 'starfield-toggle >/dev/null; notify Starfield "$(starfield-toggle status)"' "$(starfield-toggle status 2>/dev/null || echo on)"
           tog "Launcher" toggle_launcher "$([ "$LAUNCHER" = k4 ] && echo on || echo off)"
-          tog "Idle lock" toggle_idle "$(onoff pgrep -x swayidle)"
-          tog "Do not disturb" 'toggle_dnd; notify "Do not disturb" "$(onoff sh -c "makoctl mode | grep -qx do-not-disturb")"' "$(onoff sh -c 'makoctl mode | grep -qx do-not-disturb')" ;;
+          tog "Idle lock" toggle_idle "$(onoff idle_on)"
+          tog "Do not disturb" 'toggle_dnd; sleep 0.2; notify "Do not disturb" "$(onoff dnd_on)"' "$(onoff dnd_on)" ;;
   style) local w; w=$(wallpaper)
          hdr "Theme"
          item "Theme" : "$(theme_pretty "$(theme_name)")" theme
-         stay "Theme: next" 'sway-theme-set next >/dev/null 2>&1; notify Theme "$(theme_pretty "$(theme_name)")"'
+         stay "Theme: next" 'theme_next >/dev/null 2>&1; notify Theme "$(theme_pretty "$(theme_name)")"'
          hdr "Background"
          item "Background" : "${w##*/}" wall
          stay "Background: next" 'bg_next; w=$(wallpaper); notify Background "${w##*/}"'
          stay "Background: random" 'bg_random; w=$(wallpaper); notify Background "${w##*/}  (random)"'
          hdr "Windows"
-         item "Font" : "$(sway-font-set current 2>/dev/null | sed 's/ Nerd Font Mono$//')" font
+         item "Font" : "$(font_current 2>/dev/null | sed 's/ Nerd Font Mono$//')" font
          item "Gaps & borders" : "$(case "$(gaps_now)" in 0) echo None ;; 10) echo Medium ;; 16) echo Large ;; *) echo Small ;; esac)" gaps
          item "Opacity" : "$(opacity_now)" opacity ;;
   display) local b l n a; b=$(bright_pct)
@@ -1336,10 +1366,10 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            hdr "Outputs"
            while IFS=$'\t' read -r n a; do
              tog "$n  $([[ $n =~ ^(eDP|LVDS|DSI) ]] && echo built-in || echo external)" "output_toggle $(printf %q "$n")" "$([ "$a" = true ] && echo on || echo off)" "$([ "$a" = true ] && echo enabled || echo disabled)"
-           done < <(swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | [.name, (.active|tostring)] | @tsv')
+           done < <(outputs_tsv | cut -f1,2)
            hdr "More"
-           tog "Night light" 'toggle_night; sleep 0.2; notify "Night light" "$(onoff pgrep -x wlsunset)"' "$(onoff pgrep -x wlsunset)"
-           item "Scale" : "$(swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | select(.focused) | .scale')" scale ;;
+           tog "Night light" 'toggle_night; sleep 0.3; notify "Night light" "$(onoff night_on)"' "$(onoff night_on)"
+           item "Scale" : "$(outputs_tsv | awk -F'\t' '$3 == "true" { print $4; exit }')" scale ;;
   network) local dev ip gw dns; dev=$(primary_dev)
            ip=${dev:+$(nmcli -g IP4.ADDRESS dev show "$dev" 2>/dev/null | head -1)}; ip=${ip%%/*}
            gw=${dev:+$(nmcli -g IP4.GATEWAY dev show "$dev" 2>/dev/null)}
@@ -1409,8 +1439,8 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
          item "Timezone" : "$(timedatectl show -p Timezone --value 2>/dev/null)" timezone
          item "Default apps" 'tui nvim "$HOME/.config/mimeapps.list"'
          item "Autostart" "tui nvim +/^#\\ Autostart $(printf %q "$SWAY_CONFIG")"
-         item "Edit sway config" "tui nvim $(printf %q "$SWAY_CONFIG")"
-         item "Reload sway" 'swaymsg reload >/dev/null' "Super+Ctrl+R" ;;
+         item "Edit $WM config" "tui nvim $(printf %q "$WM_CONFIG")"
+         item "Reload $WM" 'wm_reload' "Super+Ctrl+R" ;;
   vpn) local n on
        if command -v forticlient >/dev/null; then
          on=$(vpn_state)
@@ -1426,14 +1456,14 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
   bookmarks) local url title path n=0
              while IFS=$'\t' read -r url title path; do [ -n "$url" ] && { item "${path:+$path › }$title" "open_url $(printf %q "$url")"; n=$((n+1)); }; done < <(bookmarks_list)
              [ "$n" -gt 0 ] || item "No managed bookmarks found" ':' ;;
-  install) ask_item "Package" pkg_search apt "Search packages|Names in apt · Enter on a result installs it in a terminal"
+  install) ask_item "Package" pkg_search "$PKG_TOOL" "Search packages|Names in $PKG_TOOL · Enter on a result installs it in a terminal"
            ask_item "Flatpak" flatpak_search Flathub "Search Flathub|Enter on a result installs it in a terminal"
            ask_item "Web app" webapp_name "" "Web app name|Shown in Apps · the URL comes next"
            item "Font" : "Nerd Fonts" nerdfonts
            hdr "Remove"
-           ask_item "Remove package…" pkg_installed_search apt "Remove which package|Filters the installed packages" ;;
-  update) item "System packages" "tui_wait 'sudo apt update && sudo apt full-upgrade'" apt
-          item "Firmware" "tui_wait 'command -v fwupdmgr >/dev/null || sudo apt install -y fwupd; fwupdmgr refresh --force; sudo fwupdmgr update'" fwupd
+           ask_item "Remove package…" pkg_installed_search "$PKG_TOOL" "Remove which package|Filters the installed packages" ;;
+  update) item "System packages" "$(update_cmd)" "$PKG_TOOL"
+          item "Firmware" "$(firmware_cmd)" fwupd
           hdr "Restart"
           stay "Audio" restart_audio "PipeWire" "confirm=Restart audio?|Restarts PipeWire. Playing apps may stutter for a moment."
           stay "Wi-Fi" restart_wifi "unblock · radio on · rescan"
@@ -1441,11 +1471,11 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
           item "Trackpad" "tui_wait $(printf %q "$SELF") restart-trackpad" "reloads the driver · sudo"
           hdr "Dotfiles"
           item "Update dotfiles" "tui_wait \"cd $(printf %q "$DOTFILES") && git pull --ff-only && bash init.sh\"" "git pull" ;;
-  system) item "Lock" lock swaylock
+  system) item "Lock" lock
           item "Suspend" 'systemctl suspend'
-          item "Log out" 'swaymsg exit' "" "" "$K4_CONFIRM_LOGOUT"
-          item "Reboot" 'systemctl reboot' "" "" "$K4_CONFIRM_REBOOT"
-          item "Shut down" 'systemctl poweroff' "" "" "$K4_CONFIRM_SHUTDOWN" ;;
+          item "Log out" 'wm_exit' "" "" "$K4_CONFIRM_LOGOUT"
+          item "Reboot" 'sys_reboot' "" "" "$K4_CONFIRM_REBOOT"
+          item "Shut down" 'sys_poweroff' "" "" "$K4_CONFIRM_SHUTDOWN" ;;
   config) if command -v config-menu >/dev/null; then config-menu section; else hdr "config-menu is not installed (stow menus)"; fi ;;   # menus/.local/bin/config-menu
   about) item "Network speed" : "$(speed_summary net)" netspeed
          item "Disk speed" : "$(speed_summary disk)" diskspeed
@@ -1482,8 +1512,98 @@ main_menu() {
   show Menu "$top"
 }
 
+# ---------- Omarchy (Hyprland): the same menu through Omarchy's own commands ----------
+# Everything above is the Ubuntu/Sway version; on Omarchy these replace the parts that differ.
+if [ -n "$OMARCHY" ]; then
+  [ -f "$STATE/launcher" ] || { command -v k4 >/dev/null && LAUNCHER=k4; }   # Omarchy has no fuzzel
+  WM_CONFIG="$HOME/.config/hypr/hyprland.lua"
+  SWAY_CONFIG="$HOME/.config/hypr/autostart.lua"
+  PKG_TOOL=pacman
+  WM_TITLE=Hyprland; WM_WIKI=https://wiki.hypr.land; BAR_ALT=Omarchy; SHOT_TOOL=omarchy; REC_TOOL=gpu-screen-recorder
+  theme_apply() { omarchy-theme-set "$1"; }
+  theme_next() { local cur list i; mapfile -t list < <(theme_list | cut -f1); cur=$(theme_name)
+    for i in "${!list[@]}"; do [ "${list[$i]}" = "$cur" ] && { omarchy-theme-set "${list[$(( (i + 1) % ${#list[@]} ))]}"; return; }; done
+    omarchy-theme-set "${list[0]}"; }
+  font_apply() { omarchy-font-set "$1"; }
+  font_list() { omarchy-font-list; }
+  font_current() { omarchy-font-current; }
+  set_background() { local f; f=$(readlink -f "$1"); [ -f "$f" ] || return; omarchy-theme-bg-set "$f" >/dev/null 2>&1; }
+  wallpaper_restore() { :; }
+  night_on() { local t; t=$(hyprctl hyprsunset temperature 2>/dev/null | grep -oE '[0-9]+' | head -1); [ -n "$t" ] && [ "$t" -lt 6000 ]; }
+  toggle_night() { omarchy-toggle-nightlight >/dev/null 2>&1; }
+  idle_on() { [ ! -f "$HOME/.local/state/omarchy/indicators/stay-awake" ]; }
+  toggle_idle() { omarchy-toggle-idle >/dev/null 2>&1; notify "Idle lock" "$(onoff idle_on)"; }
+  dnd_on() { case "$(omarchy-shell notifications isDnd 2>/dev/null)" in on|true) return 0 ;; *) return 1 ;; esac; }
+  toggle_dnd() { omarchy-toggle-notification-silencing >/dev/null 2>&1; }
+  lock() { omarchy-system-lock; }
+  wm_exit() { omarchy-system-logout; }
+  sys_reboot() { omarchy-system-reboot; }
+  sys_poweroff() { omarchy-system-shutdown; }
+  wm_reload() { hyprctl reload >/dev/null; }
+  launch_app() { if command -v uwsm-app >/dev/null; then bg uwsm-app -- gtk-launch "$1"; else bg gtk-launch "$1"; fi; }
+  show_keybindings() { omarchy-menu-keybindings; }
+  update_cmd() { echo "omarchy-launch-floating-terminal-with-presentation omarchy-update"; }
+  firmware_cmd() { echo "omarchy-launch-floating-terminal-with-presentation omarchy-update-firmware"; }
+  restart_trackpad() { command -v omarchy-restart-trackpad >/dev/null && omarchy-restart-trackpad; printf '\n[done] press enter to close'; read -r _; }
+  # capture: Omarchy's tools (its own region picker, gpu-screen-recorder)
+  shot() { omarchy-capture-screenshot fullscreen; }
+  shot_region() { omarchy-capture-screenshot region; }
+  shot_window() { omarchy-capture-screenshot windows; }
+  recording() { pgrep -f '^gpu-screen-recorder' >/dev/null; }
+  record_toggle() { if recording; then omarchy-capture-screenrecording --stop-recording; elif [ "${1:-}" = region ]; then omarchy-capture-screenrecording; else omarchy-capture-screenrecording --fullscreen; fi; }
+  color_picker() { pkill hyprpicker || hyprpicker -a; }
+  # outputs (Hyprland's monitors; Omarchy keeps their settings in monitors.lua)
+  outputs_tsv() { hyprctl -j monitors all 2>/dev/null | jq -r '.[] | [.name, ((.disabled // false) | not | tostring), (.focused | tostring), (.scale | tostring)] | @tsv'; }
+  focused_output() { hyprctl -j monitors 2>/dev/null | jq -r '.[] | select(.focused) | .name'; }
+  screen_size() { hyprctl -j monitors 2>/dev/null | jq -r '(map(.width) | max | tostring) + "x" + (map(.height) | max | tostring)'; }
+  output_toggle() {
+    if [ "$1" = "$(omarchy-hyprland-monitor-laptop 2>/dev/null)" ]; then omarchy-hyprland-monitor-internal toggle >/dev/null 2>&1; notify Display "$1 toggled"
+    else notify Display "External displays are set in monitors.lua (Setup › Edit hyprland config)"; fi; }
+  # keyboard layout and input
+  kb_now() { hyprctl -j devices 2>/dev/null | jq -r '[.keyboards[] | select(.main) | .active_keymap] | first // "?"' | cut -c1-2 | tr '[:upper:]' '[:lower:]'; }
+  kb_cycle() { hyprctl switchxkblayout all next >/dev/null; notify Keyboard "$(kb_now)"; }
+  kb_set() { kb_cycle; }
+  set_layout() { kb_cycle; }
+  # packages: pacman, and the AUR through yay
+  pkg_rows_search() {
+    local q="$1" any=""
+    while IFS=$'\t' read -r name inst desc; do any=1
+      printf '%s\ttui_wait '\''sudo pacman -S %s'\''\t%s\t\n' "$name" "$name" "$([ "$inst" = i ] && printf 'installed · ')${desc:0:48}"
+    done < <(pacman -Ss -- "$q" 2>/dev/null | awk '/^[^ ]/ { split($1, a, "/"); name = a[2]; inst = ($0 ~ /\[installed/) ? "i" : "-"; next } { sub(/^ +/, ""); printf "%s\t%s\t%s\n", name, inst, $0 }' | head -60) | k4rows
+    if command -v yay >/dev/null; then
+      hdr "AUR"
+      timeout 10 yay -Ssa -- "$q" 2>/dev/null | awk '/^[^ ]/ { split($1, a, "/"); name = a[2]; next } { sub(/^ +/, ""); printf "%s\ttui_wait '\''yay -S %s'\''\t%s\t\n", name, name, substr($0, 1, 48) }' | head -40 | k4rows
+    fi
+    [ -n "$any" ] || hdr "No repository package matches “$q”"; }
+  pkg_rows_installed() {
+    pacman -Q 2>/dev/null | grep -i -- "$1" | head -100 | awk '{ printf "%s\ttui_wait '\''sudo pacman -Rns %s'\''\t%s\t\n", $1, $1, $2 }' | k4rows; }
+  # the status bar: k4's or Omarchy's own (hidden through its bar-off toggle)
+  bar_kind() { local k; k=$(cat "$STATE/bar" 2>/dev/null || echo k4); [ "$k" = k4 ] && command -v k4 >/dev/null && echo k4 || echo omarchy; }
+  bar_running() { pgrep -f '^k4 --bar' >/dev/null || [ ! -e "$HOME/.local/state/omarchy/toggles/bar-off" ]; }
+  bar_start() { if [ "$(bar_kind)" = k4 ]; then omarchy-toggle-bar on >/dev/null 2>&1; bg k4-bar; else pkill -f '^k4 --bar'; omarchy-toggle-bar off >/dev/null 2>&1; fi; }
+  toggle_bar() { if bar_running; then pkill -f '^k4 --bar'; omarchy-toggle-bar on >/dev/null 2>&1; else bar_start; fi; }
+  set_bar_kind() { mkdir -p "$STATE"; [ "${K4_VALUE:-}" = Omarchy ] && echo omarchy > "$STATE/bar" || echo k4 > "$STATE/bar"; bar_start; notify "Status bar" "${K4_VALUE:-k4}"; }
+  # pages that work differently on Hyprland: gaps (a toggle), scale (monitors.lua), input devices
+  eval "$(declare -f k4_page | sed '1s/^k4_page/k4_page_base/')"
+  k4_page() {
+    case "$1" in
+      gaps) stay "Window gaps" 'omarchy-hyprland-window-gaps-toggle >/dev/null 2>&1; notify Gaps toggled' "on or off" ;;
+      scale) hdr "Hyprland keeps scale and modes in monitors.lua"
+             while IFS=$'\t' read -r n a f sc; do stay "$n" "notify Display $(printf %q "$n · scale $sc")" "scale $sc$([ "$f" = true ] && echo ' · focused')"; done < <(outputs_tsv)
+             item "Edit monitors.lua" "omarchy-launch-config-editor $(printf %q "$HOME/.config/hypr/monitors.lua")" ;;
+      inputs) hdr "Keyboard layout"
+              stay "Next layout" kb_cycle "$(kb_now)"
+              if hyprctl -j devices 2>/dev/null | jq -e '[.mice[].name | select(test("touchpad"; "i"))] | length > 0' >/dev/null; then hdr "Touchpad"; stay "Touchpad" 'omarchy-toggle-touchpad >/dev/null 2>&1; notify Touchpad toggled' "on or off"; fi
+              hdr "Devices · Enter copies the name"
+              while IFS=$'\t' read -r n t; do stay "$n" "copy_val Device $(printf %q "$n")" "$t"; done < <(hyprctl -j devices 2>/dev/null | jq -r '(.keyboards[] | "\(.name)\tkeyboard"), (.mice[] | "\(.name)\tpointer")' | sort -u)
+              item "Edit input.lua" "omarchy-launch-config-editor $(printf %q "$HOME/.config/hypr/input.lua")" ;;
+      *) k4_page_base "$@" ;;
+    esac; }
+fi
+
 case "${1:-}" in
   lock) lock ;;
+  bar-start) bar_start ;;   # the status bar picked in Toggle › Status bar (Hyprland autostart runs it)
   idle) idle ;;
   pkg-install) pkg_install ;;
   pkg-remove) pkg_remove ;;
@@ -1502,14 +1622,14 @@ case "${1:-}" in
   wifi) if [ "$LAUNCHER" = k4 ]; then k4_main wifi; else wifi_menu; fi ;;
   vpn-connect) vpn_connect "${2:?profile name}" ;;
   vpn-pick) vpn_pick ;;
-  theme) sway-theme-set "${2:?theme name}" ;;
-  theme-next) sway-theme-set next ;;
+  theme) theme_apply "${2:?theme name}" ;;
+  theme-next) theme_next ;;
   theme-pick) theme_pick ;;
-  font) if [ "${2:-pick}" = pick ] && [ "$LAUNCHER" = k4 ]; then k4_main font; else sway-font-set "${2:-pick}"; fi ;;
+  font) if [ "${2:-pick}" = pick ] && [ "$LAUNCHER" = k4 ]; then k4_main font; else font_apply "${2:-pick}"; fi ;;
   background) set_background "${2:?image path}" ;;
   display|network|audio|bluetooth|weather) if [ "$LAUNCHER" = k4 ]; then k4_main "$1"; else submenu "$1"; fi ;;
   menu) main_menu ;;                                    # the k4 bar's menu button
-  calendar|battery|toggle|update|system) k4_main "$1" ;; # the k4 bar's popups
+  calendar|battery|toggle|update|system|apps) k4_main "$1" ;; # the k4 bar's popups
   kb-next) kb_cycle ;;
   timezone) if [ "$LAUNCHER" = k4 ]; then k4_main timezone; else tz_menu; fi ;;
   k4-section) k4_section "${2:?section}" ;;

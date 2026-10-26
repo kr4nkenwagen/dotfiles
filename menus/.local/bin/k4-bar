@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # k4-bar: the status bar drawn by k4 (k4 --bar), one per output, the modules of Omarchy's
 # Quickshell bar; clicks open the matching k4 page as a popup under the module.
-#   k4-bar                 (re)start a bar on every active output (the sway config runs it)
+#   k4-bar                 (re)start a bar on every active output (the sway config / Hyprland autostart runs it)
 #   k4-bar stop
 #   k4-bar spec            the module list k4 --bar reads
 #   k4-bar status MODULE   one module's line (Waybar JSON); --follow keeps printing on changes
@@ -11,6 +11,8 @@ set -u
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/snap/bin:$PATH"
 SELF=$(readlink -f "$0")
 STATE="$HOME/.local/state/sway"
+OMARCHY=""; command -v omarchy-theme-set >/dev/null 2>&1 && OMARCHY=1
+HYPR=""; [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && HYPR=1
 
 json() { jq -cn --arg t "$1" --arg tt "${2:-}" --arg c "${3:-}" '{text: $t, tooltip: $tt, class: $c}'; }
 follow() {  # follow CMD-THAT-PRINTS-EVENTS: print the module now and after every burst of events
@@ -32,13 +34,23 @@ status() {
     json "$([ "$st" = Playing ] && echo 󰎈 || echo 󰏤) ${a:+$a — }${t:0:40}" "$a — $t" "$(echo "$st" | tr '[:upper:]' '[:lower:]')" ;;
   indicators)
     local out=() tips=()
-    makoctl mode 2>/dev/null | grep -qx do-not-disturb && { out+=(󰂛); tips+=("Do not disturb"); }
-    pgrep -x wlsunset >/dev/null && { out+=(󰔎); tips+=("Night light"); }
-    [ -f "$HOME/.cache/sway-menu/recording.pid" ] && kill -0 "$(cat "$HOME/.cache/sway-menu/recording.pid")" 2>/dev/null && { out+=(󰑊); tips+=("Recording"); }
-    pgrep -x swayidle >/dev/null || { out+=(󰅶); tips+=("Stay awake (idle lock off)"); }
+    if [ -n "$OMARCHY" ]; then
+      case "$(omarchy-shell notifications isDnd 2>/dev/null)" in on|true) out+=(󰂛); tips+=("Do not disturb") ;; esac
+      local t; t=$(hyprctl hyprsunset temperature 2>/dev/null | grep -oE '^[0-9]+' | head -1)
+      [ -n "$t" ] && [ "$t" -lt 6000 ] && { out+=(󰔎); tips+=("Night light"); }
+      pgrep -f '^gpu-screen-recorder' >/dev/null && { out+=(󰑊); tips+=("Recording"); }
+      [ -f "$HOME/.local/state/omarchy/indicators/stay-awake" ] && { out+=(󰅶); tips+=("Stay awake (idle lock off)"); }
+    else
+      makoctl mode 2>/dev/null | grep -qx do-not-disturb && { out+=(󰂛); tips+=("Do not disturb"); }
+      pgrep -x wlsunset >/dev/null && { out+=(󰔎); tips+=("Night light"); }
+      [ -f "$HOME/.cache/sway-menu/recording.pid" ] && kill -0 "$(cat "$HOME/.cache/sway-menu/recording.pid")" 2>/dev/null && { out+=(󰑊); tips+=("Recording"); }
+      pgrep -x swayidle >/dev/null || { out+=(󰅶); tips+=("Stay awake (idle lock off)"); }
+    fi
     local IFS=' '; json "${out[*]:-}" "$(printf '%s\n' "${tips[@]:-}")" "$([ "${out[*]:-}" = 󰑊 ] && echo critical)" ;;
   updates)
-    local n; n=$(apt list --upgradable 2>/dev/null | grep -c upgradable) || true
+    local n
+    if command -v checkupdates >/dev/null; then n=$(checkupdates --nocolor 2>/dev/null | wc -l)
+    else n=$(apt list --upgradable 2>/dev/null | grep -c upgradable) || true; fi
     [ "${n:-0}" -gt 0 ] && json "󰚰 $n" "$n updates waiting" warning || json "" ;;
   weather)
     sway-weather 2>/dev/null | jq -c '{text, tooltip, class}' 2>/dev/null || json "" ;;
@@ -70,7 +82,9 @@ status() {
     [ -n "$p" ] && ls /sys/class/backlight/* >/dev/null 2>&1 || { json ""; return; }
     json "$([ "$p" -ge 66 ] && echo 󰃠 || { [ "$p" -ge 33 ] && echo 󰃟 || echo 󰃞; }) $p%" "Brightness $p%" ;;
   keyboard)
-    local l; l=$(swaymsg -t get_inputs 2>/dev/null | jq -r '[.[] | select(.type == "keyboard") | .xkb_active_layout_name // empty] | first // empty')
+    local l
+    if [ -n "$HYPR" ]; then l=$(hyprctl -j devices 2>/dev/null | jq -r '[.keyboards[] | select(.main) | .active_keymap] | first // empty')
+    else l=$(swaymsg -t get_inputs 2>/dev/null | jq -r '[.[] | select(.type == "keyboard") | .xkb_active_layout_name // empty] | first // empty'); fi
     json "$(printf '%s' "${l:-}" | cut -c1-2 | tr '[:upper:]' '[:lower:]')" "$l" ;;
   battery)
     local b; b=$(ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -1)
@@ -87,7 +101,8 @@ follow_status() {  # status, then again on every change of what it shows
     media) follow playerctl --follow status ;;
     microphone|audio) follow sh -c 'pactl subscribe | grep --line-buffered -E "sink|source|server"' ;;
     network) follow nmcli monitor ;;
-    keyboard) follow swaymsg -m -t subscribe '["input"]' ;;
+    keyboard) if [ -n "$HYPR" ]; then follow sh -c 'socat -U - "UNIX-CONNECT:$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock" | grep --line-buffered "^activelayout>>"'
+              else follow swaymsg -m -t subscribe '["input"]'; fi ;;
     *) status "$1" ;;
   esac; }
 
@@ -124,9 +139,14 @@ start() {
   stop
   command -v k4 >/dev/null || { echo "k4-bar: k4 is not installed" >&2; exit 1; }
   local o spec; spec=$(spec)
-  for o in $(swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | select(.active) | .name'); do
+  # on Omarchy its own Quickshell bar steps aside (omarchy-toggle-bar on = hidden)
+  [ -n "$OMARCHY" ] && omarchy-toggle-bar on >/dev/null 2>&1
+  for o in $(outputs); do
     printf '%s\n' "$spec" | setsid -f k4 --bar --output "$o" >/dev/null 2>&1
   done; }
+outputs() {
+  if [ -n "$HYPR" ]; then hyprctl -j monitors 2>/dev/null | jq -r '.[].name'
+  else swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | select(.active) | .name'; fi; }
 stop() { pkill -f '^k4 --bar' 2>/dev/null; return 0; }
 
 case "${1:-}" in

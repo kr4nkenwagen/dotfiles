@@ -111,11 +111,15 @@ o.bind("SUPER + SHIFT + W", "impala", "xdg-terminal-exec --app-id=TUI.float -e i
 hl.unbind("SUPER + SHIFT + R")
 o.bind("SUPER + SHIFT + R", "aerc", "xdg-terminal-exec --app-id=TUI.float -e aerc")
 
+-- The k4 launcher (sway-menu, menus stow package): apps, then every menu of the suite.
 hl.unbind("SUPER + SPACE")
-o.bind("SUPER + SPACE", "Omarchy menu applications", "omarchy-menu toggle applications")
+o.bind("SUPER + SPACE", "Apps (k4)", "sway-menu apps")
 
 hl.unbind("SUPER + ALT + SPACE")
-o.bind("SUPER + ALT + SPACE", "Omarchy menu", "omarchy-menu toggle root")
+o.bind("SUPER + ALT + SPACE", "Menu (k4)", "sway-menu")
+
+hl.unbind("SUPER + CTRL + E")
+o.bind("SUPER + CTRL + E", "Emoji (k4)", "emoji-menu")
 
 -- Steam in the k4 launcher (steam-menu, menus stow package): games with cover art, status, store.
 o.bind("SUPER + CTRL + G", "Steam", "steam-menu")

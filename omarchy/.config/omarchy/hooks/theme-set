@@ -5,3 +5,7 @@
 
 "$HOME/.local/bin/theme-sync-tmux" "$1"
 "$HOME/.local/bin/theme-sync-qutebrowser"
+
+# k4's status bar draws with the theme's colours: start it again so it picks them up
+pgrep -f '^k4 --bar' >/dev/null && setsid -f "$HOME/.local/bin/k4-bar" >/dev/null 2>&1 </dev/null
+exit 0

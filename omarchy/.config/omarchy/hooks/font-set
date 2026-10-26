@@ -23,3 +23,9 @@ if [[ -n "$FONT_NAME" ]]; then
     # Send SIGUSR2 signal to tell Ghostty to reload its configuration
     pkill -SIGUSR2 -x ghostty 2>/dev/null || true
 fi
+
+# k4 (launcher and status bar) reads the family from font.name, like on the Sway profile
+mkdir -p "$HOME/.local/state/omarchy/current"
+omarchy-font-current > "$HOME/.local/state/omarchy/current/font.name" 2>/dev/null || true
+pgrep -f '^k4 --bar' >/dev/null && setsid -f "$HOME/.local/bin/k4-bar" >/dev/null 2>&1 </dev/null
+exit 0

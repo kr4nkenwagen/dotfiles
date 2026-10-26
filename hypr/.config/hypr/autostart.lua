@@ -2,3 +2,5 @@
 -- o.launch_on_start("my-service")
 o.launch_on_start("~/scripts/windowrule.sh")
 o.launch_on_start("clipse -listen")
+-- The status bar: k4's (k4-bar hides Omarchy's) unless Toggle › Status bar picked Omarchy's
+o.exec_on_start("~/.local/bin/sway-menu bar-start")

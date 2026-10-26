@@ -408,7 +408,7 @@ if [ "$OS" != ubuntu ]; then
 fi
 
 # Drop dangling links into this repo left by packages that no longer ship a file.
-find ~ ~/.config -maxdepth 1 -xtype l -lname "*${DOTFILES_DIR##*/}*" -print -delete 2>/dev/null | sed 's/^/:: removed stale link /' || true
+find ~ ~/.config ~/.local/bin -maxdepth 1 -xtype l -lname "*${DOTFILES_DIR##*/}*" -print -delete 2>/dev/null | sed 's/^/:: removed stale link /' || true
 
 # Unstow packages that belong to other profiles. An older init.sh stowed the
 # Omarchy hypr config everywhere, which breaks a non-Omarchy machine.
