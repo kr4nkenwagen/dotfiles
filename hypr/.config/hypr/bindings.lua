@@ -160,6 +160,8 @@ o.bind("SUPER + period", "Tray (k4)", "k4-tray popup")
 o.bind("SUPER + SHIFT + ESCAPE", "System performance (k4)", "k4-perf popup")
 hl.unbind("SUPER + CTRL + S")
 o.bind("SUPER + CTRL + S", "Send to a nearby device (k4, LocalSend)", "k4-share send clipboard")
+hl.unbind("SUPER + SHIFT + S") -- Omarchy's Google Maps web app
+o.bind("SUPER + SHIFT + S", "SSH hosts, server and keys (k4)", "k4-ssh open")
 hl.unbind("SUPER + comma")
 o.bind("SUPER + comma", "Dismiss last notification", "k4-notify dismiss")
 hl.unbind("SUPER + SHIFT + comma")

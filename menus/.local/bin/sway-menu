@@ -1229,6 +1229,18 @@ share_rows() { local st dir n first
   item "Received files" 'k4-share received' "${dir/#$HOME/\~}"
   item "Trusted devices" : "${n:-0}${first:+ · $first}" ls-trusted; }
 
+# SSH (k4-ssh, the window on Super+Shift+S): the SSH rows in Network
+ssh_unit() { systemctl list-unit-files sshd.service >/dev/null 2>&1 && echo sshd || echo ssh; }
+ssh_on() { systemctl is-active -q "$(ssh_unit)"; }
+ssh_server_toggle() { k4-ssh do sshd "$(ssh_on && echo off || echo on)" >/dev/null; notify SSH "$(ssh_on && echo 'Server on' || echo 'Server off')"; }
+ssh_pub() { ls ~/.ssh/id_ed25519.pub ~/.ssh/id_*.pub 2>/dev/null | head -1; }
+ssh_copy_pub() { local f; f=$(ssh_pub); if [ -n "$f" ]; then wl-copy < "$f"; notify SSH "Copied ${f##*/}"; else notify SSH "No key yet · SSH hosts › Keys › New key"; fi; }
+ssh_rows() { local f; f=$(ssh_pub)
+  hdr "SSH"
+  item "SSH hosts…" 'k4-ssh open' "Super+Shift+S"
+  tog "SSH server" ssh_server_toggle "$(ssh_on && echo on || echo off)" "$(ssh_on && echo on || echo off)"
+  stay "Copy my public key" ssh_copy_pub "${f##*/}"; }
+
 k4_page() { local p="$1"; shift
   case "$p" in
   wifi) net_page ;;
@@ -1780,6 +1792,7 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            hdr "DNS"
            stay "DNS provider" dns_cycle "$(dns_now)"
            if command -v k4-share >/dev/null; then share_rows; fi
+           if command -v k4-ssh >/dev/null; then ssh_rows; fi
            hdr "More"
            stay "Ethernet" eth_toggle "$(eth_state)"
            item "Open nmtui" 'tui nmtui' ;;

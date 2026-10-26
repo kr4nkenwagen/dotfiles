@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+# k4-ssh: SSH for k4 (the Kestrel design's SSH window, k4 --ssh): hosts to connect to, this
+# machine as a server, and your keys. It reads OpenSSH's own files and tools (ssh -G,
+# known_hosts, ssh-add, authorized_keys, the sshd journal) and does what the window asks.
+#   k4-ssh open [TAB]              the window (Super+Shift+S; again: closes it)
+#   k4-ssh data                    what k4 --ssh reads (A V H X K F M lines)
+#   k4-ssh check HOST              connecting, step by step: step N | ok | newhost FP | changed OLD NEW | locked KEY | fail WHY
+#   k4-ssh do VERB ARGS…           connect trust replace unlock sftp copy forward mount sendkey edit pin
+#                                  sshd boot port pass root lan end unauth authadd block
+#                                  keycopy agent-add agent-del newkey qr
+export PATH="$HOME/.local/bin:$PATH"
+export SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-$HOME/.ssh/agent/sock}"
+STATE="$HOME/.local/state/sway"
+CACHE="$HOME/.cache/k4/ssh"
+PINS="$STATE/ssh-pins" LAST="$STATE/ssh-last"
+SELF=$(command -v k4-ssh || echo "$0")
+mkdir -p "$CACHE" "$STATE"
+CONF="$HOME/.ssh/config"
+UNIT=sshd; systemctl cat sshd.service >/dev/null 2>&1 || UNIT=ssh
+
+bg() { setsid -f "$@" >/dev/null 2>&1 </dev/null; }
+term() { if command -v uwsm-app >/dev/null; then bg uwsm-app -- ghostty -e "$@"; elif command -v ghostty >/dev/null; then bg ghostty -e "$@"; else bg xdg-terminal-exec "$@"; fi; }
+tui_wait() {  # a floating terminal for sudo and output
+  local cmd="$1; printf '\n[done] press enter to close'; read -r _"
+  if command -v ghostty >/dev/null; then bg ghostty --class=TUI.float -e sh -c "$cmd"; else bg xdg-terminal-exec --app-id=TUI.float sh -c "$cmd"; fi; }
+field() { printf '%s' "${1//[$'\t\n']/ }"; }
+ago() { local s=$(( $(date +%s) - ${1:-0} ))
+  if [ "${1:-0}" = 0 ]; then echo never; elif [ "$s" -lt 60 ]; then echo "just now"; elif [ "$s" -lt 3600 ]; then echo "$((s / 60)) min ago"
+  elif [ "$s" -lt 86400 ]; then echo "$((s / 3600)) h ago"; elif [ "$s" -lt 172800 ]; then echo yesterday
+  elif [ "$s" -lt 1209600 ]; then echo "$((s / 86400)) d ago"; else echo "$((s / 604800)) w ago"; fi; }
+
+# ---------- hosts ----------
+host_names() {  # name<TAB>source: config, known_hosts, history, Tailscale (first wins)
+  { [ -f "$CONF" ] && awk 'tolower($1) == "host" { for (i = 2; i <= NF; i++) if ($i !~ /[*?!]/) print $i "\t~/.ssh/config" }' "$CONF"
+    [ -f "$HOME/.ssh/known_hosts" ] && awk '$1 !~ /^\|/ && $1 !~ /^@/ { split($1, a, ","); h = a[1]
+      if (h ~ /^\[/) { sub(/^\[/, "", h); sub(/\]:/, ":", h) } print h "\tknown_hosts" }' "$HOME/.ssh/known_hosts"
+    cat "$HOME/.bash_history" "$HOME/.zsh_history" "$HOME/.local/share/fish/fish_history" 2>/dev/null \
+      | grep -aoE '(^|[ ;:])ssh( +-[a-zA-Z]+( +[^ -][^ ]*)?)* +[A-Za-z0-9._-]+@[A-Za-z0-9._-]+' | grep -oE '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$' | tail -50 | tac | sed 's/$/\thistory/'
+    command -v tailscale >/dev/null && tailscale status --json 2>/dev/null | jq -r '.Peer[]? | select(.Online) | "\(.HostName | ascii_downcase)\tTailscale"'
+  } | awk -F'\t' '!seen[$1]++' | grep -v '^github.com:\|^gitlab.com:' ; }
+resolve() {  # resolve NAME -> user host port key jump forwards (via ssh -G, as ssh would)
+  ssh -G "$1" 2>/dev/null | awk '
+    $1 == "user" { u = $2 } $1 == "hostname" { h = $2 } $1 == "port" { p = $2 } $1 == "proxyjump" { j = $2 }
+    $1 == "identityfile" && k == "" { f = $2; sub(/^~/, ENVIRON["HOME"], f); if ((getline line < f) > 0) k = $2; close(f) }
+    $1 == "localforward" { fw = fw (fw ? ";" : "") "L:localhost:" $2 " → " $3 ":" }
+    $1 == "remoteforward" { fw = fw (fw ? ";" : "") "R:" $2 " → " $3 ":" }
+    END { if (k == "") k = "~/.ssh/id_ed25519"; printf "%s\t%s\t%s\t%s\t%s\t%s\n", u, h, p, k, (j == "none" ? "" : j), fw }'; }
+known() {  # known HOST PORT: in known_hosts
+  if [ "${2:-22}" = 22 ]; then ssh-keygen -F "$1" >/dev/null 2>&1; else ssh-keygen -F "[$1]:$2" >/dev/null 2>&1; fi; }
+ping_one() {  # ping_one NAME: its TCP connect time (ms), "via" behind a jump host, or down
+  local user host port key jump fw t0
+  IFS=$'\t' read -r user host port key jump fw <<<"$(resolve "$1")"
+  if [ -n "$jump" ]; then echo "$1"$'\t'via; return; fi
+  t0=$(date +%s%N)
+  if timeout 1.5 bash -c ">/dev/tcp/$host/$port" 2>/dev/null; then echo "$1"$'\t'$(( ($(date +%s%N) - t0) / 1000000 )); else echo "$1"$'\t'down; fi; }
+ping_all() {  # every host at once, cached for the window (data runs it in the background)
+  local name src
+  while IFS=$'\t' read -r name src; do ping_one "$name" & done < <(host_names) > "$CACHE/ping.tsv.new"
+  wait
+  mv "$CACHE/ping.tsv.new" "$CACHE/ping.tsv"; }
+
+data() {
+  local name src user host port key jump fw grp tag newh ms last open
+  local -A pins=() pingc=() lastc=()
+  [ -f "$PINS" ] && while IFS= read -r name; do pins[$name]=1; done < "$PINS"
+  [ -f "$CACHE/ping.tsv" ] && while IFS=$'\t' read -r name ms; do pingc[$name]=$ms; done < "$CACHE/ping.tsv"
+  [ -f "$LAST" ] && while IFS=$'\t' read -r name ms; do lastc[$name]=$ms; done < "$LAST"
+  # the pings are measured again in the background when older than 10 s
+  if [ ! -f "$CACHE/ping.tsv" ] || [ $(( $(date +%s) - $(stat -c %Y "$CACHE/ping.tsv") )) -gt 10 ]; then
+    ( flock -n 9 || exit 0; ping_all ) 9>"$CACHE/ping.lock" >/dev/null 2>&1 &
+  fi
+  # the agent, the server
+  local agent n=0; agent=$(ssh-add -l 2>/dev/null); [ $? = 0 ] && n=$(grep -c . <<<"$agent")
+  printf 'A\t%s\n' "$n"
+  local run=0 boot=0 sport=22 pass=0 root=0 inst=0 sess
+  command -v sshd >/dev/null || [ -x /usr/sbin/sshd ] && inst=1
+  systemctl is-active --quiet "$UNIT" && run=1
+  systemctl is-enabled --quiet "$UNIT" 2>/dev/null && boot=1
+  sport=$(sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }'); [ -n "$sport" ] || sport=$(awk 'tolower($1) == "port" { print $2; exit }' /etc/ssh/sshd_config 2>/dev/null); sport=${sport:-22}
+  grep -qiE '^\s*PasswordAuthentication\s+no' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null || pass=1
+  grep -qiE '^\s*PermitRootLogin\s+(yes)' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null && root=1
+  sess=$(who --ips 2>/dev/null | awk '$NF ~ /^[0-9a-f.:]+$/ && $NF != ":0" && NF >= 5' | grep -c .)
+  local lan=0; command -v ufw >/dev/null && grep -qs "k4-ssh-lan" /etc/ufw/user.rules && lan=1
+  printf 'V\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$run" "$sport" "$sess" "$boot" "$pass" "$root" "$inst" "$lan"
+  # who is logged in over SSH
+  who --ips 2>/dev/null | awk 'NF >= 5 && $NF ~ /^[0-9a-f.:]+$/ { print $1 "\t" $2 "\t" $NF "\t" $3 " " $4 }' | while IFS=$'\t' read -r who tty ip since; do
+    printf 'X\t%s\t%s\t%s\t%s\t%s\n' "$tty" "$who" "$ip" "$since" "$(ps -t "$tty" -o comm= 2>/dev/null | tail -1)"
+  done
+  # the keys allowed to log in here
+  local i=0 line
+  [ -f "$HOME/.ssh/authorized_keys" ] && while IFS= read -r line; do i=$((i + 1))
+    case "$line" in ''|'#'*) continue ;; esac
+    printf 'K\t%s\t%s\t%s\n' "$i" "$(field "$(awk '{ c = ""; for (j = 3; j <= NF; j++) c = c (c ? " " : "") $j; print (c != "" ? c : "no comment") }' <<<"$line")")" "$(ssh-keygen -lf - <<<"$line" 2>/dev/null | awk '{ print tolower(substr($NF, 2, length($NF) - 2)) " · " $2 }')"
+  done < "$HOME/.ssh/authorized_keys"
+  # failed logins in the last hour (when the journal is readable)
+  journalctl -u "$UNIT" --since "-1h" -q -o cat 2>/dev/null | grep -E 'Failed password|Invalid user|authentication failure' \
+    | grep -oE 'from [0-9a-f.:]+' | awk '{ c[$2]++; n++ } END { for (ip in c) if (c[ip] > top) { top = c[ip]; t = ip } if (n) printf "F\t%d\t%s\n", n, t }'
+  # my keys
+  local pub priv fp locked used inag
+  for pub in "$HOME"/.ssh/*.pub; do [ -f "$pub" ] || continue
+    priv=${pub%.pub}; fp=$(ssh-keygen -lf "$pub" 2>/dev/null | awk '{ print $2 }')
+    locked=0; [ -f "$priv" ] && ! ssh-keygen -y -P "" -f "$priv" >/dev/null 2>&1 && locked=1
+    inag=0; grep -qF "$fp" <<<"$agent" && inag=1
+    used=""; [ -f "$priv" ] && used="used $(ago "$(stat -c %X "$priv")")"
+    printf 'M\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${priv##*/}" "$(awk '{ print $1 }' "$pub")" "$(field "$(cut -d' ' -f3- "$pub")")" "$fp" "$inag" "$locked" "$used" "$(field "$(cat "$pub")")"
+  done
+  # the hosts
+  local -A seen=()
+  while IFS=$'\t' read -r name src; do
+    IFS=$'\t' read -r user host port key jump fw <<<"$(resolve "$name")"
+    [ -n "$host" ] || continue
+    [ -n "${seen[$user@$host:$port]:-}" ] && continue   # history repeats what known_hosts has
+    seen[$user@$host:$port]=1
+    case "$src" in "~/.ssh/config") grp=CONFIG ;; Tailscale) grp=NEARBY ;; *) grp=RECENT ;; esac
+    [ -n "${pins[$name]:-}" ] && grp=PINNED
+    tag=""; case "${name,,}" in *prod*) tag=PROD ;; github.com|gitlab.com|codeberg.org|*@github.com) tag=GIT ;; esac
+    newh=0; known "$host" "$port" || newh=1
+    open=0; [ -S "$HOME/.ssh/sockets/$user@$host:$port" ] && open=1
+    last=${lastc[$name]:-0}
+    printf 'H\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$name" "$user" "$host" "$port" "${key/#$HOME/\~}" "$jump" "$src" "$grp" "$(ago "$last")" "$tag" "$newh" "${pingc[$name]:-}" "$fw" "$open"
+  done < <(host_names)
+  printf 'R\t%s do\nL\t%s data\nC\t%s check\n' "$SELF" "$SELF" "$SELF"; }
+
+# ---------- connecting, step by step ----------
+check() {
+  local name="$1" user host port key jump fw err fpk
+  IFS=$'\t' read -r user host port key jump fw <<<"$(resolve "$name")"
+  [ -n "$host" ] || { echo "fail cannot read the host"; return; }
+  if [ -z "$jump" ]; then
+    getent ahosts "$host" >/dev/null 2>&1 || { echo "fail $host does not resolve"; return; }
+  fi
+  echo "step 1"
+  if [ -z "$jump" ]; then timeout 5 bash -c ">/dev/tcp/$host/$port" 2>/dev/null || { echo "fail nothing answers on $host:$port"; return; }; fi
+  echo "step 2"
+  if [ -z "$jump" ] && ! known "$host" "$port"; then
+    fpk=$(ssh-keyscan -T 5 -p "$port" "$host" 2>/dev/null | ssh-keygen -lf - 2>/dev/null | sort -k4 | awk '$4 ~ /ED25519/ { print $2 " " $4; exit } { f = $2 " " $4 } END { if (f) print f }' | head -1)
+    echo "newhost ${fpk:-unknown}"; return
+  fi
+  echo "step 3"
+  # a key with a passphrase that the agent does not hold
+  local priv="${key/#\~/$HOME}"
+  if [ -f "$priv" ] && ! ssh-keygen -y -P "" -f "$priv" >/dev/null 2>&1; then
+    local fp; fp=$(ssh-keygen -lf "$priv.pub" 2>/dev/null | awk '{ print $2 }')
+    ssh-add -l 2>/dev/null | grep -qF "${fp:-none}" || { echo "locked ${priv##*/}"; return; }
+  fi
+  err=$(ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=yes -o ControlPersist=no "$name" true 2>&1 >/dev/null)
+  case "$err" in
+    *"IDENTIFICATION HAS CHANGED"*)
+      local old new
+      old=$(ssh-keygen -lF "$([ "$port" = 22 ] && echo "$host" || echo "[$host]:$port")" 2>/dev/null | awk '/SHA256/ { print $3; exit }')
+      new=$(ssh-keyscan -T 5 -p "$port" "$host" 2>/dev/null | ssh-keygen -lf - 2>/dev/null | awk '{ print $2; exit }')
+      echo "changed ${old:-?} ${new:-?}" ;;
+    *"Permission denied"*) echo "ok password" ;;   # the terminal asks for the password
+    *"Host key verification failed"*) echo "newhost unknown" ;;
+    "") echo "ok" ;;
+    *) [ "$?" = 0 ] && echo ok || echo "ok"  ;;   # anything else: the terminal shows it
+  esac; }
+
+# ---------- what the window asks ----------
+pin_toggle() { if grep -qxF "$1" "$PINS" 2>/dev/null; then grep -vxF "$1" "$PINS" > "$PINS.new"; mv "$PINS.new" "$PINS"; echo "Unpinned $1"; else echo "$1" >> "$PINS"; echo "Pinned $1"; fi; }
+sshd_conf() {  # sshd_conf KEY VALUE: in a k4 drop-in, then reload (asks for the password)
+  tui_wait "printf '%s %s\n' $1 $2 | sudo tee /etc/ssh/sshd_config.d/50-k4.conf.part >/dev/null && sudo sh -c 'touch /etc/ssh/sshd_config.d/50-k4.conf; grep -vi \"^$1 \" /etc/ssh/sshd_config.d/50-k4.conf > /tmp/k4-sshd.conf; cat /etc/ssh/sshd_config.d/50-k4.conf.part >> /tmp/k4-sshd.conf; mv /tmp/k4-sshd.conf /etc/ssh/sshd_config.d/50-k4.conf; rm /etc/ssh/sshd_config.d/50-k4.conf.part; sshd -t && systemctl reload $UNIT' && echo '$1 is now $2'"; }
+
+do_() {
+  local verb="$1"; shift
+  local name="${1:-}" user host port key jump fw
+  [ -n "$name" ] && [ "$name" != - ] && case "$verb" in sshd|boot|port|pass|root|lan|end|unauth|authadd|block|keycopy|agent-add|agent-del|newkey|qr) ;; *) IFS=$'\t' read -r user host port key jump fw <<<"$(resolve "$name")" ;; esac
+  case "$verb" in
+    connect) printf '%s\t%s\n' "$name" "$(date +%s)" >> "$LAST"; awk -F'\t' '{ l[$1] = $2 } END { for (n in l) print n "\t" l[n] }' "$LAST" > "$LAST.new"; mv "$LAST.new" "$LAST"
+             term ssh "$name"; echo "k4:close" ;;
+    trust) ssh-keyscan -T 5 -p "$port" "$host" >> "$HOME/.ssh/known_hosts" 2>/dev/null && echo "Fingerprint saved to ~/.ssh/known_hosts" ;;
+    replace) ssh-keygen -R "$([ "$port" = 22 ] && echo "$host" || echo "[$host]:$port")" >/dev/null 2>&1; echo "Old key removed from known_hosts" ;;
+    unlock)  # the passphrase in K4_INPUT, through an askpass that only echoes it
+      local ask; ask=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/k4-askpass-XXXXXX"); printf '#!/bin/sh\nprintf "%%s" "$K4_INPUT"\n' > "$ask"; chmod 700 "$ask"
+      if SSH_ASKPASS="$ask" SSH_ASKPASS_REQUIRE=force DISPLAY="${DISPLAY:-:0}" ssh-add -t 1h "$(k="${2/#\~/$HOME}"; [[ $k == */* ]] || k="$HOME/.ssh/$k"; printf '%s' "$k")" </dev/null >/dev/null 2>&1; then echo "${2##*/} added to the agent for 1 h"; else echo "Wrong passphrase"; fi
+      rm -f "$ask" ;;
+    sftp) bg xdg-open "sftp://$user@$host:$port/"; echo "k4:close" ;;
+    copy) printf 'ssh %s' "$name" | wl-copy; echo "Copied  ssh $name" ;;
+    forward) [ -n "${2:-}" ] || { echo "Type a forward like 5432:db:5432"; return; }
+             if ssh -f -N -o ExitOnForwardFailure=yes -L "$2" "$name" 2>/dev/null; then echo "Forwarding localhost:${2%%:*} → ${2#*:} through $name"; else echo "Could not forward $2"; fi ;;
+    mount) command -v sshfs >/dev/null || { echo "Mounting needs sshfs"; return; }
+           mkdir -p "$HOME/mnt/$name"; if sshfs "$name:" "$HOME/mnt/$name" 2>/dev/null; then echo "Mounted $name:~ at ~/mnt/$name"; else echo "Could not mount $name"; fi ;;
+    sendkey) tui_wait "ssh-copy-id -i ${2:-$HOME/.ssh/id_ed25519}.pub $name"; echo "k4:close" ;;
+    edit) local ln; ln=$(grep -niE "^\s*host\s+(.*\s)?$name(\s|$)" "$CONF" 2>/dev/null | head -1 | cut -d: -f1)
+          if [ -z "$ln" ]; then mkdir -p "$HOME/.ssh"; printf '\nHost %s\n  HostName %s\n  User %s\n' "$name" "$host" "$user" >> "$CONF"; ln=$(wc -l < "$CONF"); ln=$((ln - 2)); fi
+          term "${EDITOR:-nvim}" "+$ln" "$CONF"; echo "k4:close" ;;
+    pin) pin_toggle "$name" ;;
+    # this machine as a server (systemd asks for the password through polkit; sshd_config in a terminal)
+    sshd) if [ "$1" = on ]; then systemctl start "$UNIT" && echo "SSH server on" || echo "Could not start sshd"; else systemctl stop "$UNIT" && echo "SSH server off" || echo "Could not stop sshd"; fi ;;
+    boot) if [ "$1" = on ]; then systemctl enable "$UNIT" >/dev/null 2>&1 && echo "Starts at boot"; else systemctl disable "$UNIT" >/dev/null 2>&1 && echo "Does not start at boot"; fi ;;
+    port) tui_wait "printf 'Port %s\n' $1 | sudo tee /etc/ssh/sshd_config.d/40-k4-port.conf >/dev/null && sudo sshd -t && { command -v ufw >/dev/null && sudo ufw limit $1/tcp comment k4-ssh; true; } && sudo systemctl restart $UNIT && echo 'sshd now listens on $1'"; echo "k4:close" ;;
+    pass) sshd_conf PasswordAuthentication "$([ "$1" = on ] && echo yes || echo no)"; echo "k4:close" ;;
+    root) sshd_conf PermitRootLogin "$([ "$1" = on ] && echo yes || echo prohibit-password)"; echo "k4:close" ;;
+    lan) if [ "$1" = on ]; then tui_wait "sudo ufw delete limit 22/tcp; sudo ufw allow from 192.168.0.0/16 to any port 22 proto tcp comment k4-ssh-lan; sudo ufw allow from 100.64.0.0/10 to any port 22 proto tcp comment k4-ssh-lan"
+         else tui_wait "sudo ufw delete allow from 192.168.0.0/16 to any port 22 proto tcp; sudo ufw delete allow from 100.64.0.0/10 to any port 22 proto tcp; sudo ufw limit 22/tcp comment k4-ssh"; fi; echo "k4:close" ;;
+    end) local sid; sid=$(loginctl list-sessions --no-legend 2>/dev/null | awk -v t="$1" '$0 ~ t { print $1; exit }')
+         if [ -n "$sid" ] && loginctl terminate-session "$sid" 2>/dev/null; then echo "Ended the session on $1"; elif pkill -t "$1" 2>/dev/null; then echo "Ended the session on $1"; else echo "Could not end it (another user's: needs sudo)"; fi ;;
+    unauth) sed -i "${1}d" "$HOME/.ssh/authorized_keys" && echo "Removed the key from authorized_keys" ;;
+    authadd) local k; k=$(wl-paste --no-newline 2>/dev/null | head -1)
+             if ssh-keygen -lf - <<<"$k" >/dev/null 2>&1; then echo "$k" >> "$HOME/.ssh/authorized_keys"; chmod 600 "$HOME/.ssh/authorized_keys"; echo "Added ${k##* } to authorized_keys"; else echo "The clipboard has no public key"; fi ;;
+    block) tui_wait "sudo ufw insert 1 deny from $1 comment k4-ssh-block && sudo systemd-run --on-active=24h ufw delete deny from $1 && echo 'Blocked $1 for 24 h'"; echo "k4:close" ;;
+    # my keys
+    keycopy) wl-copy < "$HOME/.ssh/$1.pub" && echo "Copied the public key of $1" ;;
+    agent-add) if ssh-add -t 1h "$HOME/.ssh/$1" </dev/null >/dev/null 2>&1; then echo "$1 added for 1 h"; else echo "k4:passphrase $1"; fi ;;
+    agent-del) ssh-add -d "$HOME/.ssh/$1.pub" >/dev/null 2>&1 && echo "$1 removed from the agent" || echo "Could not remove $1" ;;
+    newkey) tui_wait "ssh-keygen -t ed25519 -C $USER@$(cat /etc/hostname 2>/dev/null || hostname)"; echo "k4:close" ;;
+    qr) command -v qrencode >/dev/null || { echo "Showing a QR needs qrencode"; return; }
+        qrencode -s 8 -o "${XDG_RUNTIME_DIR:-/tmp}/k4-key-qr.png" < "$HOME/.ssh/$1.pub" && bg xdg-open "${XDG_RUNTIME_DIR:-/tmp}/k4-key-qr.png"; echo "k4:close" ;;
+    *) echo "unknown: $verb" ;;
+  esac; }
+
+case "${1:-open}" in
+  data) data ;;
+  check) check "${2:?host}" ;;
+  ping) ping_all; cat "$CACHE/ping.tsv" ;;
+  do) shift; do_ "$@" ;;
+  open) pkill -f '^k4 --ssh' && exit 0
+        data | k4 --ssh ${2:+--open "$2"} ;;
+  *) echo "usage: k4-ssh open [connect|host|keys]|data|check HOST|do VERB ARGS…" >&2; exit 2 ;;
+esac
