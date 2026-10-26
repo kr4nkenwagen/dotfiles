@@ -1622,6 +1622,21 @@ battery_page() {  # the design's battery popup: the charge large, draw, health, 
   item "Open Setup" : "↗" "" "jump=setup"; }
 # the k4 bar's position and background (k4-bar spec reads them), restarted to apply
 bar_pref() { mkdir -p "$STATE"; printf '%s\n' "${K4_VALUE,,}" > "$STATE/$1"; pgrep -f '^k4 --bar' >/dev/null && bg k4-bar; notify "Status bar" "$K4_VALUE"; }
+# a lone window's shape (Hyprland's layout.single_window_aspect_ratio; looknfeel.lua reads the
+# file at start, this applies it at once)
+LONE_RATIOS="Off|Square|4:3|3:2|16:9|21:9"
+lone_now() { cat "$STATE/lone-window" 2>/dev/null || echo 3:2; }
+lone_xy() { case "$1" in Off) echo "1, 0" ;; Square) echo "1, 1" ;; *:*) echo "${1%%:*}, ${1#*:}" ;; *) echo "1.5, 1" ;; esac; }
+lone_set() { local v="${K4_VALUE:-3:2}"; mkdir -p "$STATE"; printf '%s\n' "$v" > "$STATE/lone-window"
+  hyprctl eval "hl.config({ layout = { single_window_aspect_ratio = { $(lone_xy "$v") } } })" >/dev/null 2>&1
+  notify "Lone window" "$([ "$v" = Off ] && echo "full width" || echo "$v")"; }
+# a QR code on screen: pick the area, what it says goes to the clipboard
+qr_scan() { local sel r
+  command -v zbarimg >/dev/null || { notify-send -a Capture "Scanning QR codes needs zbar" "sudo apt install zbar-tools"; return 1; }
+  sel=$(slurp 2>/dev/null) || return 0
+  r=$(grim -g "$sel" - | zbarimg -q --raw -Sdisable -Sqrcode.enable - 2>/dev/null)
+  [ -n "$r" ] || { notify-send -a Capture -u critical "No QR code found" "Select a region containing a QR code"; return 1; }
+  printf '%s' "$r" | wl-copy; notify-send -a Capture "QR code copied" "$r"; }
 bar_pref_now() { local v; v=$(cat "$STATE/$1" 2>/dev/null); v=${v:-${2,,}}; printf '%s' "${v^}"; }
 pp_set() { local i; for i in "${!PP_NAMES[@]}"; do [ "${PP_NAMES[$i]}" = "${K4_VALUE:-}" ] && { powerprofilesctl set "${PP[$i]}" && notify "Power profile" "${PP_NAMES[$i]}"; return; }; done; }
 
@@ -1657,6 +1672,7 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            item "Record output" record_toggle "$([ "$rec" = Stop ] && echo recording)"
            item "Pick color" color_picker ;;
   utilities) command -v emoji-menu >/dev/null && item "Emoji" : "insert or copy · Super+Ctrl+E" emoji
+             item "Scan QR code" qr_scan "pick the area · what it says is copied"
              command -v k4-clip >/dev/null && item "Clipboard history" k4-clip "Super+Ctrl+V"
              command -v k4-notify >/dev/null && item "Notifications" 'k4-notify center' "Super+N" ;;
   toggle) tog "Bar" 'toggle_bar; sleep 0.2; notify Bar "$(onoff bar_running)"' "$(onoff bar_running)"
@@ -1680,7 +1696,8 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
          hdr "Windows"
          item "Font" : "$(font_current 2>/dev/null | sed 's/ Nerd Font Mono$//')" font
          item "Gaps & borders" : "$(case "$(gaps_now)" in 0) echo None ;; 10) echo Medium ;; 16) echo Large ;; *) echo Small ;; esac)" gaps
-         item "Opacity" : "$(opacity_now)" opacity ;;
+         item "Opacity" : "$(opacity_now)" opacity
+         [ "$WM" = hyprland ] && choice "Lone window" lone_set "$(lone_now)" "$LONE_RATIOS" ;;
   display) local b l n a; b=$(bright_pct)
            if [ -n "$b" ]; then
              hdr "Brightness · ${b}%"
@@ -1875,6 +1892,7 @@ if [ -n "$OMARCHY" ]; then
   shot_window() { omarchy-capture-screenshot windows; }
   recording() { pgrep -f '^gpu-screen-recorder' >/dev/null; }
   record_toggle() { if recording; then omarchy-capture-screenrecording --stop-recording; elif [ "${1:-}" = region ]; then omarchy-capture-screenrecording; else omarchy-capture-screenrecording --fullscreen; fi; }
+  qr_scan() { omarchy-capture-qr; }
   color_picker() { pkill hyprpicker || hyprpicker -a; }
   # outputs (Hyprland's monitors; Omarchy keeps their settings in monitors.lua)
   outputs_tsv() { hyprctl -j monitors all 2>/dev/null | jq -r '.[] | [.name, ((.disabled // false) | not | tostring), (.focused | tostring), (.scale | tostring)] | @tsv'; }

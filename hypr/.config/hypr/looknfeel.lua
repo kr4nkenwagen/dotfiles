@@ -36,11 +36,24 @@ hl.config({
 --   },
 -- })
 
+-- A lone window's shape: Style › Lone window in the k4 launcher writes it (Off, Square, 4:3, 3:2,
+-- 16:9, 21:9); 3:2 until it has.
+local function lone_window_ratio()
+	local f = io.open((os.getenv("HOME") or "") .. "/.local/state/sway/lone-window")
+	local v = f and f:read("l") or "3:2"
+	if f then f:close() end
+	if v == "Off" then return { 1, 0 } end -- a y of 0: no ratio, full width
+	if v == "Square" then return { 1, 1 } end
+	local x, y = v:match("^(%d+):(%d+)$")
+	if x then return { tonumber(x), tonumber(y) } end
+	return { 1.5, 1 }
+end
+
 -- https://wiki.hypr.land/Configuring/Basics/Variables/#layout
 hl.config({
 	layout = {
 		--     -- Avoid overly wide single-window layouts on wide screens.
-		single_window_aspect_ratio = { 1.5, 1 },
+		single_window_aspect_ratio = lone_window_ratio(),
 	},
 })
 
