@@ -1229,7 +1229,7 @@ share_rows() { local st dir n first
   item "Received files" 'k4-share received' "${dir/#$HOME/\~}"
   item "Trusted devices" : "${n:-0}${first:+ · $first}" ls-trusted; }
 
-# SSH (k4-ssh, the window on Super+Shift+S): the SSH rows in Network
+# SSH (k4-ssh, the window on Super+Shift+S): the SSH rows in Utilities
 ssh_unit() { systemctl list-unit-files sshd.service >/dev/null 2>&1 && echo sshd || echo ssh; }
 ssh_on() { systemctl is-active -q "$(ssh_unit)"; }
 ssh_server_toggle() { k4-ssh do sshd "$(ssh_on && echo off || echo on)" >/dev/null; notify SSH "$(ssh_on && echo 'Server on' || echo 'Server off')"; }
@@ -1735,7 +1735,8 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
              command -v k4-notify >/dev/null && item "Notifications" 'k4-notify center' "Super+N"
              command -v k4-tray >/dev/null && item "Tray" 'k4-tray popup' "Super+."
              command -v k4-perf >/dev/null && item "System performance" 'k4-perf popup' "Super+Shift+Esc"
-             [ -s "$HOME/.local/state/sway/tray-hidden" ] && stay "Show hidden tray apps" 'rm -f "$HOME/.local/state/sway/tray-hidden"; notify Tray "hidden apps are back"' "$(wc -l < "$HOME/.local/state/sway/tray-hidden") hidden" ;;
+             [ -s "$HOME/.local/state/sway/tray-hidden" ] && stay "Show hidden tray apps" 'rm -f "$HOME/.local/state/sway/tray-hidden"; notify Tray "hidden apps are back"' "$(wc -l < "$HOME/.local/state/sway/tray-hidden") hidden"
+             if command -v k4-ssh >/dev/null; then ssh_rows; fi ;;
   toggle) tog "Bar" 'toggle_bar; sleep 0.2; notify Bar "$(onoff bar_running)"' "$(onoff bar_running)"
           command -v k4-share >/dev/null && tog "Visible to nearby devices" 'k4-share visible toggle >/dev/null; notify LocalSend "$(ls_visible && echo visible || echo hidden)"' "$(ls_visible && echo on || echo off)"
           choice "Status bar" set_bar_kind "$([ "$(bar_kind)" = k4 ] && echo k4 || echo "$BAR_ALT")" "k4|$BAR_ALT"
@@ -1792,7 +1793,6 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            hdr "DNS"
            stay "DNS provider" dns_cycle "$(dns_now)"
            if command -v k4-share >/dev/null; then share_rows; fi
-           if command -v k4-ssh >/dev/null; then ssh_rows; fi
            hdr "More"
            stay "Ethernet" eth_toggle "$(eth_state)"
            item "Open nmtui" 'tui nmtui' ;;
