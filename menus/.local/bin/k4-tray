@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# k4-tray: the system tray (StatusNotifierItem apps: Steam, Discord, Nextcloud…) for k4: the
+# bar's tray module and pinned icons, and the Tray popup (k4 --tray, the Kestrel design's).
+# It talks D-Bus with busctl: the watcher (Omarchy's shell, Waybar, or k4's notification
+# service) lists the apps, each app gives its icon, status, tooltip and menu (dbusmenu).
+#   k4-tray list                    what k4 --tray reads: S/R/L lines, an A line per app
+#   k4-tray menu ITEM [PARENT]      an app's menu (or a submenu) as M lines
+#   k4-tray act ITEM VERB [ARG]     open (left click), secondary (middle), event ID (a menu row),
+#                                   pin, unpin, hide
+#   k4-tray status                  the bar module: chevron, app count, red count of apps needing you
+#   k4-tray pinned N                the bar's Nth pinned app (its icon), empty when there is none
+#   k4-tray pin-click N [menu]      a click on that icon (menu: the right click, the popup at its menu)
+#   k4-tray popup [ITEM]            the popup (from a bar click: under it; again: closes it)
+# ITEM = the bus name and object path the watcher lists ("<name>/<path>").
+export PATH="$HOME/.local/bin:$PATH"
+STATE="$HOME/.local/state/sway"
+PINS="$STATE/tray-pins" HIDDEN="$STATE/tray-hidden"
+SELF=$(command -v k4-tray || echo "$0")
+
+items() {  # the registered items, one a line
+  busctl --user --json=short get-property org.kde.StatusNotifierWatcher /StatusNotifierWatcher \
+    org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems 2>/dev/null | jq -r '.data[]?'; }
+split() {  # split ITEM -> name and path in N and P
+  case "$1" in */*) N=${1%%/*}; P=/${1#*/} ;; *) N=$1; P=/StatusNotifierItem ;; esac; }
+props() {  # props ITEM: the item's properties as one JSON object (values unwrapped)
+  split "$1"
+  busctl --user --json=short --timeout=1 call "$N" "$P" org.freedesktop.DBus.Properties GetAll s org.kde.StatusNotifierItem 2>/dev/null \
+    | jq -c '.data[0] | with_entries(.value |= (.data // null))'; }
+mono() {  # two letters for the app: "Steam" -> St, "KeePassXC" -> Kp
+  local n="${1//[^[:alnum:]]/}"; printf '%s%s' "${n:0:1}" "$(printf '%s' "${n:1:1}" | tr '[:upper:]' '[:lower:]')"; }
+glyph() {  # a Nerd Font icon for the bar, by the app's id
+  case "${1,,}" in
+    *steam*) echo 󰓓 ;; *discord*|*vesktop*) echo 󰙯 ;; *nextcloud*) echo 󰅟 ;; *keepass*) echo 󰌋 ;;
+    *tailscale*) echo 󰖂 ;; *obs*) echo 󰑋 ;; *syncthing*) echo 󰓦 ;; *spotify*) echo 󰓇 ;;
+    *solaar*) echo 󰍽 ;; *docker*) echo 󰡨 ;; *flameshot*) echo 󰹑 ;; *signal*) echo 󰭹 ;;
+    *slack*) echo 󰒱 ;; *telegram*) echo  ;; *dropbox*) echo 󰇣 ;; *1password*) echo 󰟵 ;;
+    *nm-applet*|*network*) echo 󰤨 ;; *blueman*|*bluetooth*) echo 󰂯 ;; *) echo 󰀻 ;;
+  esac; }
+field() { printf '%s' "${1//[$'\t\n']/ }"; }
+
+list() {  # S apps · R/L/X (actions, the list, menus) · A item id title status mono glyph pinned tip
+  local it p id title st tip n=0
+  local -a rows=()
+  while IFS= read -r it; do
+    [ -n "$it" ] || continue
+    p=$(props "$it") || continue
+    [ -n "$p" ] || continue
+    id=$(jq -r '.Id // ""' <<<"$p"); title=$(jq -r '(.Title // "") | select(. != "") // empty' <<<"$p"); title=${title:-$id}
+    grep -qxF "$id" "$HIDDEN" 2>/dev/null && continue
+    st=$(jq -r '.Status // "Active"' <<<"$p")
+    tip=$(jq -r '(.ToolTip // [null,null,"",""]) | [.[2], .[3]] | map(select(. != null and . != "")) | join(" · ")' <<<"$p" | sed 's/<[^>]*>//g')
+    rows+=("$(printf 'A\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$it" "$(field "$id")" "$(field "$title")" "$st" "$(mono "$title")" "$(glyph "$id")" \
+      "$(grep -qxF "$id" "$PINS" 2>/dev/null && echo 1 || echo 0)" "$(field "$tip")")")
+    n=$((n + 1))
+  done < <(items)
+  printf 'S\t%d\n' "$n"
+  printf 'R\t%s act\nL\t%s list\nX\t%s menu\n' "$SELF" "$SELF" "$SELF"
+  [ ${#rows[@]} -gt 0 ] && printf '%s\n' "${rows[@]}"
+  return 0; }
+
+menu() {  # menu ITEM [PARENT]: M id depth kind label enabled toggle state (kind: item sep sub)
+  local mp; split "$1"
+  mp=$(busctl --user --json=short --timeout=1 get-property "$N" "$P" org.kde.StatusNotifierItem Menu 2>/dev/null | jq -r '.data // empty')
+  [ -n "$mp" ] || return 0
+  busctl --user --timeout=1 call "$N" "$mp" com.canonical.dbusmenu AboutToShow i "${2:-0}" >/dev/null 2>&1
+  busctl --user --json=short --timeout=2 call "$N" "$mp" com.canonical.dbusmenu GetLayout iias "${2:-0}" -- -1 0 2>/dev/null | jq -r '
+    def row(d): .data as [$id, $p, $kids] |
+      (($p.visible.data // true) == true) as $vis |
+      if $vis then
+        (if ($p.type.data // "") == "separator" then "sep" elif ($p["children-display"].data // "") == "submenu" or ($kids | length) > 0 then "sub" else "item" end) as $k |
+        ["M", ($id|tostring), (d|tostring), $k, (($p.label.data // "") | gsub("_(?<c>.)"; "\(.c)") | gsub("[\t\n]"; " ")),
+         (if ($p.enabled.data // true) then "1" else "0" end), ($p["toggle-type"].data // ""), (($p["toggle-state"].data // 0) | tostring)] | @tsv,
+        ($kids[] | row(d + 1))
+      else empty end;
+    .data[1][2][] | row(0)'; }
+
+act() {  # act ITEM VERB [ARG]
+  local it="$1" verb="$2" id mp
+  split "$it"
+  case "$verb" in
+    open)  # a left click; an app without Activate (Ayatana ones) shows its menu instead
+      busctl --user --timeout=1 call "$N" "$P" org.kde.StatusNotifierItem Activate ii 0 0 >/dev/null 2>&1 || echo "k4:menu" ;;
+    secondary) busctl --user --timeout=1 call "$N" "$P" org.kde.StatusNotifierItem SecondaryActivate ii 0 0 >/dev/null 2>&1 ;;
+    event)
+      mp=$(busctl --user --json=short --timeout=1 get-property "$N" "$P" org.kde.StatusNotifierItem Menu 2>/dev/null | jq -r '.data // empty')
+      busctl --user --timeout=1 call "$N" "$mp" com.canonical.dbusmenu Event isvu "$3" clicked s "" 0 >/dev/null 2>&1 ;;
+    pin|unpin|hide)
+      id=$(props "$it" | jq -r '.Id // empty'); [ -n "$id" ] || return 1
+      mkdir -p "$STATE"
+      case "$verb" in
+        pin) grep -qxF "$id" "$PINS" 2>/dev/null || echo "$id" >> "$PINS"; echo "Pinned · now on the bar" ;;
+        unpin) grep -vxF "$id" "$PINS" 2>/dev/null > "$PINS.new"; mv "$PINS.new" "$PINS"; echo "Unpinned · back in the tray" ;;
+        hide) echo "$id" >> "$HIDDEN"; echo "Hidden · it keeps running (Utilities › Tray shows it again)" ;;
+      esac
+      true ;;   # the bar's modules read the pins every 3 s
+  esac; }
+
+status() {  # the bar: chevron, count, a red count of apps that need you; hidden with none
+  local n=0 attn=0 it p
+  while IFS= read -r it; do
+    [ -n "$it" ] || continue; p=$(props "$it") || continue; [ -n "$p" ] || continue
+    grep -qxF "$(jq -r '.Id // ""' <<<"$p")" "$HIDDEN" 2>/dev/null && continue
+    n=$((n + 1)); [ "$(jq -r '.Status // ""' <<<"$p")" = NeedsAttention ] && attn=$((attn + 1))
+  done < <(items)
+  [ "$n" -gt 0 ] || { echo '{}'; return; }
+  jq -cn --arg n "$n" --arg a "$attn" '{icon: "󰅃", text: $n, tooltip: ("\($n) tray app" + (if $n != "1" then "s" else "" end) + (if $a != "0" then " · \($a) need you" else "" end) + " · Super+.")}
+    + (if $a != "0" then {text2: $a, text2_tone: "red"} else {} end)'; }
+
+pinned_item() {  # pinned_item N -> the Nth pinned app's item (and its props in PP)
+  local want="$1" k=0 it id
+  [ -s "$PINS" ] || return 1
+  while IFS= read -r it; do
+    [ -n "$it" ] || continue; PP=$(props "$it") || continue; id=$(jq -r '.Id // ""' <<<"$PP")
+    grep -qxF "$id" "$PINS" || continue
+    [ "$k" = "$want" ] && { echo "$it"; return 0; }
+    k=$((k + 1))
+  done < <(items)
+  return 1; }
+
+pinned() {  # the bar's pinned icon N
+  local it id title st tip
+  it=$(pinned_item "$1") || { echo '{}'; return; }
+  PP=$(props "$it"); id=$(jq -r '.Id // ""' <<<"$PP"); title=$(jq -r '.Title // ""' <<<"$PP"); st=$(jq -r '.Status // ""' <<<"$PP")
+  tip=$(jq -r '(.ToolTip // [null,null,"",""]) | [.[2], .[3]] | map(select(. != null and . != "")) | join(" · ")' <<<"$PP" | sed 's/<[^>]*>//g')
+  jq -cn --arg i "$(glyph "$id")" --arg t "${title:-$id}${tip:+ · $tip}" --arg st "$st" \
+    '{icon: $i, tooltip: $t} + (if $st == "NeedsAttention" then {icon_tone: "red"} else {} end)'; }
+
+popup() {  # the Tray popup, under the bar module when a bar click ran us
+  pkill -f '^k4 --tray' && exit 0
+  local pop=() out it verb
+  [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,right,${K4_BAR_POS:-top}")
+  out=$(list | k4 --tray ${1:+--open "$1"} "${pop[@]}") || return 0
+  IFS=$'\t' read -r it verb <<<"$out"
+  [ -n "$it" ] && act "$it" "$verb" >/dev/null; }
+
+case "${1:-popup}" in
+  list) list ;;
+  menu) menu "${2:?item}" "${3:-0}" ;;
+  act) act "${2:?item}" "${3:?verb}" "${4:-}" ;;
+  status) status ;;
+  pinned) pinned "${2:-0}" ;;
+  pin-click)
+    it=$(pinned_item "${2:-0}") || exit 0
+    if [ "${3:-}" = menu ]; then popup "$it"
+    else [ "$(act "$it" open)" = "k4:menu" ] && popup "$it"; fi ;;
+  popup) popup "${2:-}" ;;
+  *) echo "usage: k4-tray list|menu ITEM|act ITEM VERB|status|pinned N|pin-click N [menu]|popup" >&2; exit 2 ;;
+esac
