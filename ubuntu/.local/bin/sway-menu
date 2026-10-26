@@ -709,6 +709,7 @@ desc() { printf 'D\t%s\t%s\t%s\n' "$1" "${2:-}" "${3:-}"; }   # desc TEXT [COUNT
 hints() { local IFS=$'\t'; printf 'Y\t%s\n' "$*"; }   # hints KEY LABEL...: the footer
 slider() { item "$1" "$2" "" "" "slider=${3:-0};step=${4:-5}"; }   # slider LABEL ACTION VALUE [STEP]: ← → runs ACTION with $K4_VALUE
 tog() { local st="$3"; stay "$1" "$2" "${4:-}" "toggle=$st${5:+;$5}"; }   # tog LABEL ACTION on|off [LABEL_TEXT] [FLAGS]: a switch row (Space/Enter flips it)
+choice() { item "$1" "$2" "$3" "" "choice=$4${5:+;$5}"; }   # choice LABEL ACTION VALUE 'A|B|C' [FLAGS]: ← → runs ACTION with $K4_VALUE
 ask_item() { item "$1" "$2" "${3:-}" "" "stay;input=$4"; }   # ask_item LABEL ACTION META 'Prompt|Hint[|password]': k4 asks, ACTION reads $K4_INPUT
 page() { printf 'P\t%s\t%s\t%s\t%q k4-page %s\n' "$1" "$2" "$3" "$SELF" "$1"; }   # page NAME TITLE SUBTITLE: rows from `sway-menu k4-page NAME`
 k4ask() { printf 'k4:input\t%s\t%s\t%s\t%s\n' "$(k4id "$1")" "${2//[$'\t;|']/ }" "${3:-}" "${4:-}"; }   # from a run: ask, then run ACTION with $K4_INPUT
@@ -744,7 +745,7 @@ k4_tree() { local s name key desc icon
     printf 'L\t%q k4-section %s\n' "$SELF" "$s"
     k4_pages "$s"
   done
-  printf 'V\ttheme\tTheme\tApplies to sway, waybar, terminal and k4\t%q k4-view theme\n' "$SELF"
+  printf 'V\ttheme\tTheme\tsway · waybar · terminal\t%q k4-view theme\n' "$SELF"
   printf 'G\twall\tBackground\t%s\t%q k4-view wall\n' "the theme's backgrounds + extras" "$SELF"
   printf 'R\t%q k4-run\n' "$SELF"
 }
@@ -1037,6 +1038,9 @@ ping_both() { local gw r1 r2; gw=$(nmcli -g IP4.GATEWAY dev show "$(primary_dev)
 bt_power_toggle() { if bt_powered; then bluetoothctl power off >/dev/null; else bluetoothctl power on >/dev/null; fi; notify Bluetooth "$(bt_powered && echo on || echo off)"; }
 bt_dev_toggle() { if bluetoothctl info "$1" 2>/dev/null | grep -q "Connected: yes"; then bluetoothctl disconnect "$1" >/dev/null; notify "$2" disconnected
   elif bluetoothctl connect "$1" >/dev/null 2>&1; then notify "$2" connected; else notify "$2" "could not connect"; fi; }
+location_set() { [ "${K4_VALUE:-}" = "$(sway-weather --location)" ] || location_cycle; rm -f "$HOME/.cache/sway-weather-k4.json"; }   # the Location stepper
+units_set() { local want=metric; [ "${K4_VALUE:-}" = "°F" ] && want=imperial
+  [ "$(sway-weather --unit)" = "$want" ] || sway-weather --toggle-units; rm -f "$HOME/.cache/sway-weather-k4.json"; sway-weather >/dev/null; notify Units "${K4_VALUE:-}"; }
 weather_saved() { jq -r '.saved_name // empty' "$HOME/.local/state/sway/weather.json" 2>/dev/null; }
 location_cycle() { local st="$HOME/.local/state/sway/weather.json" n
   if [ "$(sway-weather --location)" = Automatic ]; then
@@ -1226,18 +1230,20 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
              item "Scan & pair…" : "" btscan
              while IFS=$'\t' read -r mac name; do stay "Forget $name" "bluetoothctl remove $mac >/dev/null; notify Bluetooth $(printf %q "Forgot $name")" "" "$(printf 'confirm=Forget %s?|Pair it again to use it.' "$name")"; done < <(bt_devices Paired)
              item "Blueman" 'bg blueman-manager' ;;
-  weather) local k sum loc; local -A row=()
-           while IFS=$'\t' read -r k sum; do row[$k]=$sum; done < <(sway-weather --rows 2>/dev/null)
-           loc=$(sway-weather --location 2>/dev/null)
-           hdr "Forecast"
-           item "Now" 'notify Weather "$(sway-weather --report now)"' "${row[now]:-—}"
-           item "Today" 'notify -t 20000 Weather "$(sway-weather --report day)"' "${row[today]:-—}"
-           item "Tomorrow" 'notify -t 20000 Weather "$(sway-weather --report week)"' "${row[tomorrow]:-—}"
+  weather) # design 03b: the dashboard (now, details, hourly, 7 days), then its settings
+           local loc saved unit up
+           loc=$(sway-weather --location 2>/dev/null); saved=$(weather_saved); unit=$([ "$(sway-weather --unit)" = metric ] && echo °C || echo °F)
+           printf 'O\tweather\n'
+           local wx; wx=$(sway-weather --k4 2>/dev/null)
+           printf '%s\n' "$wx" | grep -v '^WU'; up=$(printf '%s\n' "$wx" | awk -F'\t' '$1 == "WU" { print $2 }')
+           desc "Forecast from open-meteo" "${up:+updated $up}" ""
+           hints "↑↓" "Day / setting" "← →" Change "↵" Run "⌫" Back
            hdr "Settings"
-           if [ "$loc" != Automatic ] || [ -n "$(weather_saved)" ]; then stay "Location" location_cycle "$loc"; fi
-           ask_item "Set location…" weather_search "$([ "$loc" = Automatic ] && [ -z "$(weather_saved)" ] && echo "$loc")" "Location|A city or place name"
-           stay "Units" 'sway-weather --toggle-units; sway-weather >/dev/null; notify Units "$([ "$(sway-weather --unit)" = metric ] && echo °C || echo °F)"' "$([ "$(sway-weather --unit)" = metric ] && echo °C || echo °F)"
-           stay "Refresh" 'rm -f "$HOME/.cache/sway-weather.json"; sway-weather >/dev/null; sway-weather --refresh; notify Weather refreshed' ;;
+           if [ "$loc" != Automatic ] || [ -n "$saved" ]; then
+             choice "Location" location_set "$([ "$loc" = Automatic ] && echo Automatic || echo "$loc")" "Automatic|${saved:-$loc}"
+           else ask_item "Location" weather_search "Automatic" "Location|A city or place name"; fi
+           choice "Units" units_set "$unit" "°C|°F"
+           stay "Refresh" 'sway-weather --k4 refresh >/dev/null 2>&1; sway-weather >/dev/null; sway-weather --refresh; notify Weather "refreshed  ·  $(date +%H:%M)"' "${up:+updated $up}" ;;
   setup) stay "Power profile" pp_cycle "$(pp_now)"
          stay "Keyboard layout" kb_cycle "$(kb_now)"
          hdr "Go to"
