@@ -811,6 +811,9 @@ theme_palettes() {  # theme_palettes DIR...: DIR<TAB>bg,fg,red,green,yellow,blue
 # ---------- k4 pages: the pickers, inside the launcher ----------
 k4_pages() { case "$1" in   # the P/F records of a section (printed after it, so ⌫ and the crumb lead there)
   apps) command -v k4-apps >/dev/null && K4_AS_PAGE=1 k4-apps pages ;;   # the integrations, as pages under Apps
+  capture) command -v emoji-menu >/dev/null && emoji-menu page ;;
+  about) page netspeed "Network speed" "Download, upload and latency against Cloudflare"
+         page diskspeed "Disk speed" "Sequential write and read where your home lives" ;;
   style) printf 'F\tfont\tFont\tApplies to sway, waybar, terminal and k4\t%q k4-page font\n' "$SELF"
          page gaps "Gaps & borders" "Space around windows and their border"
          page opacity Opacity "Terminal and browser background" ;;
@@ -879,6 +882,8 @@ k4_page() { local p="$1"; shift
         while IFS=$'\t' read -r n t; do stay "$n" "copy_val Device $(printf %q "$n")" "$t"; done < <(swaymsg -t get_inputs 2>/dev/null | jq -r '.[] | "\(.name)\t\(.type)"' | sort -u) ;;
   timezone) local cur; cur=$(timedatectl show -p Timezone --value 2>/dev/null)
         timedatectl list-timezones 2>/dev/null | awk -v c="$cur" '{ printf "%s\ttui_wait '\''sudo timedatectl set-timezone %s && echo Timezone: %s'\''\t%s\t%s\n", $0, $0, $0, ($0 == c ? "current" : ""), ($0 == c ? "current" : "") }' | k4rows ;;
+  netspeed) speed_page net ;;
+  diskspeed) speed_page disk ;;
   apt) local q="${1:-}" p; local -A inst=()
         while IFS= read -r p; do inst[$p]=1; done < <(dpkg-query -W -f '${Package}\n' 2>/dev/null)
         apt-cache search --names-only -- "$q" 2>/dev/null | awk '{ print length($1) "\t" $0 }' | sort -n | cut -f2- | head -100 \
@@ -1139,6 +1144,77 @@ audio_rows() {
   stay "Restart audio" 'if command -v omarchy-restart-audio >/dev/null; then omarchy-restart-audio >/dev/null 2>&1; else systemctl --user restart pipewire pipewire-pulse wireplumber; fi; sleep 1; notify Audio restarted' "" "confirm=Restart audio?|Restarts PipeWire. Playing apps may stutter for a moment."
 }
 
+# ---------- Restarts (Update › Restart), as Omarchy's omarchy-restart-* ----------
+restart_audio() {
+  if command -v omarchy-restart-audio >/dev/null; then omarchy-restart-audio >/dev/null 2>&1
+  else timeout 25s systemctl --user restart wireplumber pipewire pipewire-pulse 2>/dev/null \
+    || { systemctl --user kill --signal=KILL wireplumber pipewire pipewire-pulse 2>/dev/null; systemctl --user reset-failed 2>/dev/null; systemctl --user start pipewire pipewire-pulse wireplumber; }; fi
+  sleep 1; notify Audio "$(timeout 5s wpctl status >/dev/null 2>&1 && echo restarted || echo 'restarted, but not answering yet')"; }
+restart_wifi() { rfkill unblock wifi 2>/dev/null; nmcli networking on 2>/dev/null; nmcli radio wifi on 2>/dev/null; nmcli device wifi rescan 2>/dev/null
+  notify Wi-Fi "$(rfkill list wifi 2>/dev/null | grep -q 'blocked: yes' && echo 'still blocked (hardware switch?)' || echo 'on and scanning')"; }
+restart_bluetooth() { rfkill unblock bluetooth 2>/dev/null; sleep 0.5; bluetoothctl power on >/dev/null 2>&1
+  notify Bluetooth "$(bt_powered && echo on || echo 'still off (rfkill list bluetooth)')"; }
+restart_trackpad() {  # run in a terminal: sudo
+  local dev found=""
+  for dev in /sys/bus/i2c/drivers/i2c_hid_acpi/i2c-*; do
+    [ -e "$dev" ] || continue; found=1; dev=${dev##*/}
+    echo "Resetting $dev (i2c_hid_acpi unbind/bind)…"
+    echo "$dev" | sudo tee /sys/bus/i2c/drivers/i2c_hid_acpi/unbind >/dev/null; sleep 1
+    echo "$dev" | sudo tee /sys/bus/i2c/drivers/i2c_hid_acpi/bind >/dev/null
+  done
+  for mod in intel_quicki2c psmouse; do
+    if lsmod | grep -q "^$mod "; then found=1; echo "Reloading $mod…"; sudo modprobe -r "$mod" && sudo modprobe "$mod"; fi
+  done
+  [ -n "$found" ] && echo Done || echo "No I2C or PS/2 touchpad driver found to reset."
+  printf '\n[done] press enter to close'; read -r _; }
+
+# ---------- Speed tests (About › Network speed / Disk speed) ----------
+SPEED="$HOME/.cache/sway-menu"
+speed_summary() {  # the last result, for the About rows
+  local f="$SPEED/$1speed.tsv" t a b c d; [ -s "$f" ] || { echo "not run yet"; return; }
+  IFS=$'\t' read -r t a b c d < "$f"
+  if [ "$1" = net ]; then echo "↓ $a · ↑ $b Mbit/s"; else echo "write $a · read $b"; fi; }
+net_speed_run() {  # Cloudflare's speed endpoints, curl only: latency (best of 5), 25 MB down, 10 MB up
+  local base=https://speed.cloudflare.com lat down up colo
+  lat=$(for i in 1 2 3 4 5; do curl -so /dev/null -w '%{time_namelookup} %{time_connect}\n' --max-time 3 "$base/__down?bytes=0"; done \
+        | awk '{ v = ($2 - $1) * 1000; if (v > 0 && (m == "" || v < m)) m = v } END { if (m != "") printf "%.0f", m }')
+  [ -n "$lat" ] || { notify "Network speed" "no connection to speed.cloudflare.com"; return 1; }
+  down=$(curl -so /dev/null -w '%{speed_download}' --max-time 20 "$base/__down?bytes=25000000" | awk '{ printf "%.0f", $1 * 8 / 1e6 }')
+  up=$(head -c 10000000 /dev/zero | curl -so /dev/null -w '%{speed_upload}' --max-time 20 --data-binary @- "$base/__up" | awk '{ printf "%.0f", $1 * 8 / 1e6 }')
+  colo=$(curl -s --max-time 3 "$base/cdn-cgi/trace" | awk -F= '$1 == "colo" { print $2 }')
+  mkdir -p "$SPEED"; printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$down" "$up" "$lat" "${colo:-?}" > "$SPEED/netspeed.tsv"
+  notify "Network speed" "↓ $down · ↑ $up Mbit/s · $lat ms"; }
+disk_speed_run() {  # 512 MB written and read back with O_DIRECT (no page cache) next to $HOME
+  local f="$SPEED/disktest.bin" w r dev
+  mkdir -p "$SPEED"
+  [ "$(df --output=avail -k "$SPEED" | tail -1)" -gt 1048576 ] || { notify "Disk speed" "needs 1 GB free"; return 1; }
+  w=$(dd if=/dev/zero of="$f" bs=1M count=512 oflag=direct conv=fdatasync 2>&1 | awk 'END { print $(NF-1), $NF }')
+  r=$(dd if="$f" of=/dev/null bs=1M iflag=direct 2>&1 | awk 'END { print $(NF-1), $NF }')
+  rm -f "$f"
+  dev=$(df --output=source "$HOME" | tail -1)
+  printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$w" "$r" "$dev" "$(df --output=fstype "$HOME" | tail -1)" > "$SPEED/diskspeed.tsv"
+  notify "Disk speed" "write $w · read $r"; }
+speed_page() {  # speed_page net|disk: the last result, and a row that runs the test
+  local f="$SPEED/$1speed.tsv" t a b c d
+  if [ -s "$f" ]; then
+    IFS=$'\t' read -r t a b c d < "$f"
+    if [ "$1" = net ]; then
+      printf 'D\t%s\t\t\n' "Cloudflare · $d · tested $(date -d "@$t" '+%b %-d %H:%M')"
+      hdr "Last test"
+      stay "Download" "copy_val Download '$a Mbit/s'" "$a Mbit/s" "mark=↓;markc=accent"
+      stay "Upload" "copy_val Upload '$b Mbit/s'" "$b Mbit/s" "mark=↑;markc=accent"
+      stay "Latency" "copy_val Latency '$c ms'" "$c ms" "mark=◷"
+    else
+      printf 'D\t%s\t\t\n' "$c ($d) · tested $(date -d "@$t" '+%b %-d %H:%M')"
+      hdr "Last test · 512 MB, no cache"
+      stay "Sequential write" "copy_val Write '$a'" "$a" "mark=↓;markc=accent"
+      stay "Sequential read" "copy_val Read '$b'" "$b" "mark=↑;markc=accent"
+    fi
+  else hdr "Last test"; printf 'E\t%s\n' "Not run yet"; fi
+  hdr "Run"
+  if [ "$1" = net ]; then stay "Run the test" net_speed_run "about 15 s · uses ~35 MB" "current"
+  else stay "Run the test" disk_speed_run "writes 512 MB, then deletes it" "current"; fi; }
+
 K4_CONFIRM_LOGOUT='confirm=Log out?|Closes every window and ends the sway session.'
 K4_CONFIRM_REBOOT='confirm=Reboot now?|Unsaved work in open apps will be lost.'
 K4_CONFIRM_SHUTDOWN='confirm=Shut down now?|Unsaved work in open apps will be lost.'
@@ -1168,7 +1244,8 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            item "Screenshot output" shot
            item "Record region" 'record_toggle region' "$([ "$rec" = Stop ] && echo recording || echo wf-recorder)"
            item "Record output" record_toggle "$([ "$rec" = Stop ] && echo recording)"
-           item "Pick color" color_picker ;;
+           item "Pick color" color_picker
+           command -v emoji-menu >/dev/null && item "Emoji" : "insert or copy" emoji ;;
   toggle) tog "Waybar" 'toggle_bar; notify Waybar "$(onoff pgrep -x waybar)"' "$(onoff pgrep -x waybar)"
           tog "Starfield" 'starfield-toggle >/dev/null; notify Starfield "$(starfield-toggle status)"' "$(starfield-toggle status 2>/dev/null || echo on)"
           tog "Launcher" toggle_launcher "$([ "$LAUNCHER" = k4 ] && echo on || echo off)"
@@ -1292,6 +1369,13 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            hdr "Remove"
            ask_item "Remove package…" pkg_installed_search apt "Remove which package|Filters the installed packages" ;;
   update) item "System packages" "tui_wait 'sudo apt update && sudo apt full-upgrade'" apt
+          item "Firmware" "tui_wait 'command -v fwupdmgr >/dev/null || sudo apt install -y fwupd; fwupdmgr refresh --force; sudo fwupdmgr update'" fwupd
+          hdr "Restart"
+          stay "Audio" restart_audio "PipeWire" "confirm=Restart audio?|Restarts PipeWire. Playing apps may stutter for a moment."
+          stay "Wi-Fi" restart_wifi "unblock · radio on · rescan"
+          stay "Bluetooth" restart_bluetooth "unblock · power on"
+          item "Trackpad" "tui_wait $(printf %q "$SELF") restart-trackpad" "reloads the driver · sudo"
+          hdr "Dotfiles"
           item "Update dotfiles" "tui_wait \"cd $(printf %q "$DOTFILES") && git pull --ff-only && bash init.sh\"" "git pull" ;;
   system) item "Lock" lock swaylock
           item "Suspend" 'systemctl suspend'
@@ -1299,7 +1383,9 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
           item "Reboot" 'systemctl reboot' "" "" "$K4_CONFIRM_REBOOT"
           item "Shut down" 'systemctl poweroff' "" "" "$K4_CONFIRM_SHUTDOWN" ;;
   config) if command -v config-menu >/dev/null; then config-menu section; else hdr "config-menu is not installed (stow menus)"; fi ;;   # menus/.local/bin/config-menu
-  about) item "System info" about
+  about) item "Network speed" : "$(speed_summary net)" netspeed
+         item "Disk speed" : "$(speed_summary disk)" diskspeed
+         item "System info" about
          item "Hardware" "tui_wait 'lscpu | head -20; echo; free -h; echo; lsblk'"
          item "Disk usage" "tui_wait 'command -v duf >/dev/null && duf || df -h'"
          stay "Kestrel version" 'notify k4 "$(k4 --version)"' ;;
@@ -1342,6 +1428,7 @@ case "${1:-}" in
   wallpaper-random) bg_random ;;
   wallpaper-restore) wallpaper_restore ;;
   thumbs-warm) thumbs_warm ;;
+  restart-trackpad) restart_trackpad ;;
   bg-time) # bg-time [FILE]: set a background (default: a random one) and print each step's time
     f=${2:-$(bg_list | shuf -n1)}; : > "$PICK_LOG.time"; PICK_LOG="$PICK_LOG.time"; s0=$(ms)
     set_background "$f"; cat "$PICK_LOG"; echo "total $(( $(ms) - s0 )) ms"; rm -f "$PICK_LOG" ;;

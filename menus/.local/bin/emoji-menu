@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# emoji-menu: an emoji picker in k4. Type to search names and keywords; Enter puts the emoji
+# into the focused window (wtype) and on the clipboard. Recently used ones come first.
+#   emoji-menu          open it
+#   emoji-menu rows     the page's lines (the Sway menu shows them as Capture › Emoji)
+#   emoji-menu page     its P record, for hosting menus
+K4_NAME=emoji-menu K4_ID=emoji K4_TITLE=Emoji K4_KEY=J K4_ICON=󰞅 K4_DESC="Type a name or keyword, Enter inserts it"
+. "$HOME/.local/share/k4/lib.sh"
+DATA="$HOME/.local/share/k4/emoji.tsv"
+RECENT="$K4_STATE/emoji-recent"
+available() { [ -f "$DATA" ]; }
+summary() { echo "$(grep -vc '^#' "$DATA") emoji"; }
+
+insert() {  # insert EMOJI: remember it, copy it, and type it where the focus is
+  local e="$1"
+  mkdir -p "$K4_STATE"; { printf '%s\n' "$e"; grep -vxF -- "$e" "$RECENT" 2>/dev/null | head -23; } > "$RECENT.new" && mv "$RECENT.new" "$RECENT"
+  printf '%s' "$e" | wl-copy
+  if command -v wtype >/dev/null; then sleep 0.15; wtype -- "$e" 2>/dev/null; fi   # after k4 is gone and focus is back
+}
+
+rows() {  # recent first, then every emoji by group; one perl pass makes the ids
+  printf 'D\t%s\t%s\t%s\n' "Type a name or keyword · Enter inserts and copies" "$(grep -vc '^#' "$DATA") emoji" "Search emoji…"
+  printf 'Y\t↑↓\tMove\t↵\tInsert\t⌫\tBack\n'
+  perl -MMIME::Base64 -F'\t' -lane '
+    BEGIN { open(my $r, "<", $ENV{RECENT}) and do { my $i = 0; while (<$r>) { chomp; $rank{$_} = $i++ } } }
+    next if /^#/;
+    my ($e, $name, $group, $kw) = @F; $kw //= "";
+    (my $q = $e) =~ s/'"'"'/'"'"'\\'"'"''"'"'/g;
+    my $id = encode_base64("emoji-menu run " . encode_base64("insert '"'"'$q'"'"'", ""), "");
+    (my $find = "$name $kw") =~ s/;/,/g;
+    my $line = join("\t", "A", $id, "$e  $name", "", "", "find=$find");
+    if (exists $rank{$e}) { $recent[$rank{$e}] = $line } else { push @{$by{$group}}, $line; push @order, $group unless $seen{$group}++ }
+    END {
+      my @r = grep { defined } @recent;
+      if (@r) { print "H\tRecent"; print for @r }
+      for my $g (@order) { print "H\t$g"; print for @{$by{$g}} }
+    }' "$DATA"
+}
+page() { printf 'P\temoji\tEmoji\t%s\temoji-menu rows\n' "Type a name or keyword, Enter inserts it"; }
+section() { rows; }
+k4_tree() { page; printf 'R\tk4-exec\n'; }
+case "${1:-}" in
+  rows) RECENT=$RECENT rows ;;
+  page) page ;;
+  "") out=$(RECENT=$RECENT k4_tree | k4 --menu --open emoji) || exit 0
+      k4-exec "$out" ;;
+  *) RECENT=$RECENT k4_dispatch "$@" ;;
+esac
