@@ -1249,7 +1249,9 @@ opacity_set() { local v="$1"
   mkdir -p "$HOME/.local/state/omarchy/current"
   printf 'background-opacity = %s\n' "$v" > "$HOME/.local/state/omarchy/current/ghostty-opacity.conf"
   printf '%s\n' "$v" > "$HOME/.config/qutebrowser/opacity"
-  pkill -SIGUSR2 -x ghostty 2>/dev/null; command -v theme-sync-qutebrowser >/dev/null && theme-sync-qutebrowser; notify "Opacity" "$v"; }
+  pkill -SIGUSR2 -x ghostty 2>/dev/null; command -v theme-sync-qutebrowser >/dev/null && theme-sync-qutebrowser
+  pgrep -f '^k4 --bar' >/dev/null && setsid -f "$HOME/.local/bin/k4-bar" >/dev/null 2>&1 </dev/null  # k4 follows the opacity too
+  notify "Opacity" "$v"; }
 mode_pick() { local o rows=() i; o=$(focused_output); [ -n "$o" ] || return
   mapfile -t rows < <(swaymsg -t get_outputs | jq -r --arg o "$o" '.[] | select(.name == $o) | .modes[] | "\(.width)x\(.height)@\(.refresh / 1000 | floor)Hz"' | awk '!seen[$0]++')
   i=$(pick_index "Mode ($o)" "${rows[@]}") && [[ $i =~ ^[0-9]+$ ]] || return
