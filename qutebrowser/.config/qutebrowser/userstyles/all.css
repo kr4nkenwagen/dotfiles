@@ -1,20 +1,5 @@
-:root {
-  --bg_default: #1a1b26;
-  --bg_lighter: #1a1b26;
-  --bg_selections: #3e4451;
-  --fg_disabled: #414868;
-  --fg_default: #c0caf45;
-  --bg_lightest: #c0caf45;
-  --red: #f7768e;
-  --orange: #d19a66;
-  --yellow: #b9f27c;
-  --green: #bb9af7;
-  --blue: #0db9d7;
-  --teal: #ff9e64;
-  --purple: #c7a9ff;
-  --font: FiraCode Nerd Font;
-  --bg_translucent: rgba(26, 27, 38, 0.5);
-}
+/* Colours come from the theme: the variables are in theme-*.css, which config.py writes
+   from the current theme and loads before this file. */
 a {
   color: var(--blue) !important;
   font-family: var(--font)!important;
@@ -43,12 +28,12 @@ ytd-app:not(#\9) {
 }
 input,
 textarea {
-  background-color: var(bg_default) !important;
+  background-color: var(--bg_default) !important;
   color: var(--fg_default) !important;
 }
 blockquote,
 pre {
-  background-color: var(bg_default) !important;
+  background-color: var(--bg_default) !important;
   color: var(--fg_default) !important;
 }
 code {
@@ -63,7 +48,7 @@ img {
   margin: 0.25em;
 }
 .buttons {
-  background-color: var(bg_default) !important;
+  background-color: var(--bg_default) !important;
   box-shadow: 0 0 10px var(--orange);
   color: var(--orange) !important;
   font-family: var(--font);
@@ -87,7 +72,7 @@ img {
   text-align: center;
 }
 #tabs {
-  background-color: var(bg_default) !important;
+  background-color: var(--bg_default) !important;
   float: left;
   margin: 0px 0px 20px 0px;
   padding: 0;
@@ -127,7 +112,7 @@ img {
   text-align: right;
 }
 blockquote {
-  background-color: var(bg_default) !important;
+  background-color: var(--bg_default) !important;
   padding-left: 0.75em;
   padding-right: 0.75em;
   padding-top: 0.01em;
@@ -198,7 +183,7 @@ a:hover {
   text-decoration: underline;
 }
 #minitoc {
-  background-color: var(bg_default) !important;
+  background-color: var(--bg_default) !important;
   position: fixed;
   bottom: 5em;
   left: -5.5em;

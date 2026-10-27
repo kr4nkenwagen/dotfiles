@@ -1,0 +1,478 @@
+/* Jira and the other Atlassian apps (Confluence, Jira Service Management), Cloud and self-hosted,
+   in the current theme's colours. They paint with Atlassian's design tokens (--ds-*), which their
+   theme sets on <html data-color-mode> (Jira Cloud may set none and use the tokens' fallbacks
+   in an inline style on <html>: that marks it too); here each token points at a theme variable (--t-*, from
+   theme-*.css), so the page follows theme switches. !important beats Atlassian's own theme rules.
+   Accent colours (panels, lozenges, labels) take the theme's colour of the same family.
+   Older self-hosted Jira without tokens gets the AUI rules at the end. */
+
+html:is([data-color-mode], [style*="--ds-"]) {
+  /* surfaces */
+  --ds-surface: var(--t-bg) !important;
+  --ds-surface-hovered: var(--t-hover) !important;
+  --ds-surface-pressed: var(--t-pressed) !important;
+  --ds-surface-sunken: var(--t-sunken) !important;
+  --ds-surface-raised: var(--t-raised) !important;
+  --ds-surface-raised-hovered: var(--t-hover) !important;
+  --ds-surface-raised-pressed: var(--t-pressed) !important;
+  --ds-surface-overlay: var(--t-overlay) !important;
+  --ds-surface-overlay-hovered: var(--t-hover) !important;
+  --ds-surface-overlay-pressed: var(--t-pressed) !important;
+  --ds-background-input: var(--t-sunken) !important;
+  --ds-background-input-hovered: var(--t-raised) !important;
+  --ds-background-input-pressed: var(--t-bg) !important;
+  --ds-background-disabled: var(--t-raised) !important;
+  --ds-blanket: rgba(0, 0, 0, 0.5) !important;
+  --ds-skeleton: var(--t-hover) !important;
+  --ds-skeleton-subtle: var(--t-raised) !important;
+
+  /* text, links and icons */
+  --ds-text: var(--t-fg) !important;
+  --ds-text-subtle: var(--t-fg-subtle) !important;
+  --ds-text-subtlest: var(--t-fg-subtlest) !important;
+  --ds-text-disabled: var(--t-fg-disabled) !important;
+  --ds-text-inverse: var(--t-bg) !important;
+  --ds-text-selected: var(--t-accent-text) !important;
+  --ds-text-brand: var(--t-accent-text) !important;
+  --ds-link: var(--t-accent-text) !important;
+  --ds-link-pressed: var(--t-accent-press) !important;
+  --ds-link-visited: var(--t-magenta) !important;
+  --ds-icon: var(--t-fg-subtle) !important;
+  --ds-icon-subtle: var(--t-fg-subtlest) !important;
+  --ds-icon-subtlest: var(--t-fg-subtlest) !important;
+  --ds-icon-disabled: var(--t-fg-disabled) !important;
+  --ds-icon-inverse: var(--t-bg) !important;
+  --ds-icon-selected: var(--t-accent) !important;
+  --ds-icon-brand: var(--t-accent) !important;
+
+  /* borders */
+  --ds-border: var(--t-border) !important;
+  --ds-border-bold: var(--t-border-bold) !important;
+  --ds-border-input: var(--t-border-bold) !important;
+  --ds-border-disabled: var(--t-border) !important;
+  --ds-border-focused: var(--t-accent) !important;
+  --ds-border-selected: var(--t-accent) !important;
+  --ds-border-brand: var(--t-accent) !important;
+
+  /* neutral and selected backgrounds (buttons, rows, chips) */
+  --ds-background-neutral: var(--t-raised) !important;
+  --ds-background-neutral-hovered: var(--t-hover) !important;
+  --ds-background-neutral-pressed: var(--t-pressed) !important;
+  --ds-background-neutral-subtle: transparent !important;
+  --ds-background-neutral-subtle-hovered: var(--t-hover) !important;
+  --ds-background-neutral-subtle-pressed: var(--t-pressed) !important;
+  --ds-background-neutral-bold: var(--t-fg-subtle) !important;
+  --ds-background-neutral-bold-hovered: var(--t-fg) !important;
+  --ds-background-neutral-bold-pressed: var(--t-fg) !important;
+  --ds-background-selected: var(--t-selected) !important;
+  --ds-background-selected-hovered: var(--t-selected-hover) !important;
+  --ds-background-selected-pressed: var(--t-selected-press) !important;
+  --ds-background-selected-bold: var(--t-accent) !important;
+  --ds-background-selected-bold-hovered: var(--t-accent-hover) !important;
+  --ds-background-selected-bold-pressed: var(--t-accent-press) !important;
+
+  /* brand: the theme's accent (primary buttons, the create button, focus) */
+  --ds-background-brand-bold: var(--t-accent) !important;
+  --ds-background-brand-bold-hovered: var(--t-accent-hover) !important;
+  --ds-background-brand-bold-pressed: var(--t-accent-press) !important;
+  --ds-background-brand-subtlest: var(--t-selected) !important;
+  --ds-background-brand-subtlest-hovered: var(--t-selected-hover) !important;
+  --ds-background-brand-subtlest-pressed: var(--t-selected-press) !important;
+  --ds-text-inverse-brand: var(--t-on-accent) !important;
+
+  /* status: lozenges, flags, banners, priorities */
+  --ds-background-danger: var(--t-danger-subtle) !important;
+  --ds-background-danger-hovered: var(--t-danger-subtle-hover) !important;
+  --ds-background-danger-bold: var(--t-red) !important;
+  --ds-background-danger-bold-hovered: var(--t-danger-bold-hover) !important;
+  --ds-text-danger: var(--t-danger-text) !important;
+  --ds-icon-danger: var(--t-red) !important;
+  --ds-border-danger: var(--t-red) !important;
+  --ds-background-warning: var(--t-warning-subtle) !important;
+  --ds-background-warning-hovered: var(--t-warning-subtle-hover) !important;
+  --ds-background-warning-bold: var(--t-yellow) !important;
+  --ds-background-warning-bold-hovered: var(--t-warning-bold-hover) !important;
+  --ds-text-warning: var(--t-warning-text) !important;
+  --ds-icon-warning: var(--t-yellow) !important;
+  --ds-border-warning: var(--t-yellow) !important;
+  --ds-background-success: var(--t-success-subtle) !important;
+  --ds-background-success-hovered: var(--t-success-subtle-hover) !important;
+  --ds-background-success-bold: var(--t-green) !important;
+  --ds-background-success-bold-hovered: var(--t-success-bold-hover) !important;
+  --ds-text-success: var(--t-success-text) !important;
+  --ds-icon-success: var(--t-green) !important;
+  --ds-border-success: var(--t-green) !important;
+  --ds-background-information: var(--t-info-subtle) !important;
+  --ds-background-information-hovered: var(--t-info-subtle-hover) !important;
+  --ds-background-information-bold: var(--t-blue) !important;
+  --ds-background-information-bold-hovered: var(--t-info-bold-hover) !important;
+  --ds-text-information: var(--t-info-text) !important;
+  --ds-icon-information: var(--t-blue) !important;
+  --ds-border-information: var(--t-blue) !important;
+  --ds-background-discovery: var(--t-discovery-subtle) !important;
+  --ds-background-discovery-hovered: var(--t-discovery-subtle-hover) !important;
+  --ds-background-discovery-bold: var(--t-magenta) !important;
+  --ds-background-discovery-bold-hovered: var(--t-discovery-bold-hover) !important;
+  --ds-text-discovery: var(--t-discovery-text) !important;
+  --ds-icon-discovery: var(--t-magenta) !important;
+  --ds-border-discovery: var(--t-magenta) !important;
+
+  /* accent colours (panels, lozenges, labels): the theme's, a ladder per family */
+  --ds-background-accent-blue-subtlest: var(--t-blue-subtlest) !important;
+  --ds-background-accent-blue-subtlest-hovered: var(--t-blue-subtlest) !important;
+  --ds-background-accent-blue-subtlest-pressed: var(--t-blue-subtlest) !important;
+  --ds-background-accent-blue-subtler: var(--t-blue-subtler) !important;
+  --ds-background-accent-blue-subtler-hovered: var(--t-blue-subtler) !important;
+  --ds-background-accent-blue-subtler-pressed: var(--t-blue-subtler) !important;
+  --ds-background-accent-blue-subtle: var(--t-blue-subtle) !important;
+  --ds-background-accent-blue-subtle-hovered: var(--t-blue-subtle) !important;
+  --ds-background-accent-blue-subtle-pressed: var(--t-blue-subtle) !important;
+  --ds-background-accent-blue-bolder: var(--t-blue-bolder) !important;
+  --ds-background-accent-blue-bolder-hovered: var(--t-blue-bolder) !important;
+  --ds-background-accent-blue-bolder-pressed: var(--t-blue-bolder) !important;
+  --ds-text-accent-blue: var(--t-blue-text) !important;
+  --ds-text-accent-blue-bolder: var(--t-blue-text) !important;
+  --ds-icon-accent-blue: var(--t-blue) !important;
+  --ds-border-accent-blue: var(--t-blue) !important;
+  --ds-background-accent-teal-subtlest: var(--t-teal-subtlest) !important;
+  --ds-background-accent-teal-subtlest-hovered: var(--t-teal-subtlest) !important;
+  --ds-background-accent-teal-subtlest-pressed: var(--t-teal-subtlest) !important;
+  --ds-background-accent-teal-subtler: var(--t-teal-subtler) !important;
+  --ds-background-accent-teal-subtler-hovered: var(--t-teal-subtler) !important;
+  --ds-background-accent-teal-subtler-pressed: var(--t-teal-subtler) !important;
+  --ds-background-accent-teal-subtle: var(--t-teal-subtle) !important;
+  --ds-background-accent-teal-subtle-hovered: var(--t-teal-subtle) !important;
+  --ds-background-accent-teal-subtle-pressed: var(--t-teal-subtle) !important;
+  --ds-background-accent-teal-bolder: var(--t-teal-bolder) !important;
+  --ds-background-accent-teal-bolder-hovered: var(--t-teal-bolder) !important;
+  --ds-background-accent-teal-bolder-pressed: var(--t-teal-bolder) !important;
+  --ds-text-accent-teal: var(--t-teal-text) !important;
+  --ds-text-accent-teal-bolder: var(--t-teal-text) !important;
+  --ds-icon-accent-teal: var(--t-teal) !important;
+  --ds-border-accent-teal: var(--t-teal) !important;
+  --ds-background-accent-green-subtlest: var(--t-green-subtlest) !important;
+  --ds-background-accent-green-subtlest-hovered: var(--t-green-subtlest) !important;
+  --ds-background-accent-green-subtlest-pressed: var(--t-green-subtlest) !important;
+  --ds-background-accent-green-subtler: var(--t-green-subtler) !important;
+  --ds-background-accent-green-subtler-hovered: var(--t-green-subtler) !important;
+  --ds-background-accent-green-subtler-pressed: var(--t-green-subtler) !important;
+  --ds-background-accent-green-subtle: var(--t-green-subtle) !important;
+  --ds-background-accent-green-subtle-hovered: var(--t-green-subtle) !important;
+  --ds-background-accent-green-subtle-pressed: var(--t-green-subtle) !important;
+  --ds-background-accent-green-bolder: var(--t-green-bolder) !important;
+  --ds-background-accent-green-bolder-hovered: var(--t-green-bolder) !important;
+  --ds-background-accent-green-bolder-pressed: var(--t-green-bolder) !important;
+  --ds-text-accent-green: var(--t-green-text) !important;
+  --ds-text-accent-green-bolder: var(--t-green-text) !important;
+  --ds-icon-accent-green: var(--t-green) !important;
+  --ds-border-accent-green: var(--t-green) !important;
+  --ds-background-accent-lime-subtlest: var(--t-lime-subtlest) !important;
+  --ds-background-accent-lime-subtlest-hovered: var(--t-lime-subtlest) !important;
+  --ds-background-accent-lime-subtlest-pressed: var(--t-lime-subtlest) !important;
+  --ds-background-accent-lime-subtler: var(--t-lime-subtler) !important;
+  --ds-background-accent-lime-subtler-hovered: var(--t-lime-subtler) !important;
+  --ds-background-accent-lime-subtler-pressed: var(--t-lime-subtler) !important;
+  --ds-background-accent-lime-subtle: var(--t-lime-subtle) !important;
+  --ds-background-accent-lime-subtle-hovered: var(--t-lime-subtle) !important;
+  --ds-background-accent-lime-subtle-pressed: var(--t-lime-subtle) !important;
+  --ds-background-accent-lime-bolder: var(--t-lime-bolder) !important;
+  --ds-background-accent-lime-bolder-hovered: var(--t-lime-bolder) !important;
+  --ds-background-accent-lime-bolder-pressed: var(--t-lime-bolder) !important;
+  --ds-text-accent-lime: var(--t-lime-text) !important;
+  --ds-text-accent-lime-bolder: var(--t-lime-text) !important;
+  --ds-icon-accent-lime: var(--t-lime) !important;
+  --ds-border-accent-lime: var(--t-lime) !important;
+  --ds-background-accent-yellow-subtlest: var(--t-yellow-subtlest) !important;
+  --ds-background-accent-yellow-subtlest-hovered: var(--t-yellow-subtlest) !important;
+  --ds-background-accent-yellow-subtlest-pressed: var(--t-yellow-subtlest) !important;
+  --ds-background-accent-yellow-subtler: var(--t-yellow-subtler) !important;
+  --ds-background-accent-yellow-subtler-hovered: var(--t-yellow-subtler) !important;
+  --ds-background-accent-yellow-subtler-pressed: var(--t-yellow-subtler) !important;
+  --ds-background-accent-yellow-subtle: var(--t-yellow-subtle) !important;
+  --ds-background-accent-yellow-subtle-hovered: var(--t-yellow-subtle) !important;
+  --ds-background-accent-yellow-subtle-pressed: var(--t-yellow-subtle) !important;
+  --ds-background-accent-yellow-bolder: var(--t-yellow-bolder) !important;
+  --ds-background-accent-yellow-bolder-hovered: var(--t-yellow-bolder) !important;
+  --ds-background-accent-yellow-bolder-pressed: var(--t-yellow-bolder) !important;
+  --ds-text-accent-yellow: var(--t-yellow-text) !important;
+  --ds-text-accent-yellow-bolder: var(--t-yellow-text) !important;
+  --ds-icon-accent-yellow: var(--t-yellow) !important;
+  --ds-border-accent-yellow: var(--t-yellow) !important;
+  --ds-background-accent-orange-subtlest: var(--t-orange-subtlest) !important;
+  --ds-background-accent-orange-subtlest-hovered: var(--t-orange-subtlest) !important;
+  --ds-background-accent-orange-subtlest-pressed: var(--t-orange-subtlest) !important;
+  --ds-background-accent-orange-subtler: var(--t-orange-subtler) !important;
+  --ds-background-accent-orange-subtler-hovered: var(--t-orange-subtler) !important;
+  --ds-background-accent-orange-subtler-pressed: var(--t-orange-subtler) !important;
+  --ds-background-accent-orange-subtle: var(--t-orange-subtle) !important;
+  --ds-background-accent-orange-subtle-hovered: var(--t-orange-subtle) !important;
+  --ds-background-accent-orange-subtle-pressed: var(--t-orange-subtle) !important;
+  --ds-background-accent-orange-bolder: var(--t-orange-bolder) !important;
+  --ds-background-accent-orange-bolder-hovered: var(--t-orange-bolder) !important;
+  --ds-background-accent-orange-bolder-pressed: var(--t-orange-bolder) !important;
+  --ds-text-accent-orange: var(--t-orange-text) !important;
+  --ds-text-accent-orange-bolder: var(--t-orange-text) !important;
+  --ds-icon-accent-orange: var(--t-orange) !important;
+  --ds-border-accent-orange: var(--t-orange) !important;
+  --ds-background-accent-red-subtlest: var(--t-red-subtlest) !important;
+  --ds-background-accent-red-subtlest-hovered: var(--t-red-subtlest) !important;
+  --ds-background-accent-red-subtlest-pressed: var(--t-red-subtlest) !important;
+  --ds-background-accent-red-subtler: var(--t-red-subtler) !important;
+  --ds-background-accent-red-subtler-hovered: var(--t-red-subtler) !important;
+  --ds-background-accent-red-subtler-pressed: var(--t-red-subtler) !important;
+  --ds-background-accent-red-subtle: var(--t-red-subtle) !important;
+  --ds-background-accent-red-subtle-hovered: var(--t-red-subtle) !important;
+  --ds-background-accent-red-subtle-pressed: var(--t-red-subtle) !important;
+  --ds-background-accent-red-bolder: var(--t-red-bolder) !important;
+  --ds-background-accent-red-bolder-hovered: var(--t-red-bolder) !important;
+  --ds-background-accent-red-bolder-pressed: var(--t-red-bolder) !important;
+  --ds-text-accent-red: var(--t-red-text) !important;
+  --ds-text-accent-red-bolder: var(--t-red-text) !important;
+  --ds-icon-accent-red: var(--t-red) !important;
+  --ds-border-accent-red: var(--t-red) !important;
+  --ds-background-accent-magenta-subtlest: var(--t-magenta-subtlest) !important;
+  --ds-background-accent-magenta-subtlest-hovered: var(--t-magenta-subtlest) !important;
+  --ds-background-accent-magenta-subtlest-pressed: var(--t-magenta-subtlest) !important;
+  --ds-background-accent-magenta-subtler: var(--t-magenta-subtler) !important;
+  --ds-background-accent-magenta-subtler-hovered: var(--t-magenta-subtler) !important;
+  --ds-background-accent-magenta-subtler-pressed: var(--t-magenta-subtler) !important;
+  --ds-background-accent-magenta-subtle: var(--t-magenta-subtle) !important;
+  --ds-background-accent-magenta-subtle-hovered: var(--t-magenta-subtle) !important;
+  --ds-background-accent-magenta-subtle-pressed: var(--t-magenta-subtle) !important;
+  --ds-background-accent-magenta-bolder: var(--t-magenta-bolder) !important;
+  --ds-background-accent-magenta-bolder-hovered: var(--t-magenta-bolder) !important;
+  --ds-background-accent-magenta-bolder-pressed: var(--t-magenta-bolder) !important;
+  --ds-text-accent-magenta: var(--t-magenta-text) !important;
+  --ds-text-accent-magenta-bolder: var(--t-magenta-text) !important;
+  --ds-icon-accent-magenta: var(--t-magenta) !important;
+  --ds-border-accent-magenta: var(--t-magenta) !important;
+  --ds-background-accent-purple-subtlest: var(--t-purple-subtlest) !important;
+  --ds-background-accent-purple-subtlest-hovered: var(--t-purple-subtlest) !important;
+  --ds-background-accent-purple-subtlest-pressed: var(--t-purple-subtlest) !important;
+  --ds-background-accent-purple-subtler: var(--t-purple-subtler) !important;
+  --ds-background-accent-purple-subtler-hovered: var(--t-purple-subtler) !important;
+  --ds-background-accent-purple-subtler-pressed: var(--t-purple-subtler) !important;
+  --ds-background-accent-purple-subtle: var(--t-purple-subtle) !important;
+  --ds-background-accent-purple-subtle-hovered: var(--t-purple-subtle) !important;
+  --ds-background-accent-purple-subtle-pressed: var(--t-purple-subtle) !important;
+  --ds-background-accent-purple-bolder: var(--t-purple-bolder) !important;
+  --ds-background-accent-purple-bolder-hovered: var(--t-purple-bolder) !important;
+  --ds-background-accent-purple-bolder-pressed: var(--t-purple-bolder) !important;
+  --ds-text-accent-purple: var(--t-purple-text) !important;
+  --ds-text-accent-purple-bolder: var(--t-purple-text) !important;
+  --ds-icon-accent-purple: var(--t-purple) !important;
+  --ds-border-accent-purple: var(--t-purple) !important;
+  --ds-background-accent-gray-subtlest: var(--t-gray-subtlest) !important;
+  --ds-background-accent-gray-subtlest-hovered: var(--t-gray-subtlest) !important;
+  --ds-background-accent-gray-subtlest-pressed: var(--t-gray-subtlest) !important;
+  --ds-background-accent-gray-subtler: var(--t-gray-subtler) !important;
+  --ds-background-accent-gray-subtler-hovered: var(--t-gray-subtler) !important;
+  --ds-background-accent-gray-subtler-pressed: var(--t-gray-subtler) !important;
+  --ds-background-accent-gray-subtle: var(--t-gray-subtle) !important;
+  --ds-background-accent-gray-subtle-hovered: var(--t-gray-subtle) !important;
+  --ds-background-accent-gray-subtle-pressed: var(--t-gray-subtle) !important;
+  --ds-background-accent-gray-bolder: var(--t-gray-bolder) !important;
+  --ds-background-accent-gray-bolder-hovered: var(--t-gray-bolder) !important;
+  --ds-background-accent-gray-bolder-pressed: var(--t-gray-bolder) !important;
+  --ds-text-accent-gray: var(--t-gray-text) !important;
+  --ds-text-accent-gray-bolder: var(--t-gray-text) !important;
+  --ds-icon-accent-gray: var(--t-gray) !important;
+  --ds-border-accent-gray: var(--t-gray) !important;
+
+  /* status variants: subtler fills (lozenges), subtle borders, bolder text */
+  --ds-background-danger-pressed: var(--t-danger-subtle-hover) !important;
+  --ds-background-danger-subtle: var(--t-danger-subtle-hover) !important;
+  --ds-background-danger-subtler: var(--t-danger-subtle) !important;
+  --ds-background-danger-subtler-hovered: var(--t-danger-subtle-hover) !important;
+  --ds-background-danger-subtler-pressed: var(--t-danger-subtle-hover) !important;
+  --ds-background-danger-bold-pressed: var(--t-danger-bold-hover) !important;
+  --ds-border-danger-subtle: var(--t-danger-subtle-hover) !important;
+  --ds-text-danger-bolder: var(--t-danger-text) !important;
+  --ds-background-warning-pressed: var(--t-warning-subtle-hover) !important;
+  --ds-background-warning-subtle: var(--t-warning-subtle-hover) !important;
+  --ds-background-warning-subtler: var(--t-warning-subtle) !important;
+  --ds-background-warning-subtler-hovered: var(--t-warning-subtle-hover) !important;
+  --ds-background-warning-subtler-pressed: var(--t-warning-subtle-hover) !important;
+  --ds-background-warning-bold-pressed: var(--t-warning-bold-hover) !important;
+  --ds-border-warning-subtle: var(--t-warning-subtle-hover) !important;
+  --ds-text-warning-bolder: var(--t-warning-text) !important;
+  --ds-background-success-pressed: var(--t-success-subtle-hover) !important;
+  --ds-background-success-subtle: var(--t-success-subtle-hover) !important;
+  --ds-background-success-subtler: var(--t-success-subtle) !important;
+  --ds-background-success-subtler-hovered: var(--t-success-subtle-hover) !important;
+  --ds-background-success-subtler-pressed: var(--t-success-subtle-hover) !important;
+  --ds-background-success-bold-pressed: var(--t-success-bold-hover) !important;
+  --ds-border-success-subtle: var(--t-success-subtle-hover) !important;
+  --ds-text-success-bolder: var(--t-success-text) !important;
+  --ds-background-information-pressed: var(--t-info-subtle-hover) !important;
+  --ds-background-information-subtle: var(--t-info-subtle-hover) !important;
+  --ds-background-information-subtler: var(--t-info-subtle) !important;
+  --ds-background-information-subtler-hovered: var(--t-info-subtle-hover) !important;
+  --ds-background-information-subtler-pressed: var(--t-info-subtle-hover) !important;
+  --ds-background-information-bold-pressed: var(--t-info-bold-hover) !important;
+  --ds-border-information-subtle: var(--t-info-subtle-hover) !important;
+  --ds-text-information-bolder: var(--t-info-text) !important;
+  --ds-background-discovery-pressed: var(--t-discovery-subtle-hover) !important;
+  --ds-background-discovery-subtle: var(--t-discovery-subtle-hover) !important;
+  --ds-background-discovery-subtler: var(--t-discovery-subtle) !important;
+  --ds-background-discovery-subtler-hovered: var(--t-discovery-subtle-hover) !important;
+  --ds-background-discovery-subtler-pressed: var(--t-discovery-subtle-hover) !important;
+  --ds-background-discovery-bold-pressed: var(--t-discovery-bold-hover) !important;
+  --ds-border-discovery-subtle: var(--t-discovery-subtle-hover) !important;
+  --ds-text-discovery-bolder: var(--t-discovery-text) !important;
+  --ds-text-warning-inverse: var(--t-bg) !important;
+  --ds-icon-warning-inverse: var(--t-bg) !important;
+
+  /* the rest: subtle accent borders, the boldest brand, inverse and container surfaces */
+  --ds-border-accent-blue-subtle: var(--t-blue-subtle) !important;
+  --ds-border-accent-teal-subtle: var(--t-teal-subtle) !important;
+  --ds-border-accent-green-subtle: var(--t-green-subtle) !important;
+  --ds-border-accent-lime-subtle: var(--t-lime-subtle) !important;
+  --ds-border-accent-yellow-subtle: var(--t-yellow-subtle) !important;
+  --ds-border-accent-orange-subtle: var(--t-orange-subtle) !important;
+  --ds-border-accent-red-subtle: var(--t-red-subtle) !important;
+  --ds-border-accent-magenta-subtle: var(--t-magenta-subtle) !important;
+  --ds-border-accent-purple-subtle: var(--t-purple-subtle) !important;
+  --ds-border-accent-gray-subtle: var(--t-gray-subtle) !important;
+  --ds-background-brand-boldest: var(--t-accent-press) !important;
+  --ds-background-brand-boldest-hovered: var(--t-accent-hover) !important;
+  --ds-background-brand-boldest-pressed: var(--t-accent) !important;
+  --ds-background-inverse-subtle: var(--t-hover) !important;
+  --ds-background-inverse-subtle-hovered: var(--t-pressed) !important;
+  --ds-background-inverse-subtle-pressed: var(--t-pressed) !important;
+  --ds-border-inverse: var(--t-bg) !important;
+  --ds-surface-container: var(--t-raised) !important;
+  --ds-surface-container-hovered: var(--t-hover) !important;
+  --ds-surface-container-pressed: var(--t-pressed) !important;
+  --ds-link-visited-pressed: var(--t-accent-press) !important;
+  --ds--code--bg-color: var(--t-sunken) !important;
+  --ds--code--line-number-bg-color: var(--t-raised) !important;
+}
+
+/* all.css paints every page's root see-through and links in its own colour: in Atlassian
+   apps the root takes the theme's background and links keep the token colour. */
+html:is([data-color-mode], [style*="--ds-"]):not(#\9) { background-color: var(--t-bg) !important; }
+html:is([data-color-mode], [style*="--ds-"]) body { background-color: var(--ds-surface) !important; color: var(--ds-text) !important; }
+html:is([data-color-mode], [style*="--ds-"]) a { color: var(--ds-link) !important; font-family: inherit !important; }
+html:is([data-color-mode], [style*="--ds-"]) body { font-family: var(--ds-font-family-body, "Atlassian Sans", ui-sans-serif, -apple-system, "Segoe UI", Ubuntu, sans-serif) !important; }
+html:is([data-color-mode], [style*="--ds-"]) a:visited { color: var(--ds-link) !important; }
+/* Buttons and lozenges that put text on a coloured fill */
+html:is([data-color-mode], [style*="--ds-"]) [data-testid*="lozenge"] a,
+html:is([data-color-mode], [style*="--ds-"]) button a { color: inherit !important; }
+
+/* all.css gives every site's headings the theme font and an underline: Atlassian's keep theirs. */
+html:is([data-color-mode], [style*="--ds-"]) :is(h1, h2, h3, h4, h5, h6) {
+  font-family: inherit !important;
+  border-bottom: none !important;
+  color: var(--ds-text) !important;
+}
+
+/* Self-hosted Jira (any version): the header, the announcement banner and the issue title take
+   colours from the instance's look-and-feel settings, outside the tokens. */
+body#jira #header .aui-header,
+body#jira #header nav.aui-header {
+  background-color: var(--t-raised) !important;
+  border-bottom: 1px solid var(--t-border) !important;
+}
+body#jira #header .aui-header .aui-nav > li > a,
+body#jira #header .aui-header .aui-nav > li > button,
+body#jira #header .aui-header .aui-dropdown2-trigger {
+  color: var(--t-fg-subtle) !important;
+  background-color: transparent !important;
+}
+body#jira #header .aui-header .aui-nav > li > a:hover { color: var(--t-fg) !important; background-color: var(--t-hover) !important; }
+body#jira #header .aui-header .aui-button-primary,
+body#jira #header #create_link {
+  background-color: var(--t-accent) !important;
+  color: var(--t-on-accent) !important;
+}
+body#jira #announcement-banner,
+body#jira .aui-banner {
+  background-color: var(--t-raised) !important;
+  color: var(--t-fg-subtle) !important;
+  border-color: var(--t-border) !important;
+}
+body#jira #summary-val,
+body#jira .issue-header h1 { color: var(--t-fg) !important; }
+
+/* Self-hosted Jira without design tokens (older Data Center, AUI): the same theme by hand. */
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira #page,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-page-panel,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-page-panel-content,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .issue-view,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .issue-body-content,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira #content {
+  background-color: var(--t-bg) !important;
+  color: var(--t-fg) !important;
+  border-color: var(--t-border) !important;
+}
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira #header,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-header,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-sidebar-wrapper,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-page-panel-nav,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-page-header,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .module > .mod-header,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-dialog2,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-dropdown2,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-inline-dialog-contents,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .ajs-layer {
+  background-color: var(--t-raised) !important;
+  color: var(--t-fg) !important;
+  border-color: var(--t-border) !important;
+}
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira table.aui th,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira table.aui td,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .issue-table tr,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .ghx-issue,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .ghx-column {
+  background-color: var(--t-bg) !important;
+  color: var(--t-fg) !important;
+  border-color: var(--t-border) !important;
+}
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .issue-table tr:hover td,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .ghx-issue:hover,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-dropdown2 a:hover,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-nav > li > a:hover {
+  background-color: var(--t-hover) !important;
+}
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-nav-selected > a,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .issue-table tr.focused td,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .ghx-selected {
+  background-color: var(--t-selected) !important;
+}
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira input,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira textarea,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira select,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .text,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .select2-choice {
+  background-color: var(--t-sunken) !important;
+  color: var(--t-fg) !important;
+  border-color: var(--t-border-bold) !important;
+}
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira a,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira a:visited { color: var(--t-accent-text) !important; }
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-button.aui-button-primary,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira #create_link {
+  background-color: var(--t-accent) !important;
+  color: var(--t-on-accent) !important;
+  border-color: var(--t-accent) !important;
+}
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-button:not(.aui-button-primary):not(.aui-button-link) {
+  background-color: var(--t-raised) !important;
+  color: var(--t-fg) !important;
+  border-color: var(--t-border) !important;
+}
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .description,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-message,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .activity-comment,
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .twixi-block {
+  background-color: var(--t-raised) !important;
+  color: var(--t-fg) !important;
+  border-color: var(--t-border) !important;
+}
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-lozenge-success { background-color: var(--t-green) !important; color: var(--t-bg) !important; }
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-lozenge-current { background-color: var(--t-yellow) !important; color: var(--t-bg) !important; }
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-lozenge-complete { background-color: var(--t-blue) !important; color: var(--t-bg) !important; }
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-lozenge-error { background-color: var(--t-red) !important; color: var(--t-bg) !important; }
+html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-lozenge:not([class*="aui-lozenge-"]) { background-color: var(--t-hover) !important; color: var(--t-fg) !important; }

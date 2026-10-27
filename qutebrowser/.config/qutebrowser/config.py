@@ -40,33 +40,6 @@ def get_font():
                         return parts[1].strip()
     return "monospace"
 
-def load_colors():
-    file_path = os.path.expanduser("~/.config/qutebrowser/userstyles/all.css")
-    if not os.path.exists(file_path):
-        return "", {}
-    with open(file_path, "r", encoding="utf-8") as f:
-        css = f.read()
-    pattern = r"--([\w_]+):\s*(#[0-9A-Fa-f]{6});"
-    colors = dict(re.findall(pattern, css))
-    return css, colors
-
-def save_colors(css: str, colors: dict):
-    file_path = os.path.expanduser("~/.config/qutebrowser/userstyles/all.css")
-    if not os.path.exists(file_path):
-        return
-    for var, hex_color in colors.items():
-        valid_color = clean_hex(hex_color, None)
-        if valid_color:
-            css = re.sub(rf"--{var}:\s*#[0-9A-Fa-f]{{6}};", f"--{var}: {valid_color};", css)
-    font = get_font()
-    if font:
-        css = re.sub(r"--font:\s*[^;]+;", f"--font: {font};", css)
-    if colors.get("bg_translucent"):
-        css = re.sub(r"--bg_translucent:\s*[^;]+;", f"--bg_translucent: {colors['bg_translucent']};", css)
-
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(css)
-
 def youtube_filter(info: interceptor.Request):
     url = info.request_url
     if url.host() == 'www.youtube.com' and url.path() == '/get_video_info' and '&adformat=' in url.query():
@@ -142,6 +115,8 @@ if theme_file_path and os.path.isfile(theme_file_path):
                 semantic[key] = hex_val
             elif key == "selection":
                 semantic["selection"] = hex_val
+            elif key == "accent":
+                semantic["accent"] = hex_val
 
     # Omarchy 4 themes define only semantic names (no color0..15). Map them onto
     # the ANSI slots the same way Omarchy's ghostty.conf template does; explicit
@@ -344,7 +319,11 @@ c.colors.webpage.darkmode.enabled = True
 c.content.blocking.method = 'both'
 c.statusbar.show = 'in-mode'
 c.tabs.show = 'never'
-c.content.user_stylesheets = ['~/.config/qutebrowser/userstyles/all.css']
+# The theme's variables (userstyles/theme-*.css) go first; config.py adds them further down.
+c.content.user_stylesheets = [
+    '~/.config/qutebrowser/userstyles/all.css',
+    '~/.config/qutebrowser/userstyles/atlassian.css',  # Jira, Confluence: Atlassian's design tokens
+]
 # starfield-toggle: the stylesheet sets --qb-starfield, which the userscript polls.
 if not Path("~/.local/state/omarchy/current/starfield.off").expanduser().exists():
     c.content.user_stylesheets.append('~/.config/qutebrowser/userstyles/starfield.css')
@@ -392,24 +371,98 @@ config.bind('<Space>bd', 'bookmark-del {url}')
 config.bind('<Space>bl', 'bookmark-list')
 config.bind(';', 'cmd-set-text :')
 
-# Update CSS userstyle
-css, userstyle = load_colors()
-if userstyle:
-    userstyle["bg_default"] = bg_default
-    userstyle["bg_lighter"] = bg_lighter
-    userstyle["bg_selection"] = bg_selection
-    userstyle["fg_disabled"] = fg_disabled
-    userstyle["fg_default"] = fg_default
-    userstyle["bg_lightest"] = bg_lightest
-    userstyle["red"] = fg_error
-    userstyle["orage"] = bg_hint
-    userstyle["yellow"] = fg_matched_text
-    userstyle["green"] = bg_passthrough_mode
-    userstyle["blue"] = bg_insert_mode
-    userstyle["teal"] = bg_warning
-    userstyle["font"] = get_font()
-    userstyle["bg_translucent"] = bg_translucent
-    save_colors(css, userstyle)
+# ==========================================
+# THE THEME FOR PAGES: userstyles/theme.css
+# ==========================================
+# Every stylesheet (all.css, atlassian.css, starfield.css) reads its colours from the variables
+# written here on each config load, so a theme switch (theme-sync-qutebrowser re-sources this
+# file) recolours pages. The file is generated: it is not tracked.
+def _rgb(h):
+    return tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
+
+def mix(a, b, t):
+    """a blended toward b by t (0..1), as #rrggbb."""
+    (r1, g1, b1), (r2, g2, b2) = _rgb(a), _rgb(b)
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * t) for x, y in ((r1, r2), (g1, g2), (b1, b2)))
+
+def luminance(h):
+    def lin(c):
+        c /= 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (lin(c) for c in _rgb(h))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+theme_dark = luminance(bg_default) < 0.4
+t_red = clean_hex(colors[1], "#f38ba8")
+t_green = clean_hex(colors[2], "#a6e3a1")
+t_yellow = clean_hex(colors[3], "#f9e2af")
+t_blue = clean_hex(colors[4], "#89b4fa")
+t_magenta = clean_hex(colors[5], "#cba6f7")
+t_cyan = clean_hex(colors[6], "#94e2d5")
+t_accent = clean_hex(semantic.get("accent"), t_blue)
+
+def theme_css():
+    bg, fg, acc = bg_default, fg_default, t_accent
+    def contrast(x, y):
+        hi, lo = sorted((luminance(x), luminance(y)), reverse=True)
+        return (hi + 0.05) / (lo + 0.05)
+    on_accent = max((bg, fg), key=lambda t: contrast(t, acc))  # text on an accent-filled button
+    v = {
+        # what all.css has always used (its names, its mapping)
+        "bg_default": bg, "bg_lighter": bg_lighter, "bg_selections": bg_selection,
+        "fg_disabled": fg_disabled, "fg_default": fg, "bg_lightest": bg_lightest,
+        "red": fg_error, "orange": mix(t_red, t_yellow, 0.5), "yellow": fg_matched_text,
+        "green": bg_passthrough_mode, "blue": bg_insert_mode, "teal": bg_warning, "purple": t_magenta,
+        # the theme by role (atlassian.css): surfaces, text, borders, accent, status
+        "t-bg": bg, "t-fg": fg, "t-accent": acc, "t-on-accent": on_accent,
+        "t-sunken": mix(bg, "#000000" if theme_dark else fg, 0.18 if theme_dark else 0.04),
+        "t-raised": mix(bg, fg, 0.05), "t-overlay": mix(bg, fg, 0.08),
+        "t-hover": mix(bg, fg, 0.10), "t-pressed": mix(bg, fg, 0.16),
+        "t-fg-subtle": mix(fg, bg, 0.22), "t-fg-subtlest": mix(fg, bg, 0.42), "t-fg-disabled": mix(fg, bg, 0.58),
+        "t-border": mix(bg, fg, 0.16), "t-border-bold": mix(bg, fg, 0.36),
+        "t-selected": mix(bg, acc, 0.18), "t-selected-hover": mix(bg, acc, 0.26), "t-selected-press": mix(bg, acc, 0.34),
+        "t-accent-hover": mix(acc, fg, 0.15), "t-accent-press": mix(acc, fg, 0.30), "t-accent-text": mix(acc, fg, 0.15),
+        "t-red": t_red, "t-green": t_green, "t-yellow": t_yellow, "t-blue": t_blue, "t-magenta": t_magenta, "t-cyan": t_cyan,
+    }
+    for name, c in (("danger", t_red), ("warning", t_yellow), ("success", t_green), ("info", t_blue), ("discovery", t_magenta)):
+        v[f"t-{name}-subtle"] = mix(bg, c, 0.20)
+        v[f"t-{name}-subtle-hover"] = mix(bg, c, 0.28)
+        v[f"t-{name}-bold-hover"] = mix(c, fg, 0.15)
+        v[f"t-{name}-text"] = mix(c, fg, 0.20)
+    # Atlassian's accent colours (panels, lozenges, labels) from the theme's: a ladder per family
+    orange = mix(t_red, t_yellow, 0.5)
+    for fam, c in (("blue", t_blue), ("teal", t_cyan), ("green", t_green), ("lime", t_green), ("yellow", t_yellow),
+                   ("orange", orange), ("red", t_red), ("magenta", t_magenta), ("purple", t_magenta), ("gray", mix(fg, bg, 0.3))):
+        v[f"t-{fam}-subtlest"] = mix(bg, c, 0.12)
+        v[f"t-{fam}-subtler"] = mix(bg, c, 0.22)
+        v[f"t-{fam}-subtle"] = mix(bg, c, 0.45)
+        v[f"t-{fam}"] = c
+        v[f"t-{fam}-bolder"] = mix(c, fg, 0.15)
+        v[f"t-{fam}-text"] = mix(c, fg, 0.25)
+    lines = [f"  --{k}: {c};" for k, c in v.items()]
+    lines += [f"  --font: {get_font()};", f"  --bg_translucent: {bg_translucent};",
+              f"  --t-scheme: {'dark' if theme_dark else 'light'};"]
+    return "/* Generated by config.py from the current theme: edit config.py, not this file. */\n:root {\n" + "\n".join(lines) + "\n}\n"
+
+# Named by its content: qutebrowser re-reads a stylesheet only when the list changes, so a new
+# theme gets a new name (and the old files go).
+import hashlib
+try:
+    _css = theme_css()
+    _dir = Path("~/.config/qutebrowser/userstyles").expanduser()
+    _theme_css = _dir / f"theme-{hashlib.md5(_css.encode()).hexdigest()[:8]}.css"
+    if not _theme_css.exists():
+        _theme_css.write_text(_css, encoding="utf-8")
+    for old in _dir.glob("theme-*.css"):
+        if old != _theme_css:
+            old.unlink(missing_ok=True)
+    c.content.user_stylesheets = [str(_theme_css)] + [x for x in c.content.user_stylesheets if "/theme" not in x]
+except Exception as e:
+    print(f"qutebrowser config: the theme stylesheet was not written: {e!r}")
+
+# Sites that follow the system's light/dark preference (Jira's "Match browser" theme among
+# them) take the theme's: dark backgrounds ask for dark pages.
+c.colors.webpage.preferred_color_scheme = 'dark' if theme_dark else 'light'
 
 # ==========================================
 # FULL MENU & COMPLETION TEXT COLOR STYLING
