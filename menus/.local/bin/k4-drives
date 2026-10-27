@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# k4-drives: removable drives in k4 (k4 --drives, the Kestrel design's Drives popup), the bar's
+# drives module and the cards when one is plugged in, over UDisks2 (busctl and udisksctl; udiskie
+# or anything else may mount them).
+#   k4-drives window             the popup (from a bar click: under it; again: closes it)
+#   k4-drives data               its data: D lines, R and L (src/drives.odin)
+#   k4-drives act VERB DEV       open mount unmount eject force cancel copy unlock ($K4_INPUT)
+#   k4-drives list               DEV<TAB>KIND<TAB>LABEL<TAB>MODEL<TAB>MOUNT<TAB>STATE, one a filesystem
+#   k4-drives count              how many
+#   k4-drives bar [--follow]     the module's JSON (hidden with none); --follow: again on every change,
+#                                and a card for each drive plugged in
+#   k4-drives newest open|eject  the bar's middle and right click
+#   k4-drives note-act KEY ID    a card's buttons (open, eject, send)
+# Eject unmounts (and locks) everything on the drive, then powers it off. Something holding a file
+# open makes it "busy": the popup names what, and "Close them and eject" asks them to quit first.
+export PATH="$HOME/.local/bin:$PATH"
+SELF=$(command -v k4-drives || echo "$0")
+RUN="${XDG_RUNTIME_DIR:-/tmp}/k4-drives"
+mkdir -p "$RUN"
+
+objects() { [ -n "${K4_DRIVES_FIXTURE:-}" ] && { cat "$K4_DRIVES_FIXTURE"; return; }; busctl --system -j call org.freedesktop.UDisks2 /org/freedesktop/UDisks2 org.freedesktop.DBus.ObjectManager GetManagedObjects 2>/dev/null; }
+# One line a filesystem or locked volume on a removable drive:
+#   dev kind label vendor-model size fstype mountpoint locked(1|0) disk(/dev/sdX) cleartext-dev
+list() {
+  objects | jq -r '
+    def s: if type == "array" then (map(select(. != 0)) | implode) else . end;
+    def v(o; i; k): o[i][k].data;
+    .data[0] as $o |
+    [$o | to_entries[] | select(.value["org.freedesktop.UDisks2.Block"])] as $blocks |
+    $blocks[] | .key as $p | .value as $b |
+    (v($b; "org.freedesktop.UDisks2.Block"; "Drive")) as $drv |
+    ($o[$drv]["org.freedesktop.UDisks2.Drive"] // null) as $d |
+    select($d != null) |
+    select(($d.Removable.data or $d.MediaRemovable.data or $d.Ejectable.data or $d.ConnectionBus.data == "usb" or $d.ConnectionBus.data == "sdio")) |
+    select((v($b; "org.freedesktop.UDisks2.Block"; "HintIgnore") | not) and (v($b; "org.freedesktop.UDisks2.Block"; "HintSystem") | not) or $d.ConnectionBus.data == "usb") |
+    select($b["org.freedesktop.UDisks2.Filesystem"] or $b["org.freedesktop.UDisks2.Encrypted"]) |
+    select((v($b; "org.freedesktop.UDisks2.Block"; "CryptoBackingDevice") // "/") == "/") |
+    (v($b; "org.freedesktop.UDisks2.Block"; "Device") | s) as $dev |
+    ($b["org.freedesktop.UDisks2.Encrypted"] != null) as $enc |
+    (if $enc then (v($b; "org.freedesktop.UDisks2.Encrypted"; "CleartextDevice") // "/") else "/" end) as $clr |
+    (if $clr != "/" then $o[$clr] else $b end) as $fs |
+    (($fs["org.freedesktop.UDisks2.Filesystem"].MountPoints.data // []) | map(s) | first // "") as $mp |
+    (($d.MediaCompatibility.data // []) | map(select(test("^flash_(sd|mmc|cf|ms)"))) | length > 0 or $d.ConnectionBus.data == "sdio") as $sd |
+    [ $dev,
+      (if $sd then "SD" elif ($d.RotationRate.data // 0) > 0 then "HDD" elif ($d.Removable.data | not) and ($d.Size.data // 0) > 200e9 then "SSD" else "USB" end),
+      ((v($fs; "org.freedesktop.UDisks2.Block"; "IdLabel") // "") | if . == "" then ($d.Model.data // "Drive") else . end),
+      ([($d.Vendor.data // ""), ($d.Model.data // "")] | map(select(. != "")) | join(" ")),
+      (v($b; "org.freedesktop.UDisks2.Block"; "Size") // 0 | tostring),
+      ((v($fs; "org.freedesktop.UDisks2.Block"; "IdType") // "") | if $enc and $clr == "/" then "LUKS" else . end),
+      $mp,
+      (if $enc and $clr == "/" then "1" else "0" end),
+      ($d.Id.data // ""),
+      (if $clr != "/" then (v($o[$clr]; "org.freedesktop.UDisks2.Block"; "Device") | s) else "" end)
+    ] | map(tostring | gsub("[\t\n]"; " ")) | join("\t")' 2>/dev/null; }
+
+human() { awk -v b="${1:-0}" 'BEGIN { if (b >= 1e12) printf "%.1f TB", b / 1e12; else if (b >= 1e9) printf "%.0f GB", b / 1e9; else printf "%.0f MB", b / 1e6 }'; }
+disk_of() { local d; d=$(lsblk -no PKNAME "$1" 2>/dev/null | head -1); echo "/dev/${d:-${1#/dev/}}"; }
+fields() {  # fields LINE: sets dev kind label model size fs mp locked id clr (read would merge empty fields)
+  local f; mapfile -t -d $'\t' f < <(printf '%s' "$1")
+  dev=${f[0]:-} kind=${f[1]:-} label=${f[2]:-} model=${f[3]:-} size=${f[4]:-0} fs=${f[5]:-} mp=${f[6]:-} locked=${f[7]:-0} id=${f[8]:-} clr=${f[9]:-}; size=${size%.*}; }
+line_of() { list | awk -F'\t' -v d="$1" '$1 == d'; }
+busy_note() { cat "$RUN/busy-${1//\//_}" 2>/dev/null; }
+
+data() {
+  local l dev kind label model size fs mp locked id clr used use state note f
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    fields "$l"
+    used=-1; use=""
+    if [ -n "$mp" ] && f=$(df -B1 --output=size,used "$mp" 2>/dev/null | tail -1); then
+      read -r s u <<<"$f"; [ "${s:-0}" -gt 0 ] && used=$(awk -v u="$u" -v s="$s" 'BEGIN { printf "%.3f", u / s }') && use="$(human "$u" | sed 's/ [A-Z]*$//') of $(human "$s")"
+    fi
+    state=unmounted; [ -n "$mp" ] && state=mounted; [ "$locked" = 1 ] && state=locked
+    note=""
+    if note=$(busy_note "$dev") && [ -n "$note" ]; then state=busy
+    elif [ -n "$mp" ] && [ "$(awk '{ print $2 }' "/sys/class/block/$(basename "$(disk_of "$dev")")/inflight" 2>/dev/null)" -gt 0 ] 2>/dev/null; then state=writing; note="Writing to it · eject waits until it is done."; fi
+    printf 'D\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$dev" "$kind" "$label" "$model · $(human "$size")${fs:+ · $fs}" "$mp" "$used" "$use" "$state" "$note"
+  done < <(list)
+  # just ejected: safe to remove until unplugged (or a minute)
+  for f in "$RUN"/safe-*; do
+    [ -f "$f" ] || continue
+    [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 60 ] || { rm -f "$f"; continue; }
+    mapfile -t -d $'\t' g < <(tr -d '\n' < "$f"); dev=${g[0]:-} kind=${g[1]:-} label=${g[2]:-} model=${g[3]:-}
+    printf 'D\t%s\t%s\t%s\t%s\t\t-1\t\tsafe\t\n' "$dev" "$kind" "$label" "$model"
+  done
+  printf 'R\t%s act\nL\t%s data\n' "$SELF" "$SELF"; }
+
+holders() {  # holders MOUNTPOINT: "mpv and foot" (what has files open there)
+  fuser -vm "$1" 2>&1 | awk 'NR > 1 && $NF != "kernel" { print $NF }' | sort -u | grep -v '^k4$' | head -3 | paste -sd, | sed 's/,\([^,]*\)$/ and \1/; s/,/, /g'; }
+
+eject() {  # eject DEV: unmount and lock everything on its disk, power it off
+  local dev="$1" disk l d2 kind label model size fs mp locked id clr who
+  disk=$(disk_of "$dev")
+  while IFS= read -r l; do
+    fields "$l"
+    [ "$(disk_of "$dev")" = "$disk" ] || continue
+    if [ -n "$mp" ] && ! udisksctl unmount -b "${clr:-$dev}" >/dev/null 2>&1; then
+      who=$(holders "$mp")
+      printf "Can’t eject: %s %s a file open in %s." "${who:-something}" "$([[ $who == *" and "* ]] && echo have || echo has)" "$mp" > "$RUN/busy-${1//\//_}"
+      echo "Can’t eject $label yet · ${who:-something} still uses it"; echo k4:tone yellow; return 1
+    fi
+    [ -n "$clr" ] && udisksctl lock -b "$dev" >/dev/null 2>&1
+  done < <(list | awk -F'\t' -v d="$disk" 'BEGIN { OFS = "\t" } { print }')
+  l=$(line_of "$dev"); fields "$l"
+  rm -f "$RUN/busy-${1//\//_}"
+  udisksctl power-off -b "$disk" >/dev/null 2>&1 || true
+  printf '%s\t%s\t%s\t%s\n' "$dev" "$kind" "$label" "$model · $(human "$size")" > "$RUN/safe-${dev//\//_}"
+  echo "Ejected $label · safe to remove"; echo k4:tone green; }
+
+act() {
+  local verb="$1" dev="${2:?dev}" l dev_ kind label model size fs mp locked id clr out who
+  l=$(line_of "$dev"); fields "$l"; dev=${2}
+  case "$verb" in
+    open) if [ -z "$mp" ]; then out=$(udisksctl mount -b "$dev" 2>&1) || { echo "Could not mount $label"; echo k4:tone red; return; }
+            mp=$(printf '%s' "$out" | sed -n 's/.* at \(.*\)$/\1/p' | sed 's/\.$//'); fi
+          setsid -f xdg-open "$mp" >/dev/null 2>&1 </dev/null; echo k4:close ;;
+    mount) out=$(udisksctl mount -b "$dev" 2>&1) && echo "Mounted $label at $(printf '%s' "$out" | sed -n 's/.* at \(.*\)$/\1/p' | sed 's/\.$//')" || { echo "Could not mount $label"; echo k4:tone red; } ;;
+    unmount) if udisksctl unmount -b "${clr:-$dev}" >/dev/null 2>&1; then echo "Unmounted $label"
+             else who=$(holders "$mp"); echo "Can’t unmount $label · ${who:-something} still uses it"; echo k4:tone yellow; fi ;;
+    eject) eject "$dev" ;;
+    force) who=$(holders "$mp")
+           [ -n "$mp" ] && fuser -k -TERM -m "$mp" >/dev/null 2>&1; sleep 1
+           if eject "$dev" >/dev/null; then echo "Closed ${who:-what held it}, ejected $label · safe to remove"; echo k4:tone yellow
+           else echo "Still busy · close what uses $mp yourself"; echo k4:tone red; fi ;;
+    cancel) rm -f "$RUN/busy-${dev//\//_}"; echo "Left $label as it is" ;;
+    copy) printf '%s' "${mp:-$dev}" | wl-copy; echo "Copied ${mp:-$dev}" ;;
+    unlock) if out=$(printf '%s' "${K4_INPUT:-}" | udisksctl unlock -b "$dev" --key-file /dev/stdin 2>&1); then
+              clr=$(printf '%s' "$out" | grep -o '/dev/[^ .]*' | tail -1)
+              out=$(udisksctl mount -b "$clr" 2>&1); echo "Unlocked $label · mounted at $(printf '%s' "$out" | sed -n 's/.* at \(.*\)$/\1/p' | sed 's/\.$//')"
+            else echo "Wrong passphrase · try again"; echo k4:tone red; fi ;;
+  esac; }
+
+bar() {
+  local n=0 l dev kind label model size fs mp locked id clr tip="" busy="" safe=""
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue; fields "$l"; n=$((n + 1))
+    [ -n "$(busy_note "$dev")" ] && busy=1
+    tip+="${tip:+ · }$label ($([ -n "$mp" ] && df -h --output=avail "$mp" 2>/dev/null | tail -1 | tr -d ' ' | sed 's/$/ free/' || echo "not mounted"))"
+  done < <(list)
+  for f in "$RUN"/safe-*; do [ -f "$f" ] && [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 5 ] && safe=1; done
+  if [ -n "$busy" ]; then jq -cn --arg t "$tip" '{icon: "󰕓", icon_tone: "yellow", text: "busy", text_tone: "yellow", tooltip: "Can’t eject: something still uses it · \($t)"}'
+  elif [ "$n" -eq 0 ] && [ -n "$safe" ]; then jq -cn '{icon: "󰕓", icon_tone: "accent", text: "✓", tooltip: "Safe to remove"}'
+  elif [ "$n" -eq 0 ]; then echo '{}'
+  else jq -cn --arg t "$tip" --arg n "$([ "$n" -gt 1 ] && echo "$n")" '{icon: "󰕓", text: $n, tooltip: "\($t) · middle click opens, right click ejects the newest"}'; fi; }
+
+notify_new() {  # a card for a drive just plugged in (after the automounter had a moment)
+  local dev="$1" l kind label model size fs mp locked id clr nid
+  sleep 1.5
+  l=$(line_of "$dev"); [ -n "$l" ] || return; fields "$l"
+  nid=$(k4 --notify-ctl "$(printf 'post\t0\tDrives\t%s connected · %s\t%s\t1\t-1\t-1\t\t󰕓\t\t%s\t%s note-act' \
+    "$label" "$(human "$size")" "$model${fs:+ · $fs}${mp:+ · mounted at $mp}" \
+    "$([ "$locked" = 1 ] && echo 'unlock:Unlock' || echo 'open:Open,eject:Eject')$(command -v k4-share >/dev/null && [ -n "$mp" ] && echo ',send:Send to…')" "$SELF")" 2>/dev/null | tr -dc 0-9)
+  [ -n "$nid" ] && printf '%s\n' "$dev" > "$RUN/note-$nid"; }
+follow() {  # the module, again on every UDisks2 change (a card for each new drive); every 30 s a
+  # write checks the bar is still there
+  local before after d rc
+  trap '' PIPE
+  bar || exit 0; before=$(list | cut -f1 | sort)
+  coproc MON { exec gdbus monitor --system --dest org.freedesktop.UDisks2 2>/dev/null; }
+  trap 'kill "$MON_PID" 2>/dev/null' EXIT
+  while :; do
+    read -r -t 30 _ <&"${MON[0]}"; rc=$?
+    [ "$rc" -gt 128 ] || [ "$rc" -eq 0 ] || exit 0
+    [ "$rc" -eq 0 ] && while read -r -t 0.3 _ <&"${MON[0]}"; do :; done
+    bar || exit 0
+    after=$(list | cut -f1 | sort)
+    for d in $(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after")); do (notify_new "$d" &); done
+    before=$after
+  done; }
+
+newest() {  # the drive plugged in last: open it or eject it
+  local dev
+  dev=$(list | cut -f1 | while read -r d; do printf '%s\t%s\n' "$(stat -c %Y "$d" 2>/dev/null || echo 0)" "$d"; done | sort -n | tail -1 | cut -f2)
+  [ -n "$dev" ] || exit 0
+  case "$1" in
+    open) act open "$dev" >/dev/null ;;
+    eject) out=$(act eject "$dev"); notify-send -a Drives "$(printf '%s' "$out" | head -1)" ;;
+  esac; }
+
+note_act() {  # note_act KEY ID: a card's button
+  local dev; dev=$(cat "$RUN/note-$2" 2>/dev/null); [ -n "$dev" ] || exit 0
+  case "$1" in
+    open) act open "$dev" >/dev/null ;;
+    eject) out=$(act eject "$dev"); notify-send -a Drives "$(printf '%s' "$out" | head -1)" ;;
+    send) mp=$(line_of "$dev" | cut -f7); [ -n "$mp" ] && exec k4-share send-file "$mp" ;;
+    unlock) exec "$SELF" window ;;
+  esac; }
+
+window() {
+  pkill -f '^k4 --drives' && exit 0
+  local pop=()
+  [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,${K4_BAR_SIDE:-right},${K4_BAR_POS:-top}")
+  data | k4 --drives "${pop[@]}" >/dev/null; }
+
+case "${1:-window}" in
+  window) window ;;
+  data) data ;;
+  act) act "${2:?verb}" "${3:?dev}" ;;
+  list) list ;;
+  count) list | grep -c . || true ;;
+  bar) if [ "${2:-}" = --follow ]; then follow; else bar; fi ;;
+  newest) newest "${2:?open|eject}" ;;
+  note-act) note_act "${2:?key}" "${3:?id}" ;;
+  *) sed -n '2,16p' "$0" >&2; exit 2 ;;
+esac

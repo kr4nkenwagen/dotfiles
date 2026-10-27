@@ -7,8 +7,11 @@
 #   k4-tray menu ITEM [PARENT]      an app's menu (or a submenu) as M lines
 #   k4-tray act ITEM VERB [ARG]     open (left click), secondary (middle), event ID (a menu row),
 #                                   pin, unpin, hide
-#   k4-tray status                  the bar module: chevron, app count, red count of apps needing you
-#   k4-tray pinned N                the bar's Nth pinned app (its icon), empty when there is none
+#   k4-tray status                  the bar module: chevron, app count, red count of apps needing you,
+#                                   and the chat apps' unread messages summed in a count tag
+#   k4-tray pinned N                the bar's Nth pinned app (its icon, with its count tag), empty when there is none
+#   k4-tray count ID                a chat app's unread messages (Discord, Signal, Telegram, Slack): the
+#                                   number in its window title ("(3) Discord"), else its notifications in k4's history
 #   k4-tray pin-click N [menu]      a click on that icon (menu: the right click, the popup at its menu)
 #   k4-tray popup [ITEM]            the popup (from a bar click: under it; again: closes it)
 # ITEM = the bus name and object path the watcher lists ("<name>/<path>").
@@ -38,6 +41,36 @@ glyph() {  # a Nerd Font icon for the bar, by the app's id
   esac; }
 field() { printf '%s' "${1//[$'\t\n']/ }"; }
 
+# ---------- chat apps: unread counts (the Kestrel design's count tag) ----------
+chat_of() {  # chat_of ID: the window class (CRE) and notification app name (ARE) regexes, lower case
+  case "${1,,}" in
+    *discord*|*vesktop*) CRE='^(discord|vesktop)$'; ARE='^(discord|vesktop)$' ;;
+    *signal*) CRE='^signal$'; ARE='^signal$' ;;
+    *telegram*) CRE='^(org\.telegram\.desktop|telegram-desktop|telegramdesktop)$'; ARE='^telegram( desktop)?$' ;;
+    *slack*) CRE='^slack$'; ARE='^slack$' ;;
+    *) return 1 ;;
+  esac; }
+CLIENTS="" COUNTS="" DND=""
+titles() {  # every window as "class<TAB>title", once per run
+  [ -n "$CLIENTS" ] && return
+  if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then CLIENTS=$(hyprctl clients -j 2>/dev/null | jq -r '.[] | [.class, .title] | @tsv')
+  else CLIENTS=$(swaymsg -t get_tree 2>/dev/null | jq -r '.. | objects | select(.pid? and (.app_id? or .window_properties?)) | [(.app_id // .window_properties.class // ""), (.name // "")] | @tsv'); fi
+  CLIENTS=${CLIENTS:-none}; }
+notes() { [ -n "$COUNTS" ] || COUNTS=$(k4 --notify-ctl counts 2>/dev/null || true); COUNTS=${COUNTS:-none}; }
+dnd_on() { [ -n "$DND" ] || DND=$(k4 --notify-ctl status 2>/dev/null | cut -f2); [ "$DND" = 1 ]; }
+count() {  # count ID -> unread (0 when not a chat app), and the notification app name in NAPP
+  local n1 n2 l
+  NAPP=""
+  chat_of "$1" || { echo 0; return; }
+  titles; notes
+  n1=$(awk -F'\t' -v re="$CRE" 'tolower($1) ~ re && match($2, /\(([0-9]+)\)/) { print substr($2, RSTART + 1, RLENGTH - 2); exit }' <<<"$CLIENTS")
+  l=$(awk -F'\t' -v re="$ARE" 'tolower($1) ~ re { print; exit }' <<<"$COUNTS")
+  NAPP=${l%%$'\t'*}; n2=${l##*$'\t'}; [ -n "$l" ] || n2=0
+  n1=${n1:-0}; n2=${n2:-0}
+  echo $(( n1 > n2 ? n1 : n2 )); }
+tone_of() {  # the tag's tone: quiet under do not disturb, red when the app needs you, else the accent
+  if dnd_on; then echo dnd; elif [ "$1" = NeedsAttention ]; then echo red; else echo ""; fi; }
+
 list() {  # S apps · R/L/X (actions, the list, menus) · A item id title status mono glyph pinned tip
   local it p id title st tip n=0
   local -a rows=()
@@ -49,8 +82,8 @@ list() {  # S apps · R/L/X (actions, the list, menus) · A item id title status
     grep -qxF "$id" "$HIDDEN" 2>/dev/null && continue
     st=$(jq -r '.Status // "Active"' <<<"$p")
     tip=$(jq -r '(.ToolTip // [null,null,"",""]) | [.[2], .[3]] | map(select(. != null and . != "")) | join(" · ")' <<<"$p" | sed 's/<[^>]*>//g')
-    rows+=("$(printf 'A\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$it" "$(field "$id")" "$(field "$title")" "$st" "$(mono "$title")" "$(glyph "$id")" \
-      "$(grep -qxF "$id" "$PINS" 2>/dev/null && echo 1 || echo 0)" "$(field "$tip")")")
+    rows+=("$(printf 'A\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$it" "$(field "$id")" "$(field "$title")" "$st" "$(mono "$title")" "$(glyph "$id")" \
+      "$(grep -qxF "$id" "$PINS" 2>/dev/null && echo 1 || echo 0)" "$(field "$tip")" "$(count "$id")")")
     n=$((n + 1))
   done < <(items)
   printf 'S\t%d\n' "$n"
@@ -78,8 +111,11 @@ act() {  # act ITEM VERB [ARG]
   local it="$1" verb="$2" id mp
   split "$it"
   case "$verb" in
-    open)  # a left click; an app without Activate (Ayatana ones) shows its menu instead
-      busctl --user --timeout=1 call "$N" "$P" org.kde.StatusNotifierItem Activate ii 0 0 >/dev/null 2>&1 || echo "k4:menu" ;;
+    open)  # a left click; an app without Activate (Ayatana ones) shows its menu instead; a chat
+      # app's notifications go once it is open (its count with them)
+      busctl --user --timeout=1 call "$N" "$P" org.kde.StatusNotifierItem Activate ii 0 0 >/dev/null 2>&1 || echo "k4:menu"
+      id=$(props "$it" | jq -r '.Id // empty'); count "$id" >/dev/null
+      [ -n "$NAPP" ] && k4 --notify-ctl "dismiss-app $NAPP" >/dev/null 2>&1; true ;;
     secondary) busctl --user --timeout=1 call "$N" "$P" org.kde.StatusNotifierItem SecondaryActivate ii 0 0 >/dev/null 2>&1 ;;
     event)
       mp=$(busctl --user --json=short --timeout=1 get-property "$N" "$P" org.kde.StatusNotifierItem Menu 2>/dev/null | jq -r '.data // empty')
@@ -95,16 +131,19 @@ act() {  # act ITEM VERB [ARG]
       true ;;   # the bar's modules read the pins every 3 s
   esac; }
 
-status() {  # the bar: chevron, count, a red count of apps that need you; hidden with none
-  local n=0 attn=0 it p
+status() {  # the bar: chevron, count, a red count of apps that need you, the unread summed; hidden with none
+  local n=0 attn=0 unread=0 red="" it p id st c
   while IFS= read -r it; do
     [ -n "$it" ] || continue; p=$(props "$it") || continue; [ -n "$p" ] || continue
-    grep -qxF "$(jq -r '.Id // ""' <<<"$p")" "$HIDDEN" 2>/dev/null && continue
-    n=$((n + 1)); [ "$(jq -r '.Status // ""' <<<"$p")" = NeedsAttention ] && attn=$((attn + 1))
+    id=$(jq -r '.Id // ""' <<<"$p"); grep -qxF "$id" "$HIDDEN" 2>/dev/null && continue
+    st=$(jq -r '.Status // ""' <<<"$p")
+    n=$((n + 1)); [ "$st" = NeedsAttention ] && attn=$((attn + 1))
+    c=$(count "$id"); unread=$((unread + c)); [ "$c" -gt 0 ] && [ "$st" = NeedsAttention ] && red=1
   done < <(items)
   [ "$n" -gt 0 ] || { echo '{}'; return; }
-  jq -cn --arg n "$n" --arg a "$attn" '{icon: "󰅃", text: $n, tooltip: ("\($n) tray app" + (if $n != "1" then "s" else "" end) + (if $a != "0" then " · \($a) need you" else "" end) + " · Super+.")}
-    + (if $a != "0" then {text2: $a, text2_tone: "red"} else {} end)'; }
+  jq -cn --arg n "$n" --arg a "$attn" --argjson u "$unread" --arg tone "$(dnd_on && echo dnd || { [ -n "$red" ] && echo red; })" \
+    '{icon: "󰅃", text: $n, tooltip: ("\($n) tray app" + (if $n != "1" then "s" else "" end) + (if $a != "0" then " · \($a) need you" else "" end) + (if $u > 0 then " · \($u) unread" else "" end) + " · Super+.")}
+    + (if $a != "0" then {text2: $a, text2_tone: "red"} else {} end) + (if $u > 0 then {badge: $u, badge_tone: $tone} else {} end)'; }
 
 pinned_item() {  # pinned_item N -> the Nth pinned app's item (and its props in PP)
   local want="$1" k=0 it id
@@ -122,8 +161,9 @@ pinned() {  # the bar's pinned icon N
   it=$(pinned_item "$1") || { echo '{}'; return; }
   PP=$(props "$it"); id=$(jq -r '.Id // ""' <<<"$PP"); title=$(jq -r '.Title // ""' <<<"$PP"); st=$(jq -r '.Status // ""' <<<"$PP")
   tip=$(jq -r '(.ToolTip // [null,null,"",""]) | [.[2], .[3]] | map(select(. != null and . != "")) | join(" · ")' <<<"$PP" | sed 's/<[^>]*>//g')
-  jq -cn --arg i "$(glyph "$id")" --arg t "${title:-$id}${tip:+ · $tip}" --arg st "$st" \
-    '{icon: $i, tooltip: $t} + (if $st == "NeedsAttention" then {icon_tone: "red"} else {} end)'; }
+  jq -cn --arg i "$(glyph "$id")" --arg t "${title:-$id}${tip:+ · $tip}" --arg st "$st" --argjson c "$(count "$id")" --arg tone "$(tone_of "$st")" \
+    '{icon: $i, tooltip: (if $c > 0 then "\($t) · \($c) unread" else $t end)} + (if $st == "NeedsAttention" then {icon_tone: "red"} else {} end)
+     + (if $c > 0 then {badge: $c, badge_tone: $tone} else {} end)'; }
 
 popup() {  # the Tray popup, under the bar module when a bar click ran us
   pkill -f '^k4 --tray' && exit 0
@@ -139,6 +179,7 @@ case "${1:-popup}" in
   act) act "${2:?item}" "${3:?verb}" "${4:-}" ;;
   status) status ;;
   pinned) pinned "${2:-0}" ;;
+  count) count "${2:?id}" ;;
   pin-click)
     it=$(pinned_item "${2:-0}") || exit 0
     if [ "${3:-}" = menu ]; then popup "$it"

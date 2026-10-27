@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# k4-snap: btrfs snapshots in k4 (k4 --snap, the Kestrel design's System › Snapshots, from
+# Perf › Utilities), over snapper's root config. Listing, taking, comparing, keeping and deleting
+# run as you once your user may (Allow my user: ALLOW_USERS and SYNC_ACL in the config, asked
+# once with sudo); restoring goes through the boot menu (limine-snapper-sync) or snapper rollback.
+#   k4-snap                  the window (also: window)
+#   k4-snap data             its data: S and N lines, R and L (src/snap.odin)
+#   k4-snap act VERB [N…]    compare diff create restore keep release delete keepboot reboot allow list install learn
+#   k4-snap summary          "6 · last: pacman -Syu, today 14:02" for Perf › Utilities
+#   k4-snap ok               exit 0 when snapper answers this user
+export PATH="$HOME/.local/bin:$PATH"
+SELF=$(command -v k4-snap || echo "$0")
+CFG=${K4_SNAP_CONFIG:-root}
+
+bg() { setsid -f "$@" >/dev/null 2>&1 </dev/null; }
+tui_wait() { local cmd="$1; printf '\n[done] press enter to close'; read -r _"
+  if command -v ghostty >/dev/null; then bg ghostty --class=TUI.float -e sh -c "$cmd"; else bg xdg-terminal-exec --app-id=TUI.float sh -c "$cmd"; fi; }
+human() { awk -v b="${1:-0}" 'BEGIN { if (b >= 1e9) printf "%.1f GB", b / 1e9; else if (b >= 1e6) printf "%.0f MB", b / 1e6; else if (b > 0) printf "%.0f KB", b / 1e3 }'; }
+ok() { command -v snapper >/dev/null && snapper -c "$CFG" list >/dev/null 2>&1; }
+fs_ok() { [ "$(findmnt -no FSTYPE / 2>/dev/null)" = btrfs ] && command -v snapper >/dev/null; }
+booted() { grep -oE '\.snapshots/[0-9]+/snapshot' /proc/cmdline 2>/dev/null | grep -oE '[0-9]+' | head -1; findmnt -no OPTIONS / | grep -oE 'subvol=/@/\.snapshots/[0-9]+' | grep -oE '[0-9]+$'; }
+when() {  # when "2026-10-26 14:02:11" -> today 14:02 / yesterday 18:40 / Sat 24 Oct 11:12 / 2 Sep 20:31
+  local t d today; t=$(date -d "$1" +%s 2>/dev/null) || { echo "$1"; return; }
+  d=$(date -d "@$t" +%F); today=$(date +%F)
+  if [ "$d" = "$today" ]; then date -d "@$t" '+today %H:%M'
+  elif [ "$d" = "$(date -d yesterday +%F)" ]; then date -d "@$t" '+yesterday %H:%M'
+  elif [ $(( $(date +%s) - t )) -lt 604800 ]; then date -d "@$t" '+%a %-d %b %H:%M'
+  else date -d "@$t" '+%-d %b %H:%M'; fi; }
+rows() {  # \x1f-separated: number type pre-number date cleanup used-space description (no 0, the running system)
+  snapper -c "$CFG" --csvout list --columns number,type,pre-number,date,cleanup,used-space,description 2>/dev/null \
+    | python3 -c 'import csv,sys
+r = list(csv.reader(sys.stdin))[1:]
+for x in r:
+    if x and x[0] != "0": print("\x1f".join(c.replace("\x1f", " ") for c in x))'; }   # \x1f: read keeps empty fields
+
+data() {
+  local st=ok note="" tool size used avail n b
+  read -r size used avail < <(df -B1 --output=size,used,avail / 2>/dev/null | tail -1)
+  tool="snapper · $CFG · keeps $(sed -n 's/^NUMBER_LIMIT="\(.*\)"/\1/p' "/etc/snapper/configs/$CFG" 2>/dev/null || echo ?)"
+  if ! fs_ok; then
+    st=unsupported; note="/ is $(findmnt -no FSTYPE / 2>/dev/null) on $(findmnt -no SOURCE / 2>/dev/null). Timeshift can copy the system to another disk instead: slower, larger, but it works."
+  elif ! ok; then
+    st=noperm; note="snapper list says “No permissions.” for $USER. Allowing your user once (ALLOW_USERS, SYNC_ACL in /etc/snapper/configs/$CFG) lets k4 list, take and compare snapshots without sudo."
+  fi
+  if [ "$st" = ok ]; then
+    local list total=0
+    list=$(rows)
+    n=$(printf '%s\n' "$list" | grep -c .)
+    while IFS=$'\x1f' read -r _ _ _ _ _ u _; do [ -n "$u" ] && total=$(( total + ${u%.*} )); done <<<"$list"
+    printf 'S\tok\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\n' "$tool" "$(human "$used")" "$([ "$total" -gt 0 ] && human "$total" || echo "$n snapshots")" "$(human "$avail")" \
+      "$(awk -v u="$used" -v s="$size" 'BEGIN { printf "%.3f", (s > 0 ? u / s : 0) }')" "$(awk -v u="$total" -v s="$size" 'BEGIN { printf "%.3f", (s > 0 ? u / s : 0) }')" "$(booted | head -1 | grep . || echo 0)"
+    # newest first; a pre knows its post through the post's pre-number
+    local -A post_of=()
+    while IFS=$'\x1f' read -r num typ pre _; do [ "$typ" = post ] && post_of[$pre]=$num; done <<<"$list"
+    printf '%s\n' "$list" | tac | while IFS=$'\x1f' read -r num typ pre date cleanup usp desc; do
+      [ -n "$num" ] || continue
+      local pair=0 what="$desc"
+      [ "$typ" = post ] && pair=$pre
+      [ "$typ" = pre ] && pair=${post_of[$num]:-0}
+      [ -n "$what" ] || what=$([ "$cleanup" = timeline ] && echo timeline || echo "($typ)")
+      printf 'N\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$num" "$(when "$date")" "$what" "$typ" "$pair" "$(human "${usp%.*}")" "$([ "$cleanup" = timeline ] && echo 1 || echo 0)" "$([ -z "$cleanup" ] && echo 1 || echo 0)"
+    done
+  else
+    printf 'S\t%s\t%s\t\t\t\t0\t0\t0\t%s\n' "$st" "$tool" "$note"
+  fi
+  printf 'R\t%s act\nL\t%s data\n' "$SELF" "$SELF"; }
+
+act() {
+  local verb="$1" n="${2:-}" m="${3:-}" t0 out a="" c="" d="" fa fc fd post
+  case "$verb" in
+    compare)
+      post=0; [ "$(rows | awk -F'\x1f' -v n="$n" '$1 == n { print $2 }')" = pre ] && post=$(rows | awk -F'\x1f' -v n="$n" '$2 == "post" && $3 == n { print $1 }')
+      out=$(snapper -c "$CFG" status "$n..${post:-0}" 2>/dev/null)
+      a=$(grep -c '^+' <<<"$out"); c=$(grep -c '^c' <<<"$out"); d=$(grep -c '^-' <<<"$out")
+      fa=$(grep '^+' <<<"$out" | awk '{ print $2 }' | head -1); fc=$(grep '^c' <<<"$out" | awk '{ print $2 }' | head -1); fd=$(grep '^-' <<<"$out" | awk '{ print $2 }' | head -1)
+      printf 'k4:diff What changed between #%s and %s · %s files\n' "$n" "$([ "${post:-0}" != 0 ] && echo "#$post" || echo now)" "$(( a + c + d ))"
+      [ "$a" -gt 0 ] && printf 'k4:dl +%s\t%s%s\n' "$a" "$fa" "$([ "$a" -gt 1 ] && echo " and $((a - 1)) more")"
+      [ "$c" -gt 0 ] && printf 'k4:dl ~%s\t%s%s\n' "$c" "$fc" "$([ "$c" -gt 1 ] && echo " and $((c - 1)) more")"
+      [ "$d" -gt 0 ] && printf 'k4:dl -%s\t%s%s\n' "$d" "$fd" "$([ "$d" -gt 1 ] && echo " and $((d - 1)) more")"
+      echo k4:noreload ;;
+    diff) post=0; [ "$(rows | awk -F'\x1f' -v n="$n" '$1 == n { print $2 }')" = pre ] && post=$(rows | awk -F'\x1f' -v n="$n" '$2 == "post" && $3 == n { print $1 }')
+          tui_wait "snapper -c $CFG status $n..${post:-0} | less"; echo k4:close ;;
+    create)
+      if ok; then t0=$(date +%s%N)
+        out=$(snapper -c "$CFG" create -c number -p -d "Manual · from k4" 2>&1) || { echo "Could not take a snapshot · $out"; echo k4:tone red; return; }
+        snapper -c "$CFG" cleanup number >/dev/null 2>&1
+        echo "Snapshot #$out taken · $(awk -v d=$(( $(date +%s%N) - t0 )) 'BEGIN { printf "%.1f", d / 1e9 }') s"
+      else tui_wait "sudo snapper -c $CFG create -c number -d 'Manual · from k4' && sudo snapper -c $CFG cleanup number && echo 'Snapshot taken'"; echo k4:close; fi ;;
+    restore)
+      if command -v limine-snapper-restore >/dev/null; then
+        echo "Reboot and pick #$n under Snapshots in the boot menu; k4 then offers to keep it"; echo k4:tone yellow; echo k4:noreload
+      else tui_wait "sudo snapper -c $CFG rollback $n && echo 'Reboot to run #$n'"; echo k4:close; fi ;;
+    keepboot) tui_wait "sudo limine-snapper-restore"; echo k4:close ;;
+    reboot) echo "Rebooting…"; bg systemctl reboot ;;
+    keep) snapper -c "$CFG" modify -c "" "$n" 2>/dev/null && echo "#$n kept: never cleaned up" || { echo "Could not keep #$n"; echo k4:tone red; } ;;
+    release) snapper -c "$CFG" modify -c number "$n" 2>/dev/null && echo "#$n can be cleaned up again" || { echo "Could not change #$n"; echo k4:tone red; } ;;
+    delete) snapper -c "$CFG" delete "$n" ${m:+"$m"} 2>/dev/null && { echo "Deleted #$n${m:+ and #$m}"; echo k4:tone red; } || { echo "Could not delete #$n"; echo k4:tone red; } ;;
+    allow) tui_wait "sudo snapper -c $CFG set-config ALLOW_USERS=$USER SYNC_ACL=yes && echo 'Done: k4 can list and take snapshots now'"; echo k4:close ;;
+    list) tui_wait "sudo snapper -c $CFG list | less"; echo k4:close ;;
+    install) tui_wait "$(command -v pacman >/dev/null && echo 'sudo pacman -S timeshift' || echo 'sudo apt install timeshift')"; echo k4:close ;;
+    learn) bg xdg-open https://wiki.archlinux.org/title/Snapper; echo k4:close ;;
+  esac; }
+
+summary() {
+  if ! fs_ok; then echo "needs btrfs"; return; fi
+  if ! ok; then echo "needs permission once · opens the list"; return; fi
+  local last n; n=$(rows | grep -c .); last=$(rows | tail -1)
+  IFS=$'\x1f' read -r _ _ _ date _ _ desc <<<"$last"
+  echo "$n · last: ${desc:-snapshot}, $(when "$date")"; }
+
+case "${1:-window}" in
+  window) pkill -f '^k4 --snap' && exit 0; data | k4 --snap >/dev/null ;;
+  data) data ;;
+  act) shift; act "$@" ;;
+  summary) summary ;;
+  ok) ok ;;
+  *) sed -n '2,12p' "$0" >&2; exit 2 ;;
+esac

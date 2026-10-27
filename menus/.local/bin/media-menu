@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# media-menu: any MPRIS player in k4 (k4 --media, the Kestrel design's Media popup), the bar's
+# media module and the media keys, over busctl (no playerctl). The player it controls is the one
+# picked in the popup (Tab; kept in ~/.local/state/k4/media-player while it runs), else the one
+# playing, else the first.
+#   media-menu window        the popup (from a bar click: under it; again: closes it)
+#   media-menu data          its data: P and N lines, R and L (src/media.odin)
+#   media-menu act VERB BUS [ARG]   toggle next prev seek ±S setpos S volume N shuffle loop pick raise
+#   media-menu bar           the bar module's JSON; bar --follow: again on every change
+#   media-menu ctl VERB      play-pause | next | previous on the player, with the OSD (media keys)
+#   media-menu players | active | summary | part | section | available   (lib.sh: the Apps menu)
+K4_NAME=media-menu K4_ID=media K4_TITLE=Media K4_KEY=N K4_ICON=󰝚 K4_DESC="Any MPRIS player: now playing and controls"
+. "$HOME/.local/share/k4/lib.sh"
+SELF=$(command -v media-menu || echo "$0")
+OBJ=/org/mpris/MediaPlayer2
+P=org.mpris.MediaPlayer2.Player
+PICK="$K4_STATE/media-player"
+ART="$K4_CACHE/art"
+available() { command -v busctl >/dev/null; }
+
+players() { busctl --user list --acquired --no-legend 2>/dev/null | awk '$1 ~ /^org\.mpris\.MediaPlayer2\./ { print $1 }'; }
+all() { busctl --user -j call "$1" "$OBJ" org.freedesktop.DBus.Properties GetAll s "$P" 2>/dev/null | jq -c '.data[0]'; }
+ident() { busctl --user -j get-property "$1" "$OBJ" org.mpris.MediaPlayer2 Identity 2>/dev/null | jq -r '.data // empty'; }
+status() { busctl --user -j get-property "$1" "$OBJ" "$P" PlaybackStatus 2>/dev/null | jq -r '.data // "Stopped"'; }
+active() {  # the picked one while it runs, else the one playing, else the first
+  local list b
+  list=$(players); [ -n "$list" ] || return 1
+  b=$(cat "$PICK" 2>/dev/null); [ -n "$b" ] && grep -qxF -- "$b" <<<"$list" && { echo "$b"; return; }
+  for b in $list; do [ "$(status "$b")" = Playing ] && { echo "$b"; return; }; done
+  head -1 <<<"$list"; }
+mono() { local n="${1// /}"; printf '%s%s' "${n:0:1}" "${n:1:1}" | sed 's/^\(.\)\(.\)$/\U\1\L\2/'; }
+name_of() { local n; n=$(ident "$1"); [ -n "$n" ] || { n=${1#org.mpris.MediaPlayer2.}; n=${n%%.*}; }; echo "$n"; }
+cover() {  # cover URL: a local file for the cover (https ones are fetched into the cache, in the background)
+  local u="$1" f
+  case "$u" in
+    file://*) f=$(printf '%b' "${u#file://}" | sed 's/%\([0-9A-Fa-f][0-9A-Fa-f]\)/\\x\1/g'); printf '%b' "$f" ;;
+    http://*|https://*)
+      f="$ART/$(printf '%s' "$u" | md5sum | cut -c1-16).jpg"
+      if [ -s "$f" ]; then echo "$f"
+      else mkdir -p "$ART"; setsid -f sh -c 'curl -fsSL --max-time 8 "$1" -o "$2.part" && mv "$2.part" "$2"' _ "$u" "$f" >/dev/null 2>&1 </dev/null; fi ;;
+  esac; }
+
+summary() { local b j; b=$(active) || { echo "nothing playing"; return; }; j=$(all "$b")
+  printf '%s %s\n' "$([ "$(jq -r '.PlaybackStatus.data' <<<"$j")" = Playing ] && echo ▶ || echo ‖)" "$(jq -r '.Metadata.data["xesam:title"].data // ""' <<<"$j")"; }
+section() {
+  desc "Now playing on any MPRIS player" "$(players | wc -l) players"
+  item "Open Media" "bg $(printf %q "$SELF") window" "$(summary)"
+}
+
+data() {
+  local b cur j
+  cur=$(active)
+  for b in $(players); do printf 'P\t%s\t%s\t%s\t%s\t%s\n' "$b" "$(name_of "$b")" "$(mono "$(name_of "$b")")" "$(status "$b")" "$(all "$b" | jq -r '.Metadata.data["xesam:title"].data // ""' | tr '\t\n' '  ')"; done
+  if [ -n "$cur" ] && j=$(all "$cur") && [ -n "$j" ]; then
+    jq -r --arg b "$cur" '
+      def v(k): .[k].data;
+      (v("Metadata") // {}) as $m |
+      ["N", $b, (v("PlaybackStatus") // "Stopped"), ($m["xesam:title"].data // ""), (($m["xesam:artist"].data // []) | if type == "array" then join(", ") else . end),
+       ($m["xesam:album"].data // ""),
+       (if ($m["mpris:length"].data // 0) > 0 then ($m["mpris:length"].data | tostring) elif (($m["xesam:url"].data // "") | test("^https?://.*(stream|live|radio)|\\.m3u8?$|icecast"; "i")) then "-1" else "0" end),
+       ((v("Position") // 0) | tostring),
+       (if v("Volume") == null then "-1" else ((v("Volume") * 100) | round | tostring) end),
+       (if v("Shuffle") == null then "-" elif v("Shuffle") then "1" else "0" end),
+       (v("LoopStatus") // "-"),
+       ($m["mpris:artUrl"].data // ""),
+       (if v("CanSeek") then "1" else "0" end), (if v("CanGoNext") == false then "0" else "1" end)
+      ] | map(tostring | gsub("[\t\n]"; " ")) | join("\t")' <<<"$j" | while IFS= read -r line; do
+        mapfile -t -d $'\t' f < <(printf '%s' "$line")   # read -a would merge empty fields
+        f[11]=$(cover "${f[11]:-}"); (IFS=$'\t'; printf '%s\n' "${f[*]}"); done
+  fi
+  printf 'R\t%s act\nL\t%s data\n' "$SELF" "$SELF"; }
+
+call() { busctl --user call "$1" "$OBJ" "$P" "${@:2}" >/dev/null 2>&1; }
+setp() { busctl --user set-property "$1" "$OBJ" "$P" "${@:2}" >/dev/null 2>&1; }
+act() {
+  local verb="$1" b="${2:?bus}" x="${3:-}" j t
+  case "$verb" in
+    toggle) call "$b" PlayPause ;;
+    next) call "$b" Next && echo "Next track" ;;
+    prev) call "$b" Previous && echo "Previous track" ;;
+    seek) call "$b" Seek x "$(( ${x:-0} * 1000000 ))"; echo k4:noreload ;;
+    setpos) t=$(all "$b" | jq -r '.Metadata.data["mpris:trackid"].data // "/"'); call "$b" SetPosition o "$t" x "$(( ${x:-0} * 1000000 ))" ;;
+    volume) setp "$b" Volume d "$(awk -v v="$x" 'BEGIN { printf "%.2f", v / 100 }')"; echo k4:noreload ;;
+    shuffle) j=$(busctl --user -j get-property "$b" "$OBJ" "$P" Shuffle 2>/dev/null | jq -r .data)
+             [ "$j" = true ] && { setp "$b" Shuffle b false; echo "Shuffle off"; } || { setp "$b" Shuffle b true; echo "Shuffle on"; } ;;
+    loop) case "$(busctl --user -j get-property "$b" "$OBJ" "$P" LoopStatus 2>/dev/null | jq -r .data)" in
+            None) setp "$b" LoopStatus s Playlist; echo "Repeat all" ;;
+            Playlist) setp "$b" LoopStatus s Track; echo "Repeat one" ;;
+            *) setp "$b" LoopStatus s None; echo "Repeat off" ;;
+          esac ;;
+    pick) mkdir -p "$K4_STATE"; echo "$b" > "$PICK"; echo "Controlling $(name_of "$b") · the bar module and the media keys follow" ;;
+    raise) busctl --user call "$b" "$OBJ" org.mpris.MediaPlayer2 Raise >/dev/null 2>&1; echo k4:close ;;
+  esac; }
+
+bar() {  # the module: note, title · artist; paused dims; nothing playing hides
+  local b j st t a
+  b=$(active) || { echo '{}'; return; }
+  j=$(all "$b"); st=$(jq -r '.PlaybackStatus.data // "Stopped"' <<<"$j")
+  t=$(jq -r '.Metadata.data["xesam:title"].data // ""' <<<"$j")
+  a=$(jq -r '(.Metadata.data["xesam:artist"].data // []) | if type == "array" then join(", ") else . end' <<<"$j")
+  [ -n "$t" ] && [ "$st" != Stopped ] || { echo '{}'; return; }
+  if [ "$st" = Playing ]; then jq -cn --arg t "$t" --arg a "$a" --arg p "$(name_of "$b")" '{icon: "󰝚", icon_tone: "accent", text: $t, text2: $a, tooltip: "\($t) — \($a) · \($p)"}'
+  else jq -cn --arg t "$t" --arg a "$a" --arg p "$(name_of "$b")" '{icon: "󰏤", text: $t, text2: $a, class: "dim", tooltip: "Paused · \($t) — \($a) · \($p)"}'; fi; }
+follow() {  # the module, then again after every burst of player changes; every 30 s a write
+  # checks the bar is still there (a bar that went away leaves its followers behind otherwise)
+  trap '' PIPE
+  bar || exit 0
+  coproc MON { exec busctl --user monitor --json=short \
+    --match "type='signal',interface='org.freedesktop.DBus.Properties',path='$OBJ'" \
+    --match "type='signal',sender='org.freedesktop.DBus',member='NameOwnerChanged',arg0namespace='org.mpris.MediaPlayer2'" 2>/dev/null; }
+  trap 'kill "$MON_PID" 2>/dev/null' EXIT
+  local rc
+  while :; do
+    read -r -t 30 _ <&"${MON[0]}"; rc=$?
+    [ "$rc" -gt 128 ] || [ "$rc" -eq 0 ] || exit 0   # the monitor ended: the bar starts us again
+    [ "$rc" -eq 0 ] && while read -r -t 0.15 _ <&"${MON[0]}"; do :; done
+    bar || exit 0
+  done; }
+
+osd() {  # osd GLYPH TONE [SUB]: the track box (k4 --osd, track form)
+  local b j t a art
+  b=$(active) || return 0
+  j=$(all "$b"); t=$(jq -r '.Metadata.data["xesam:title"].data // ""' <<<"$j")
+  a=$(jq -r '(.Metadata.data["xesam:artist"].data // []) | if type == "array" then join(", ") else . end' <<<"$j")
+  art=$(cover "$(jq -r '.Metadata.data["mpris:artUrl"].data // ""' <<<"$j")")
+  [ -n "$t" ] || t=$(name_of "$b")
+  setsid -f k4 --osd "󰝚|-1||$1|$2||${t//|/ }||${3:-${a//|/ }}|$art" >/dev/null 2>&1 </dev/null; }
+ctl() {  # the media keys and the bar's clicks: Omarchy's own when the k4 bar is not running
+  local b
+  if ! pgrep -f '^k4 --bar' >/dev/null && command -v omarchy-shell >/dev/null; then
+    case "$1" in play-pause) exec omarchy-shell media playPause ;; next) exec omarchy-shell media next ;; previous) exec omarchy-shell media previous ;; esac
+  fi
+  b=$(active) || exit 0
+  case "$1" in
+    play-pause) call "$b" PlayPause; sleep 0.15
+                if [ "$(status "$b")" = Playing ]; then osd "󰐊" accent; else osd "󰏤" dim "paused"; fi ;;
+    next) call "$b" Next; sleep 0.35; osd "󰒭" accent ;;
+    previous) call "$b" Previous; sleep 0.35; osd "󰒮" accent ;;
+  esac; }
+
+window() {
+  pkill -f '^k4 --media' && exit 0
+  local pop=()
+  [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,${K4_BAR_SIDE:-center},${K4_BAR_POS:-top}")
+  data | k4 --media "${pop[@]}" >/dev/null; }
+
+case "${1:-window}" in
+  window) window; exit 0 ;;
+  data) data; exit 0 ;;
+  act) shift; act "$@"; exit 0 ;;
+  bar) if [ "${2:-}" = --follow ]; then follow; else bar; fi; exit 0 ;;
+  ctl) ctl "${2:?play-pause|next|previous}"; exit 0 ;;
+  players) players; exit 0 ;;
+  active) active; exit 0 ;;
+esac
+k4_dispatch "$@"

@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# pass-menu: Passwords in k4 (k4 --pass, the Kestrel design's Passwords; Super+Ctrl+P): the pass
+# store, filtered as you type; copy a password, a username or a one-time code (cleared after
+# 45 s), open the URL, edit, delete, make or generate one, pull and push. A locked gpg key asks
+# for its passphrase inside k4 (loopback), since gpg's own window can't take keys under it.
+#   pass-menu                 the window (also: pass-menu window)
+#   pass-menu data            its data: S and E lines, R and L (k4 --pass's format, src/pass.odin)
+#   pass-menu act VERB ARG…   what the window runs (fields copy reveal generate insert unlock lock
+#                             delete open edit term pull push install learn init)
+#   pass-menu summary|part|section|available   the Apps integration (lib.sh)
+# Passwords never go to stdout except to k4 when you ask to see one (Tab), and to the clipboard.
+K4_NAME=pass-menu K4_ID=pass K4_TITLE=Passwords K4_KEY=S K4_ICON=󰌾 K4_DESC="pass: copy, add, generate; git sync"
+. "$HOME/.local/share/k4/lib.sh"
+STORE="${PASSWORD_STORE_DIR:-$HOME/.password-store}"
+SELF=$(command -v pass-menu || echo "$0")
+CLIP=${PASSWORD_STORE_CLIP_TIME:-45}
+available() { command -v pass >/dev/null; }
+missing() { missing_body "copy passwords from here" "$(install_cmd pass pass)" "https://www.passwordstore.org"; }
+
+entries() { find -L "$STORE" -name '*.gpg' -not -path '*/.git/*' -printf '%P\t%T@\n' 2>/dev/null | sed 's/\.gpg\t/\t/' | sort; }
+unlocked() { gpg-connect-agent 'keyinfo --list' /bye 2>/dev/null | awk '$1 == "S" && $7 == "1" { f = 1 } END { exit !f }'; }
+summary() { local n; n=$(entries | wc -l); echo "$(plural "$n" entries)$(unlocked || echo ' · locked')"; }
+section() {
+  desc "The pass store: copy, add, generate" "$(entries | wc -l) entries"
+  item "Open Passwords" "bg $(printf %q "$SELF") window" "Super+Ctrl+P"
+  item "Generate a password" "bg $(printf %q "$SELF") window" "^G in the window"
+}
+
+data() {
+  local state=ok locked=1 git="" origin="" ab
+  if ! available; then printf 'S\tmissing\t0\t\t\t%s\n' "$(install_cmd pass pass)"; printf 'R\t%s act\n' "$SELF"; return; fi
+  [ -f "$STORE/.gpg-id" ] || state=empty
+  unlocked && locked=0
+  if [ -d "$STORE/.git" ]; then
+    git=ok
+    if ab=$(git -C "$STORE" rev-list --left-right --count 'HEAD...@{u}' 2>/dev/null); then
+      read -r a b <<<"$ab"; [ "$a$b" != 00 ] && git="$a $b"
+    fi
+    origin=$(git -C "$STORE" remote get-url origin 2>/dev/null)
+  fi
+  printf 'S\t%s\t%s\t%s\t%s\t%s\n' "$state" "$locked" "$git" "$origin" "$(install_cmd pass pass)"
+  local p t
+  while IFS=$'\t' read -r p t; do printf 'E\t%s\t%s\n' "$p" "$(ago "${t%.*}")"; done < <(entries)
+  printf 'R\t%s act\nL\t%s data\n' "$SELF" "$SELF"
+}
+
+clip_secret() {  # clip_secret TEXT: copy, and clear after $CLIP s unless something else was copied
+  printf '%s' "$1" | wl-copy
+  setsid -f sh -c 'sleep "$1"; [ "$(wl-paste -n 2>/dev/null)" = "$2" ] && wl-copy --clear' _ "$CLIP" "$1" >/dev/null 2>&1 </dev/null
+}
+first_entry() { find -L "$STORE" -name '*.gpg' -not -path '*/.git/*' -print -quit; }
+need_key() { unlocked || { echo k4:locked; echo k4:noreload; exit 0; }; }
+field() { printf '%s\n' "$2" | sed -n "s/^\\($1\\): *//Ip" | head -1; }
+
+act() {
+  local verb="$1" name="${2:-}" body pw u
+  case "$verb" in
+    fields)
+      need_key
+      body=$(pass show "$name" 2>/dev/null) || { echo "Could not read $name"; echo k4:tone red; echo k4:noreload; return; }
+      pw=$(printf '%s\n' "$body" | head -1)
+      printf 'k4:field len %s\n' "${#pw}"
+      u=$(field 'login\|user\|username\|email' "$body"); [ -n "$u" ] && printf 'k4:field user %s\n' "$u"
+      u=$(field 'url\|website' "$body"); [ -n "$u" ] && printf 'k4:field url %s\n' "$u"
+      [ "$(field order "$body")" = user ] && echo 'k4:field order user'
+      if printf '%s\n' "$body" | grep -q '^otpauth://'; then
+        echo 'k4:field otp 1'
+        u=$(pass otp "$name" 2>/dev/null) && printf 'k4:field code %s %s\n' "$u" $(( 30 - $(date +%s) % 30 ))
+      fi
+      echo k4:noreload ;;
+    copy)
+      need_key
+      case "${3:-password}" in
+        password) pass show -c "$name" >/dev/null 2>&1 || { echo "Could not copy from $name"; echo k4:tone red; echo k4:noreload; return; } ;;
+        user) u=$(field 'login\|user\|username\|email' "$(pass show "$name" 2>/dev/null)"); clip_secret "$u" ;;
+        otp) if u=$(pass otp "$name" 2>/dev/null); then clip_secret "$u"
+             else echo "pass-otp is not installed: $(install_cmd pass-otp pass-extension-otp)"; echo k4:tone yellow; echo k4:noreload; return; fi ;;
+      esac
+      printf 'k4:copied %s\nk4:noreload\n' "$([ "${3:-password}" = otp ] && echo one-time code || echo "${3:-password}")" ;;
+    reveal) need_key; printf 'k4:secret %s\nk4:noreload\n' "$(pass show "$name" 2>/dev/null | head -1)" ;;
+    generate)
+      pw=$(LC_ALL=C tr -dc 'A-Za-z0-9!#%&*+,-./:;=?@^_~' < /dev/urandom | head -c 24)
+      clip_secret "$pw"
+      printf 'k4:copied new password\nk4:secret %s\nk4:noreload\n' "$pw" ;;
+    insert)
+      pw=${K4_INPUT:-}; [ "$pw" = - ] && pw=$(LC_ALL=C tr -dc 'A-Za-z0-9!#%&*+,-./:;=?@^_~' < /dev/urandom | head -c 24)
+      if [ -n "${3:-}" ]; then printf '%s\nlogin: %s\n' "$pw" "$3"; else printf '%s\n' "$pw"; fi | pass insert -m -f "$name" >/dev/null 2>&1 \
+        || { echo "Could not save $name"; echo k4:tone red; return; }
+      clip_secret "$pw"
+      echo "Saved $name · committed · copied"; echo 'k4:copied password'; echo k4:list ;;
+    unlock)
+      if printf '%s' "${K4_INPUT:-}" | gpg --batch --yes --quiet --pinentry-mode loopback --passphrase-fd 0 -d "$(first_entry)" >/dev/null 2>&1; then
+        echo "Unlocked · gpg-agent keeps the passphrase for a while"; echo k4:unlocked
+      else echo "Wrong passphrase · try again"; echo k4:tone red; echo k4:noreload; fi ;;
+    lock) gpg-connect-agent reloadagent /bye >/dev/null 2>&1; echo "Locked · gpg-agent forgot the passphrase" ;;
+    delete) pass rm -f "$name" >/dev/null 2>&1 && { echo "Deleted $name · committed"; echo k4:tone red; echo k4:list; } || { echo "Could not delete $name"; echo k4:tone red; } ;;
+    open) need_key; u=$(field 'url\|website' "$(pass show "$name" 2>/dev/null)"); [[ $u == *://* ]] || u="https://$u"; open_url "$u"; echo k4:close ;;
+    edit) tui pass edit "$name"; echo k4:close ;;
+    term) tui_wait "pass show $(printf %q "$name")"; echo k4:close ;;
+    pull) u=$(pass git pull --ff-only 2>&1 | tail -1); echo "Pulled · ${u:-done}" ;;
+    push) u=$(pass git push 2>&1 | tail -1); echo "Pushed · ${u:-done}" ;;
+    install) tui_wait "$(install_cmd pass pass)"; echo k4:close ;;
+    learn) open_url https://www.passwordstore.org; echo k4:close ;;
+    init) tui_wait 'gpg --list-secret-keys --keyid-format long; printf "\nKey id for the store: "; read -r k; [ -n "$k" ] && pass init "$k"'; echo k4:close ;;
+    *) echo "unknown: $verb" ;;
+  esac; }
+
+case "${1:-window}" in
+  window) pkill -f '^k4 --pass' && exit 0; data | k4 --pass >/dev/null; exit 0 ;;
+  data) data; exit 0 ;;
+  act) shift; act "$@"; exit 0 ;;
+esac
+k4_dispatch "$@"

@@ -8,7 +8,7 @@
 # Modules (left · center · right): menu, workspaces, window · clock, media (any MPRIS player, via
 # media-menu) · indicators (do not disturb, night light, recording, stay awake: each shown only
 # when on), a LocalSend transfer, removable drives (k4-drives, only with one in), pinned tray apps
-# and the tray (chat apps with their unread count tag), updates, weather, microphone, audio,
+# and the tray (chat apps with their unread count tag), updates, the next bus (k4-bus), weather, microphone, audio,
 # network, bluetooth, brightness, battery, keyboard (the Kestrel bar design).
 set -u
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/snap/bin:$PATH"
@@ -39,7 +39,13 @@ status() {
   case "$1" in
   media)  # any MPRIS player (media-menu, over busctl): note and title · artist; paused dims; nothing playing hides
     command -v media-menu >/dev/null && { media-menu bar; return; }
-    out ;;
+    command -v playerctl >/dev/null || { out; return; }   # without media-menu: playerctl, as before
+    local st t a
+    st=$(playerctl status 2>/dev/null) || { out; return; }
+    t=$(playerctl metadata title 2>/dev/null); a=$(playerctl metadata artist 2>/dev/null)
+    [ -n "$t" ] || { out; return; }
+    if [ "$st" = Playing ]; then out icon 󰝚 icon_tone accent text "$t" text2 "$a" tooltip "$t — $a"
+    else out icon 󰏤 text "$t" text2 "$a" class dim tooltip "Paused · $t — $a"; fi ;;
   dnd)  # k4's notifications: the bell with the unread count (crossed out with do not disturb)
     local st n d
     if st=$(k4 --notify-ctl status 2>/dev/null); then
@@ -167,7 +173,9 @@ status() {
 follow_status() {  # status, then again on every change of what it shows
   MOD=$1
   case "$1" in
-    media) command -v media-menu >/dev/null && exec media-menu bar --follow; status media; exec sleep infinity ;;   # blocks: the bar restarts a follower that ends
+    media) command -v media-menu >/dev/null && exec media-menu bar --follow
+           command -v playerctl >/dev/null && { follow playerctl --follow status; return; }
+           status media; exec sleep infinity ;;   # blocks: the bar restarts a follower that ends
     microphone|audio) follow sh -c 'pactl subscribe | grep --line-buffered -E "sink|source|server"' ;;
     network) follow nmcli monitor ;;
     keyboard) if [ -n "$HYPR" ]; then follow sh -c 'socat -U - "UNIX-CONNECT:$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock" | grep --line-buffered "^activelayout>>"'
@@ -184,7 +192,8 @@ spec() {
   m workspaces left workspaces - 0 - - - - - - -
   m window left window - 0 - - - - - - -
   m clock center clock "%H:%M;%a %d %b|%Y-%m-%d %H:%M:%S;w%V" 0 - "$p calendar" - - - - "px=10;next=~/.cache/k4/cal/today.tsv"
-  m media center exec "$SELF status media --follow" 0 - "$p media" - "media-menu ctl play-pause" "media-menu ctl previous" "media-menu ctl next" "maxw=200;maxw2=140;compact"
+  local mc="media-menu ctl"; command -v media-menu >/dev/null || mc="playerctl"
+  m media center exec "$SELF status media --follow" 0 - "$p media" - "$mc play-pause" "$mc previous" "$mc next" "maxw=200;maxw2=140;compact"
   m dnd right exec "$SELF status dnd" 1 - "k4-notify center" "$c toggle_dnd" - - - - "px=5"
   m night right exec "$SELF status night" 3 - "$c toggle_night" - - - - "px=5"
   m rec right exec "$SELF status rec" 1 - "$c record_toggle" - - - - "px=5"
@@ -199,6 +208,7 @@ spec() {
   m tray right exec "k4-tray status" 3 - "k4-tray popup" "k4-tray popup" - - - "px=6"   # the tray: chevron, count, red count needing you
   m updates right exec "$SELF status updates" 3600 - "$p update" "$SELF status updates >/dev/null" - - - -
   m perf right exec "k4-perf bar" 2 - "k4-perf popup" "k4-perf util btop" - - - "px=7"   # CPU and memory in use; the System popup
+  command -v k4-bus >/dev/null && m bus right exec "k4-bus bar" 60 - "$p bus" "k4-bus act refresh >/dev/null" - - - "px=6;maxw=150;slim"   # the next bus at your stop: its line in a box, the minutes
   m weather right exec "$SELF status weather" 900 - "$p weather" "rm -f ~/.cache/sway-weather.json" - - - -
   m microphone right exec "$SELF status microphone --follow" 0 - "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle" - "$p audio" "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SOURCE@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-" "flash"
   m audio right exec "$SELF status audio --follow" 0 - "$p audio" "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle" - "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-" -
@@ -214,7 +224,7 @@ spec() {
 
 popup() {  # popup PAGE: the k4 page under the clicked module; a second click closes it, another
   # module's click swaps it for that one
-  local cur="${XDG_RUNTIME_DIR:-/tmp}/k4-popup" pat='^k4 --(menu|media|drives|keyring)'
+  local cur="${XDG_RUNTIME_DIR:-/tmp}/k4-popup" pat='^k4 --(menu|media|drives|keyring|bus)'
   if pgrep -f "$pat" >/dev/null; then
     pkill -f "$pat"
     [ "$(cat "$cur" 2>/dev/null)" = "$1" ] && { rm -f "$cur"; exit 0; }
@@ -226,6 +236,7 @@ popup() {  # popup PAGE: the k4 page under the clicked module; a second click cl
     media) command -v media-menu >/dev/null && exec media-menu window ;;
     drives) exec k4-drives window ;;
     keyring) exec k4-secret window ;;
+    bus) exec k4-bus window ;;
     *) exec sway-menu "$1" ;;
   esac; }
 

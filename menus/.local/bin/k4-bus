@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# k4-bus: bus departures at a remembered stop (k4 --bus, under the bar's bus module), from
+# Trafiklab's Realtime API (Länstrafiken Kronoberg and the rest of Sweden, real-time where the
+# operator sends it). The key lives in the keyring (k4-secret, kind token, name trafiklab); the
+# stop and the last 5 stops in ~/.local/state/k4/bus.json; the last fetch in ~/.cache/k4.
+#   k4-bus                  the popup (also: window); under the module when clicked there
+#   k4-bus data             its data: S, D and F lines, R and L (src/bus.odin)
+#   k4-bus act VERB …       search TEXT, pick ID NAME, key ($K4_INPUT), refresh, remind LINE DEST UNIX
+#   k4-bus bar              the bar module's JSON: the next departure, its line in a box (dim
+#                           "no buses" with none in the hour, "Bus · set up" before the key and stop)
+# A fetch is reused for 30 s, so the bar and an open popup share calls; at night (00–05) and with
+# nothing in the hour, at most one fetch every 5 min (the free key allows 100,000 calls a month).
+export PATH="$HOME/.local/bin:$PATH"
+SELF=$(command -v k4-bus || echo "$0")
+API=${K4_BUS_API:-https://realtime-api.trafiklab.se/v1}   # K4_BUS_API: tests
+STATE="$HOME/.local/state/k4/bus.json"
+CACHE="$HOME/.cache/k4/bus-departures.json"
+LATER="$HOME/.cache/k4/bus-later.json"     # the hour after, asked only when this one is empty
+FOUND="$HOME/.cache/k4/bus-search.json"    # the last search, for its modes and traffic on pick
+mkdir -p "${STATE%/*}" "${CACHE%/*}"
+
+key() { [ -n "${K4_BUS_KEY:-}" ] && { printf '%s' "$K4_BUS_KEY"; return; }; k4-secret lookup token trafiklab 2>/dev/null; }
+stop_id() { jq -r '.id // empty' "$STATE" 2>/dev/null; }
+stop_name() { jq -r '.name // empty' "$STATE" 2>/dev/null; }
+urlenc() { jq -rn --arg s "$1" '$s | @uri'; }
+get() {  # get PATH: the body in $BODY, the HTTP status in $CODE (no subshell, so both stay set;
+  # the key goes to curl on stdin, not on its command line where other processes could read it)
+  local out
+  BODY="" CODE=000
+  out=$(printf 'url = "%s"\n' "$API/$1?key=$(urlenc "$K")" | curl -sS --max-time 8 -w '\n%{http_code}' -K - 2>/dev/null) || return 1
+  CODE=${out##*$'\n'}; BODY=${out%$'\n'*}; }
+
+# fetch: the departures into the cache unless it is fresh; prints ok, badkey, offline or nostop
+fetch() {
+  local id age max=30 h body
+  id=$(stop_id); [ -n "$id" ] || { echo nostop; return; }
+  K=$(key); [ -n "$K" ] || { echo nokey; return; }
+  h=$(date +%-H)
+  if [ -s "$CACHE" ] && [ "$(jq -r '.id' "$CACHE" 2>/dev/null)" = "$id" ]; then
+    age=$(( $(date +%s) - $(jq -r '.fetched' "$CACHE") ))
+    { [ "$h" -lt 5 ] || [ "$(jq '.body.departures | length' "$CACHE" 2>/dev/null)" = 0 ]; } && max=300
+    [ "${FORCE:-}" = 1 ] && max=5
+    [ "$age" -lt "$max" ] && { echo ok; return; }
+  fi
+  get "departures/$id" || { echo offline; return; }; body=$BODY
+  case "$CODE" in
+    200) jq -n --arg id "$id" --argjson t "$(date +%s)" --argjson b "$body" '{id: $id, fetched: $t, body: $b}' > "$CACHE.new" 2>/dev/null \
+           && mv "$CACHE.new" "$CACHE" && echo ok || echo offline ;;
+    401|403) echo badkey ;;
+    *) echo offline ;;
+  esac; }
+
+hhmm() { [ -n "$1" ] && [ "$1" != null ] && date -d "$1" +%H:%M 2>/dev/null; }
+rows() {  # the cached departures as D lines, soonest first (cancelled ones too)
+  [ -s "$CACHE" ] || return 0
+  jq -r '.body.departures // [] | map(
+      . as $d | (($d.realtime // $d.scheduled) // "") as $when |
+      [ ($d.route.designation // "?"), ($d.route.direction // $d.route.destination.name // ""), ($d.route.transport_mode // "BUS"),
+        ($d.scheduled // ""), ($d.realtime // ""), (($d.delay // 0) | tostring), (if $d.canceled then "1" else "0" end),
+        (($d.realtime_platform.designation // $d.scheduled_platform.designation // "") | if . == "" then "" else "Läge \(.)" end),
+        (if $d.is_realtime then "1" else "0" end), $when ]
+    ) | sort_by(.[9]) | .[] | map(tostring | gsub("[\t\n]"; " ")) | join("\u001f")' "$CACHE" 2>/dev/null \
+  | while IFS=$'\x1f' read -r line dest mode sched real delay canc plat live when; do
+      local at; at=$(date -d "$when" +%s 2>/dev/null) || continue
+      [ "$at" -ge $(( $(date +%s) - 60 )) ] || continue
+      printf 'D\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$line" "$dest" "$mode" "$(hhmm "$sched")" "$(hhmm "$real" || echo -)" "$delay" "$canc" "$plat" "$live" "$at"
+    done; }
+
+recent_lines() { jq -r '.recent // [] | .[] | ["F", .id, .name, (.modes // "BUS"), ((.per // "") | tostring), "1"] | @tsv' "$STATE" 2>/dev/null; }
+later() {  # the first departure after the hour: "line 7 at 15:18" (asked at most every 5 min)
+  local id t
+  id=$(stop_id)
+  if ! { [ -s "$LATER" ] && [ "$(jq -r .id "$LATER")" = "$id" ] && [ $(( $(date +%s) - $(jq -r .fetched "$LATER") )) -lt 300 ]; }; then
+    K=$(key); get "departures/$id/$(date -d '+60 min' +%Y-%m-%dT%H:%M)" || return 0
+    [ "$CODE" = 200 ] || return 0
+    jq -n --arg id "$id" --argjson t "$(date +%s)" --argjson b "$BODY" '{id: $id, fetched: $t, body: $b}' > "$LATER" 2>/dev/null || return 0
+  fi
+  t=$(jq -r '[.body.departures // [] | .[] | select(.canceled | not)] | sort_by(.realtime // .scheduled) | first | select(.) | "\(.route.designation)\t\(.realtime // .scheduled)"' "$LATER" 2>/dev/null)
+  [ -n "$t" ] && printf 'line %s at %s' "${t%%$'\t'*}" "$(date -d "${t#*$'\t'}" +%H:%M)"; }
+
+data() {
+  local st fetched hm="" d
+  st=$(fetch)
+  fetched=$(jq -r '.fetched // 0' "$CACHE" 2>/dev/null || echo 0)
+  [ "${fetched:-0}" -gt 0 ] && hm=$(date -d "@$fetched" +%H:%M)
+  d=$(case "$st" in ok|offline) rows ;; esac)
+  printf 'S\t%s\t%s\t%s\t%s\t%s\t%s\n' "$st" "$(stop_id)" "$(stop_name)" "${fetched:-0}" "$hm" "$([ "$st" = ok ] && [ -z "$d" ] && later)"
+  [ -n "$d" ] && printf '%s\n' "$d"
+  recent_lines
+  printf 'R\t%s act\nL\t%s data\n' "$SELF" "$SELF"; }
+
+act() {
+  local verb="$1" body
+  case "$verb" in
+    search)
+      K=$(key); [ -n "$K" ] || { echo "No Trafiklab key yet"; echo k4:tone yellow; echo k4:noreload; return; }
+      get "stops/name/$(urlenc "$2")" || { echo "Offline · try again"; echo k4:tone yellow; echo k4:noreload; return; }; body=$BODY
+      [ "$CODE" = 200 ] || { echo "Trafiklab said $CODE"; echo k4:tone red; echo k4:noreload; return; }
+      printf '%s' "$body" > "$FOUND"
+      jq -r '(.stop_groups // .stops // []) | .[:12][] | "k4:stop \(.id)\t\(.name)\t\((.transport_modes // ["BUS"]) | join(","))\t\(((.average_daily_stop_times // 0) / 18) | round)"' <<<"$body" 2>/dev/null   # a day ≈ 18 hours of service
+      echo k4:noreload ;;
+    pick)
+      local id="$2" name="$3"
+      local modes per
+      modes=$(jq -r --arg id "$id" '(.stop_groups // .stops // [])[] | select(.id == $id) | (.transport_modes // ["BUS"]) | join(",")' "$FOUND" 2>/dev/null)
+      per=$(jq -r --arg id "$id" '(.stop_groups // .stops // [])[] | select(.id == $id) | ((.average_daily_stop_times // 0) / 18 | round)' "$FOUND" 2>/dev/null)
+      jq -n --arg id "$id" --arg n "$name" --arg m "${modes:-BUS}" --arg p "${per:-}" --argjson old "$(cat "$STATE" 2>/dev/null || echo '{}')" \
+        '{id: $id, name: $n, recent: ([{id: $id, name: $n, modes: $m, per: $p}] + (($old.recent // []) | map(select(.id != $id))))[:5]}' > "$STATE.new" && mv "$STATE.new" "$STATE"
+      rm -f "$CACHE"
+      echo "Showing $name" ;;
+    key)
+      [ -n "${K4_INPUT:-}" ] || { echo "Paste the key first"; echo k4:tone yellow; echo k4:noreload; return; }
+      K=$K4_INPUT
+      get "stops/name/V%C3%A4xj%C3%B6"
+      case "$CODE" in
+        200) printf '%s' "$K4_INPUT" | k4-secret store token trafiklab && echo "Key saved in your keyring" || { echo "Could not save it (is the keyring locked?)"; echo k4:tone red; } ;;
+        401|403) echo "Trafiklab did not accept this key"; echo k4:tone red; echo k4:noreload ;;
+        *) echo "Could not reach Trafiklab to check the key"; echo k4:tone yellow; echo k4:noreload ;;
+      esac ;;
+    refresh) FORCE=1 fetch >/dev/null; echo "Updated · $(rows | grep -c .) departures" ;;
+    remind)  # remind LINE DEST UNIX: a notification 5 min before it leaves
+      local line="$2" dest="$3" at="$4" wait
+      wait=$(( at - 300 - $(date +%s) ))
+      if [ "$wait" -le 0 ]; then echo "$line $dest leaves in $(( (at - $(date +%s) + 59) / 60 )) min: too soon for a reminder"; echo k4:tone yellow; echo k4:noreload; return; fi
+      setsid -f sh -c 'sleep "$1"; k4 --notify-ctl "$(printf "notify\tBus\t%s %s leaves in 5 min\t%s · %s" "$2" "$3" "$(cat "$5" 2>/dev/null | jq -r .name)" "$(date -d @"$4" +%H:%M)")" >/dev/null 2>&1 || notify-send -a Bus "$2 $3 leaves in 5 min"' _ "$wait" "$line" "$dest" "$at" "$STATE" >/dev/null 2>&1 </dev/null
+      echo "Reminder at $(date -d "@$(( at - 300 ))" +%H:%M): $line $dest leaves 5 min later"; echo k4:noreload ;;
+  esac; }
+
+bar() {  # the next departure that runs: glyph, the line in a box, destination dim, minutes bold
+  local st first next tip line dest mode sched real delay canc plat live at mins m2 tone="" glyph="󰃧" boxt="" pill="" nr l
+  st=$(fetch)
+  case "$st" in
+    nokey|nostop) jq -cn '{icon: "󰃧", text: "Bus · set up", class: "dim", tooltip: "Bus departures · click to set up"}'; return ;;
+    badkey) jq -cn '{icon: "󰃧", text: "Bus", text2: "key?", text2_tone: "red", tooltip: "Trafiklab did not accept the key · click to fix"}'; return ;;
+  esac
+  mapfile -t all < <(rows)
+  nr=(); for l in "${all[@]}"; do [ "$(cut -f8 <<<"$l")" = 0 ] && nr+=("$l"); done
+  [ ${#nr[@]} -gt 0 ] || { jq -cn --arg s "$(stop_name)" '{icon: "󰃧", text: "no buses", class: "dim", tooltip: "\($s) · nothing in the next hour"}'; return; }
+  IFS=$'\t' read -r _ line dest mode sched real delay canc plat live at <<<"${nr[0]}"
+  # a cancelled one before it: the red ✕ on the chip
+  IFS=$'\t' read -r _ _ _ _ _ _ _ c1 _ _ a1 <<<"${all[0]}"; [ "$c1" = 1 ] && [ "$a1" -le "$at" ] && pill="✕"
+  mins=$(( (at - $(date +%s) + 59) / 60 ))
+  if [ $(( at - $(date +%s) )) -lt 60 ]; then m2=nu; tone=accent; else m2="$mins min"; tone=fg; fi
+  [ "$delay" -ge 60 ] && { m2+=" +$(( (delay + 30) / 60 ))"; tone=yellow; }
+  [ "$live" = 1 ] || m2="≈ $m2"
+  [ "$mode" = TRAIN ] && { glyph="󰔬"; boxt=yellow; }
+  tip="$(stop_name)${plat:+ · $plat} · $line $dest $([ "$real" != - ] && echo "$real" || echo "$sched")"
+  if [ ${#nr[@]} -gt 1 ]; then IFS=$'\t' read -r _ ln ds _ sc rt dl _ _ _ _ <<<"${nr[1]}"; tip+=" · then $ln $ds $([ "$rt" != - ] && echo "$rt" || echo "$sc")$([ "$dl" -ge 60 ] && echo " (+$(( (dl + 30) / 60 )))")"; fi
+  [ -n "$pill" ] && tip+=" · one before it is cancelled"
+  if [ "$st" = offline ]; then
+    jq -cn --arg b "$line" --arg t "$dest" --arg tip "Offline · $tip" '{icon: "󰃧", box: $b, text: $t, text2: "!", text2_tone: "yellow", text2_bold: true, class: "dim", tooltip: $tip}'; return
+  fi
+  jq -cn --arg g "$glyph" --arg b "$line" --arg bt "$boxt" --arg t "$dest" --arg t2 "$m2" --arg tone "$tone" --arg tip "$tip" --arg pill "$pill" \
+    '{icon: $g, box: $b, text: $t, text_tone: "dim", text2: $t2, text2_tone: $tone, text2_bold: true, tooltip: $tip}
+     + (if $bt != "" then {icon_tone: $bt, box_tone: $bt} else {} end) + (if $pill != "" then {pill: $pill, badge_tone: "red"} else {} end)'; }
+
+window() {
+  pkill -f '^k4 --bus' && exit 0
+  local pop=()
+  [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,${K4_BAR_SIDE:-right},${K4_BAR_POS:-top}")
+  data | k4 --bus "${pop[@]}" >/dev/null; }
+
+case "${1:-window}" in
+  window) window ;;
+  data) data ;;
+  act) shift; act "$@" ;;
+  bar) bar ;;
+  *) sed -n '2,12p' "$0" >&2; exit 2 ;;
+esac

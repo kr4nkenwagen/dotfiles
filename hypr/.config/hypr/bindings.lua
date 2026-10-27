@@ -123,7 +123,7 @@ o.bind("SUPER + CTRL + E", "Emoji (k4)", "emoji-menu")
 
 -- Steam in the k4 launcher (steam-menu, menus stow package): games with cover art, status, store.
 o.bind("SUPER + CTRL + G", "Steam", "steam-menu")
--- Every app integration (Steam, GitHub, Spotify, Docker, Ollama, Clipboard) in one k4 menu.
+-- Every app integration (Steam, GitHub, Spotify, Media, Passwords, Docker, Ollama, Clipboard) in one k4 menu.
 o.bind("SUPER + CTRL + M", "Apps (k4)", "k4-apps")
 
 -- Media keys through k4-osd: k4's on-screen display while the k4 bar runs (Omarchy's otherwise).
@@ -136,6 +136,15 @@ o.bind("XF86AudioMute", "Mute", "k4-osd volume mute", { locked = true })
 o.bind("XF86AudioMicMute", "Mute microphone", "k4-osd mic mute", { locked = true })
 o.bind("XF86MonBrightnessUp", "Brightness up", "k4-osd brightness up", { locked = true, repeating = true })
 o.bind("XF86MonBrightnessDown", "Brightness down", "k4-osd brightness down", { locked = true, repeating = true })
+-- Play, next and previous on any MPRIS player through media-menu: the track box (cover, title,
+-- artist) while the k4 bar runs, Omarchy's media controls otherwise.
+for _, k in ipairs({ "XF86AudioPlay", "XF86AudioPause", "XF86AudioNext", "XF86AudioPrev" }) do
+	hl.unbind(k)
+end
+o.bind("XF86AudioPlay", "Play", "media-menu ctl play-pause", { locked = true })
+o.bind("XF86AudioPause", "Pause", "media-menu ctl play-pause", { locked = true })
+o.bind("XF86AudioNext", "Next track", "media-menu ctl next", { locked = true })
+o.bind("XF86AudioPrev", "Previous track", "media-menu ctl previous", { locked = true })
 
 -- Super+Tab: k4's overview of every workspace (it was "next workspace"; Super+Tab again closes it).
 hl.unbind("SUPER + TAB")
@@ -160,6 +169,8 @@ o.bind("SUPER + period", "Tray (k4)", "k4-tray popup")
 o.bind("SUPER + SHIFT + ESCAPE", "System performance (k4)", "k4-perf popup")
 hl.unbind("SUPER + CTRL + S")
 o.bind("SUPER + CTRL + S", "Send to a nearby device (k4, LocalSend)", "k4-share send clipboard")
+hl.unbind("SUPER + CTRL + P") -- Omarchy's power popup (Super+Esc is k4's)
+o.bind("SUPER + CTRL + P", "Passwords (k4, pass)", "pass-menu")
 hl.unbind("SUPER + SHIFT + S") -- Omarchy's Google Maps web app
 o.bind("SUPER + SHIFT + S", "SSH hosts, server and keys (k4)", "k4-ssh open")
 hl.unbind("SUPER + comma")
