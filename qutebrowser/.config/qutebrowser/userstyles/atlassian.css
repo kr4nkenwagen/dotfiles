@@ -353,16 +353,14 @@ html:is([data-color-mode], [style*="--ds-"]) {
    apps the root takes the theme's background and links keep the token colour. */
 html:is([data-color-mode], [style*="--ds-"]):not(#\9) { background-color: var(--t-bg) !important; }
 html:is([data-color-mode], [style*="--ds-"]) body { background-color: var(--ds-surface) !important; color: var(--ds-text) !important; }
-html:is([data-color-mode], [style*="--ds-"]) a { color: var(--ds-link) !important; font-family: inherit !important; }
-html:is([data-color-mode], [style*="--ds-"]) body { font-family: var(--ds-font-family-body, "Atlassian Sans", ui-sans-serif, -apple-system, "Segoe UI", Ubuntu, sans-serif) !important; }
+html:is([data-color-mode], [style*="--ds-"]) a { color: var(--ds-link) !important; }
 html:is([data-color-mode], [style*="--ds-"]) a:visited { color: var(--ds-link) !important; }
 /* Buttons and lozenges that put text on a coloured fill */
 html:is([data-color-mode], [style*="--ds-"]) [data-testid*="lozenge"] a,
 html:is([data-color-mode], [style*="--ds-"]) button a { color: inherit !important; }
 
-/* all.css gives every site's headings the theme font and an underline: Atlassian's keep theirs. */
+/* all.css underlines every site's headings: not Atlassian's (the font stays the system's). */
 html:is([data-color-mode], [style*="--ds-"]) :is(h1, h2, h3, h4, h5, h6) {
-  font-family: inherit !important;
   border-bottom: none !important;
   color: var(--ds-text) !important;
 }

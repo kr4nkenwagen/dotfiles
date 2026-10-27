@@ -349,6 +349,9 @@ from qutebrowser.config import configdata as _configdata
 if 'fonts.tooltip' in _configdata.DATA:
     c.fonts.tooltip = font
 c.fonts.debug_console = font
+# Pages: the system font as the default for every generic family (all.css also forces it)
+for _family in ('standard', 'sans_serif', 'serif', 'fixed', 'cursive', 'fantasy'):
+    setattr(c.fonts.web.family, _family, get_font())
 
 # Binds
 config.bind('<Space>I', 'hint images tab')

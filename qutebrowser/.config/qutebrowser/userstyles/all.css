@@ -1,5 +1,11 @@
 /* Colours come from the theme: the variables are in theme-*.css, which config.py writes
    from the current theme and loads before this file. */
+/* The system font on every page and element. Icon fonts are spared: elements whose classes
+   mark them as icons (icon, fa-, material-symbols, glyph, …) keep their own font, or their
+   glyphs would turn into letters. SVG icons are not affected either way. */
+*:not([class*="icon" i]):not([class*="fa-"]):not(.fa):not(.fas):not(.far):not(.fab):not(.fal):not(.fad):not([class*="material-symbols"]):not([class*="material-icons"]):not([class*="google-symbols"]):not([class*="glyph"]):not([class*="symbol" i]):not(.mdi):not([class*="codicon"]):not([class*="octicon"]):not([class*="emoji" i]) {
+  font-family: var(--font), monospace !important;
+}
 a {
   color: var(--blue) !important;
   font-family: var(--font)!important;
