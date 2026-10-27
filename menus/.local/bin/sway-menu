@@ -1375,7 +1375,7 @@ scale_pick() { local o i levels=(1 1.25 1.5 2); o=$(focused_output); [ -n "$o" ]
 scale_set() {  # scale_set OUTPUT SCALE; persisted in ~/.local/state/sway/display.conf
   local o="$1" v="$2"; swaymsg output "$o" scale "$v" >/dev/null; mkdir -p "$STATE"
   { grep -v "^output $o scale" "$STATE/display.conf" 2>/dev/null; echo "output $o scale $v"; } > "$STATE/display.conf.new" && mv "$STATE/display.conf.new" "$STATE/display.conf"
-  [ "$(outputs_geo | wc -l)" -gt 1 ] && arrange_apply   # its size changed: line the screens up again
+  [ "$(outputs_geo | wc -l)" -gt 1 ] && [ ! -f "$STATE/arrange-custom" ] && arrange_apply   # its size changed: line the screens up again (not a dragged layout)
   notify Scale "$o  $v×"; }
 # Arrangement (Display › Arrangement): each other screen right of, left of, above or below the
 # built-in one (else the first), edge to edge from their real sizes; the sides are kept in
@@ -1384,10 +1384,20 @@ outputs_geo() { swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | select(.active
 output_pos() {  # output_pos NAME X Y; kept in display.conf, which the sway config includes
   swaymsg output "$1" pos "$2" "$3" >/dev/null; mkdir -p "$STATE"
   { grep -v "^output $1 pos" "$STATE/display.conf" 2>/dev/null; echo "output $1 pos $2 $3"; } > "$STATE/display.conf.new" && mv "$STATE/display.conf.new" "$STATE/display.conf"; }
+# Arrange by dragging (k4 --displays): the screens with their positions, applied as dropped.
+# A dragged layout is kept as it is: a scale change no longer re-arranges by side.
+outputs_place() { swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | select(.active) | [.name, .rect.width, .rect.height, .rect.x, .rect.y, (if (.name | test("^(eDP|LVDS|DSI)")) then 1 else 0 end), ([.make, .model] | map(select(. != null and . != "Unknown")) | join(" "))] | @tsv'; }   # name w h x y builtin description
+displays_open() {
+  pkill -f '^k4 --displays' && return
+  { printf 'R\t%s displays-apply\n' "$SELF"; outputs_place | sed 's/^/O\t/'; } | k4 --displays; }
+displays_apply() {  # displays_apply NAME X Y [NAME X Y …]
+  while [ $# -ge 3 ]; do output_pos "$1" "$2" "$3"; shift 3; done
+  mkdir -p "$STATE"; : > "$STATE/arrange-custom"
+  echo "Applied · Esc closes"; }
 arrange_anchor() { outputs_geo | awk -F'\t' '$1 ~ /^(eDP|LVDS|DSI)/ { print $1; f = 1; exit } NR == 1 { first = $1 } END { if (!f) print first }' | head -1; }
 arrange_side() { awk -F'\t' -v n="$1" '$1 == n { s = $2 } END { print s ? s : "Right" }' "$STATE/arrange" 2>/dev/null || echo Right; }
 arrange_set() {  # arrange_set NAME (side in K4_VALUE, or $2)
-  local side="${2:-${K4_VALUE:-Right}}"; mkdir -p "$STATE"
+  local side="${2:-${K4_VALUE:-Right}}"; mkdir -p "$STATE"; rm -f "$STATE/arrange-custom"
   { grep -v "^$1	" "$STATE/arrange" 2>/dev/null; printf '%s\t%s\n' "$1" "$side"; } > "$STATE/arrange.new" && mv "$STATE/arrange.new" "$STATE/arrange"
   arrange_apply; notify Display "$1 · $(printf '%s' "$side" | tr '[:upper:]' '[:lower:]') of $(arrange_anchor)"; }
 arrange_apply() {
@@ -1838,6 +1848,7 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            if [ -z "$OMARCHY" ] && [ "$(outputs_geo | wc -l)" -gt 1 ]; then   # Omarchy keeps positions in monitors.lua
              a=$(arrange_anchor)
              hdr "Arrangement · relative to $a"
+             item "Arrange by dragging…" 'displays_open' "the screens as rectangles"
              while IFS=$'\t' read -r n _ _; do [ "$n" = "$a" ] && continue
                choice "$n" "arrange_set $(printf %q "$n")" "$(arrange_side "$n")" "Right|Left|Above|Below"
              done < <(outputs_geo)
@@ -2054,10 +2065,11 @@ if [ "$WM" = hyprland ]; then
   screen_size() { hyprctl -j monitors 2>/dev/null | jq -r '(map(.width) | max | tostring) + "x" + (map(.height) | max | tostring)'; }
   hypr_monitor_pos() { hyprctl -j monitors 2>/dev/null | jq -r --arg o "$1" '.[] | select(.name == $o) | "\(.x)x\(.y)"'; }
   scale_set() { local p; p=$(hypr_monitor_pos "$1"); hypr_keep display "$1" "hl.monitor({ output = \"$1\", mode = \"preferred\", position = \"${p:-auto}\", scale = $2 })"
-    [ -z "$OMARCHY" ] && [ "$(outputs_geo | wc -l)" -gt 1 ] && arrange_apply; notify Scale "$1  $2×"; }
+    [ -z "$OMARCHY" ] && [ "$(outputs_geo | wc -l)" -gt 1 ] && [ ! -f "$STATE/arrange-custom" ] && arrange_apply; notify Scale "$1  $2×"; }
   outputs_geo() { hyprctl -j monitors 2>/dev/null | jq -r '.[] | [.name, ((if .transform % 2 == 1 then .height else .width end) / .scale | floor), ((if .transform % 2 == 1 then .width else .height end) / .scale | floor)] | @tsv'; }
   output_pos() { local sc; sc=$(outputs_tsv | awk -F'\t' -v o="$1" '$1 == o { print $4 }')
     hypr_keep display "$1" "hl.monitor({ output = \"$1\", mode = \"preferred\", position = \"$2x$3\", scale = ${sc:-1} })"; }
+  outputs_place() { hyprctl -j monitors 2>/dev/null | jq -r '.[] | [.name, ((if .transform % 2 == 1 then .height else .width end) / .scale | floor), ((if .transform % 2 == 1 then .width else .height end) / .scale | floor), .x, .y, (if (.name | test("^(eDP|LVDS|DSI)")) then 1 else 0 end), ([.make, .model] | map(select(. != null and . != "")) | join(" "))] | @tsv'; }
   set_scale() { local o; o=$(focused_output); [ -n "$o" ] && scale_set "$o" "$1"; }
   output_toggle() {  # never the last active output
     local on n; on=$(outputs_tsv | awk -F'\t' -v o="$1" '$1 == o { print $2 }'); n=$(outputs_tsv | awk -F'\t' '$2 == "true"' | wc -l)
@@ -2221,7 +2233,9 @@ case "${1:-}" in
   menu) main_menu ;;                                    # the k4 bar's menu button
   calendar|battery|toggle|update|system|apps|bt|capture) k4_main "$1" ;; # the k4 bar's popups; capture: Super+Ctrl+C
   kb-next) kb_cycle ;;
-  keybindings) show_keybindings ;;   # Super+K, as on Omarchy
+  keybindings) show_keybindings ;;
+  displays) displays_open ;;                           # Display › Arrange by dragging…
+  displays-apply) shift; displays_apply "$@" ;;   # Super+K, as on Omarchy
   timezone) if [ "$LAUNCHER" = k4 ]; then k4_main timezone; else tz_menu; fi ;;
   k4-section) k4_section "${2:?section}" ;;
   k4-page) shift; k4_page "${1:?page}" "${@:2}" ;;
