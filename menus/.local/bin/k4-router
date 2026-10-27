@@ -1,0 +1,601 @@
+#!/usr/bin/env python3
+"""k4-router: the OpenWrt router in k4 (the Kestrel design's Router window and bar module).
+
+Talks to the router's ubus JSON-RPC API (http://HOST/ubus) like the Omarchy plugin kr4nk.openwrt
+it replaces in k4: same keyring entry (secret-tool, application=kr4nk.openwrt), same settings
+(the plugin's settings.json when it is there; ~/.config/k4/router.json wins).
+
+  k4-router open [PAGE]         the Router window (a bar click: under the module; again: closes it)
+  k4-router bar [--follow]      the bar module: clients, the WAN rate in the tooltip
+  k4-router data                what k4 --router reads (polls when the last poll is old)
+  k4-router log                 the router's syslog, newest first: T time level text
+  k4-router do VERB ARGS        reboot · radio NAME on|off · copy TEXT · password (K4_INPUT)
+                                · retry · luci · wanip   (the last line is k4's footer)
+
+A poll is shared: the bar's follower and the window read the same state in
+$XDG_RUNTIME_DIR/k4-router, and a new client is announced once (a k4-notify card).
+"""
+import fcntl, json, os, re, socket, subprocess, sys, time, urllib.error, urllib.request
+
+RUN = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "k4-router")
+STATE = os.path.join(RUN, "state.json")
+LOCK = os.path.join(RUN, "lock")
+HOME = os.path.expanduser("~")
+PLUGIN = os.path.join(HOME, ".config/omarchy/plugins/kr4nk.openwrt/settings.json")
+CONFIG = os.path.join(HOME, ".config/k4/router.json")
+SELF = os.path.abspath(sys.argv[0])
+N = 40           # samples kept for the sparklines
+ANON = "0" * 32  # ubus's unauthenticated session
+os.environ["PATH"] = os.path.join(HOME, ".local/bin") + ":" + os.environ.get("PATH", "")
+
+
+def settings():
+    s = {"routerHost": "192.168.1.1", "routerUser": "root", "scanInterval": 3, "notifyNewClients": True, "scheme": "http"}
+    for path in (PLUGIN, CONFIG):
+        try:
+            with open(path) as f:
+                s.update(json.load(f))
+        except (OSError, ValueError):
+            pass
+    if os.environ.get("K4_ROUTER_HOST"):  # tests
+        s["routerHost"] = os.environ["K4_ROUTER_HOST"]
+    return s
+
+
+def load_state():
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(st):
+    os.makedirs(RUN, mode=0o700, exist_ok=True)
+    tmp = STATE + ".new"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # holds the session token
+    with os.fdopen(fd, "w") as f:
+        json.dump(st, f)
+    os.replace(tmp, STATE)
+
+
+# ---------- the keyring (the plugin's entry) ----------
+def secret_get():
+    try:
+        r = subprocess.run(["secret-tool", "lookup", "application", "kr4nk.openwrt"], capture_output=True, text=True, timeout=5)
+        return r.stdout if r.returncode == 0 else ""
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def secret_set(user, pw):
+    r = subprocess.run(["secret-tool", "store", "--label", "OpenWrt Router", "application", "kr4nk.openwrt", "username", user],
+                       input=pw, capture_output=True, text=True, timeout=10)
+    return r.returncode == 0
+
+
+# ---------- ubus ----------
+class Unreachable(Exception):
+    pass
+
+
+class Denied(Exception):  # the session can't call that object (expired, or outside its ACL)
+    pass
+
+
+class LoginFailed(Exception):  # the router refused the password itself
+    pass
+
+
+def rpc(cfg, token, obj, method, params=None, timeout=4):
+    url = "%s://%s/ubus" % (cfg.get("scheme", "http"), cfg["routerHost"])
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "call", "params": [token, obj, method, params or {}]}).encode()
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            j = json.loads(r.read().decode() or "{}")
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise Unreachable(str(e))
+    if "error" in j:
+        if j["error"].get("code") == -32002:  # Access denied: the session is gone
+            raise Denied()
+        return None
+    res = j.get("result") or []
+    if not res or res[0] != 0:
+        if res and res[0] == 6:  # UBUS_STATUS_PERMISSION_DENIED
+            raise Denied()
+        return None
+    return res[1] if len(res) > 1 else {}
+
+
+def login(cfg, pw):
+    """The session token; LoginFailed when the router refuses the password."""
+    try:
+        r = rpc(cfg, ANON, "session", "login", {"username": cfg["routerUser"], "password": pw})
+    except Denied:
+        raise LoginFailed()
+    if not r or not r.get("ubus_rpc_session"):
+        raise LoginFailed()
+    return r["ubus_rpc_session"]
+
+
+def session(cfg, st, fresh=False):
+    if st.get("token") and not fresh:
+        return st["token"]
+    pw = secret_get()
+    if not pw:
+        raise LookupError("nopass")
+    st["token"] = login(cfg, pw)
+    return st["token"]
+
+
+def call(cfg, st, obj, method, params=None, timeout=4):
+    """rpc with the cached session, logging in again once when it expired; None when the
+    object stays denied with a fresh session (outside this user's ACL: that part is skipped)."""
+    try:
+        return rpc(cfg, session(cfg, st), obj, method, params, timeout)
+    except Denied:
+        pass
+    try:
+        return rpc(cfg, session(cfg, st, fresh=True), obj, method, params, timeout)
+    except Denied:
+        return None
+
+
+# ---------- this machine ----------
+def my_macs():
+    out = set()
+    try:
+        for n in os.listdir("/sys/class/net"):
+            try:
+                with open("/sys/class/net/%s/address" % n) as f:
+                    m = f.read().strip().lower()
+                if m and m != "00:00:00:00:00:00":
+                    out.add(m)
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return out
+
+
+def band_name(b):
+    return {"2g": "2.4 GHz", "5g": "5 GHz", "6g": "6 GHz", "60g": "60 GHz"}.get(b, b or "?")
+
+
+def lease_left(expires):
+    if expires is None or expires is False or (isinstance(expires, (int, float)) and expires <= 0):
+        return "static"
+    s = int(expires)
+    if s >= 3600:
+        return "%d h" % (s // 3600)
+    return "%d min" % max(1, s // 60)
+
+
+def ip_net(addr, mask):
+    try:
+        a = [int(x) for x in addr.split(".")]
+        v = (a[0] << 24) | (a[1] << 16) | (a[2] << 8) | a[3]
+        return v >> (32 - int(mask)), int(mask)
+    except (ValueError, IndexError):
+        return None
+
+
+def in_net(ip, net):
+    if not net or not ip:
+        return True
+    try:
+        a = [int(x) for x in ip.split(".")]
+        v = (a[0] << 24) | (a[1] << 16) | (a[2] << 8) | a[3]
+        return v >> (32 - net[1]) == net[0]
+    except (ValueError, IndexError):
+        return True
+
+
+def notify_client(c):
+    """A k4-notify card (Copy IP, Open Router), else notify-send."""
+    title = "New on %s · %s" % (c.get("ssid") or "the network", "(no name)" if c["host"] == "*" else c["host"])
+    body = " · ".join(x for x in (c["ip"], c["mac"], c["band"]) if x)
+    cmd = "%s do-card %s" % (SELF, c["ip"])  # the card's buttons: KEY and the card's id follow
+    f = ["post", 0, "Router", title, body, 1, -1, -1, "", "", "", "copy:Copy IP,open:Open Router", cmd, ""]
+    sock = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "k4-notify.sock")
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(2)
+        s.connect(sock)
+        s.sendall(("\t".join(clean(x) for x in f) + "\n").encode())
+        s.shutdown(socket.SHUT_WR)
+        while s.recv(4096):
+            pass
+        s.close()
+        return
+    except OSError:
+        pass
+    subprocess.run(["notify-send", "-a", "Router", title, body], capture_output=True, timeout=5)
+
+
+# ---------- the poll ----------
+def poll(force=False):
+    """Fresh state (polls the router when the last poll is older than the interval); one poller at a time."""
+    os.makedirs(RUN, mode=0o700, exist_ok=True)
+    cfg = settings()
+    every = max(1, float(cfg.get("scanInterval") or 3))
+    with open(LOCK, "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        st = load_state()
+        now = time.time()
+        if not force and now - st.get("polled", 0) < every * 0.8:
+            return st
+        st["polled"] = now
+        st["host"], st["user"], st["scheme"] = cfg["routerHost"], cfg["routerUser"], cfg.get("scheme", "http")
+        try:
+            fetch(cfg, st, now)
+            if st.get("status") == "rebooting" and now - st.get("reboot_at", 0) < 15:
+                pass  # still answering on its way down
+            else:
+                st["status"] = "ok"
+                st["reboot_at"] = 0
+            st["last_seen"] = now
+            st.pop("err", None)
+        except LookupError:
+            st["status"] = "nopass"
+            st.pop("token", None)
+        except LoginFailed:  # never removes the stored password: a wrong one is replaced from the window
+            st.pop("token", None)
+            if st.get("status") != "rebooting":
+                st["status"] = "fail"
+        except Unreachable as e:
+            st.pop("token", None)
+            if st.get("status") != "rebooting":
+                st["status"] = "unreach"
+            st["err"] = str(e)[:120]
+        save_state(st)
+        return st
+
+
+def fetch(cfg, st, now):
+    board = call(cfg, st, "system", "board") or {}
+    info = call(cfg, st, "system", "info") or {}
+    ifaces = (call(cfg, st, "network.interface", "dump") or {}).get("interface", [])
+    devs = call(cfg, st, "luci-rpc", "getNetworkDevices") or {}
+    wcfg = (call(cfg, st, "uci", "get", {"config": "wireless"}) or {}).get("values", {})
+    leases = (call(cfg, st, "luci-rpc", "getDHCPLeases") or {}).get("dhcp_leases", [])
+
+    rel = board.get("release") or {}
+    mem = info.get("memory") or {}
+    total = mem.get("total", 0)
+    avail = mem.get("available", mem.get("free", 0) + mem.get("buffered", 0) + mem.get("cached", 0))
+    load = [x / 65536.0 for x in (info.get("load") or [0, 0, 0])]
+    up = int(info.get("uptime", 0))
+    if st.get("sys", {}).get("uptime", 0) > up + 60:  # it rebooted: changes saved for "next boot" are in
+        st["pending"] = []
+    st["sys"] = {"model": board.get("model", ""), "hostname": board.get("hostname", ""),
+                 "release": rel.get("description") or rel.get("version", ""), "kernel": board.get("kernel", ""),
+                 "uptime": up, "mem_used": (total - avail) / 1048576.0, "mem_total": total / 1048576.0, "load": load}
+
+    wan = next((i for i in ifaces if i.get("interface") == "wan"), None)
+    lan = next((i for i in ifaces if i.get("interface") == "lan"), None)
+    wan_up = bool(wan and wan.get("up"))
+    wan_ip = ((wan or {}).get("ipv4-address") or [{}])[0].get("address", "") if wan else ""
+    stats = (devs.get((wan or {}).get("l3_device") or (wan or {}).get("device") or "wan") or devs.get("wan") or {}).get("stats", {})
+    rx, tx = stats.get("rx_bytes", 0), stats.get("tx_bytes", 0)
+    prev = st.get("wan", {})
+    dt = now - prev.get("at", 0) if prev.get("at") else 0
+    rx_rate = max(0, rx - prev.get("rx", rx)) / dt if 0 < dt < 120 else 0
+    tx_rate = max(0, tx - prev.get("tx", tx)) / dt if 0 < dt < 120 else 0
+    down_since = prev.get("down_since", 0)
+    if wan_up:
+        down_since = 0
+    elif not down_since:
+        down_since = now
+    st["wan"] = {"up": wan_up, "ip": wan_ip or prev.get("ip", ""), "uptime": int((wan or {}).get("uptime", 0)),
+                 "rx": rx, "tx": tx, "at": now, "rx_rate": rx_rate, "tx_rate": tx_rate, "down_since": down_since}
+
+    hist = st.get("hist", [])
+    hist.append([round(100.0 * (total - avail) / total, 1) if total else 0, round(load[0], 2), round(rx_rate), round(tx_rate)])
+    st["hist"] = hist[-N:]
+
+    # radios (uci: network.wireless status is often outside the ACL) and who is on each
+    mine = my_macs()
+    radios, assoc = [], {}
+    for name, sec in wcfg.items():
+        if sec.get(".type") != "wifi-device":
+            continue
+        ssids = [v.get("ssid", "") for v in wcfg.values() if v.get(".type") == "wifi-iface" and v.get("device") == name]
+        radios.append({"id": name, "band": band_name(sec.get("band") or sec.get("hwmode", "")), "channel": str(sec.get("channel", "auto")),
+                       "width": sec.get("htmode", ""), "ssids": ssids, "on": sec.get("disabled", "0") != "1", "clients": 0, "mine": False})
+    iw = (call(cfg, st, "iwinfo", "devices") or {}).get("devices") or []
+    if not iw:  # outside the ACL: the plugin's guess, radioN = phyN-ap0
+        iw = ["phy%d-ap0" % int(r["id"][5:]) for r in radios if r["id"][5:].isdigit()]
+    for dev in iw:
+        m = re.match(r"phy(\d+)", dev) or re.match(r"wlan(\d+)", dev)
+        radio = "radio" + m.group(1) if m else ""
+        res = (call(cfg, st, "iwinfo", "assoclist", {"device": dev}) or {}).get("results") or []
+        for r in radios:
+            if r["id"] == radio:
+                r["clients"] += len(res)
+                for a in res:
+                    mac = (a.get("mac") or "").lower()
+                    assoc[mac] = r["band"]
+                    if mac in mine:
+                        r["mine"] = True
+    st["radios"] = radios
+
+    lan_net = None
+    if lan and lan.get("ipv4-address"):
+        a = lan["ipv4-address"][0]
+        lan_net = ip_net(a.get("address", ""), a.get("mask", 24))
+    known = st.get("known")
+    first = known is None
+    known = known or {}
+    clients = []
+    for l in leases:
+        mac = (l.get("macaddr") or "").lower()
+        if not mac:
+            continue
+        host = l.get("hostname") or "*"
+        ip = l.get("ipaddr", "")
+        c = {"host": host, "ip": ip, "mac": mac, "lease": lease_left(l.get("expires")), "band": assoc.get(mac, "LAN"),
+             "tag": "YOU" if mac in mine else ("GUEST" if not in_net(ip, lan_net) else ""), "seen": known.get(mac, now)}
+        if mac not in known:
+            known[mac] = now
+            if not first and settings().get("notifyNewClients", True):
+                notify_client(dict(c, ssid=(radios[0]["ssids"][0] if radios and radios[0]["ssids"] else "")))
+        if not c["tag"] and now - c["seen"] < 600:
+            c["tag"] = "NEW"
+        clients.append(c)
+    clients.sort(key=lambda c: -c["seen"])
+    st["known"] = known
+    st["clients"] = clients
+
+
+# ---------- what k4 reads ----------
+def clean(s):
+    return str(s).replace("\t", " ").replace("\n", " ")
+
+
+def line(*f):
+    print("\t".join(clean(x) for x in f))
+
+
+def data():
+    st = poll()
+    print("R\t%s do" % SELF)
+    print("L\t%s data" % SELF)
+    print("O\t%s log" % SELF)
+    line("G", st.get("status", "unreach"), st.get("host", ""), st.get("user", "root"), st.get("scheme", "http"),
+         int(st.get("last_seen", 0)), int(st.get("reboot_at", 0)), int(time.time()), st.get("err", ""))
+    s = st.get("sys")
+    if s:
+        line("S", s["model"], s["hostname"], s["release"], s["kernel"], s["uptime"], "%.0f" % s["mem_used"], "%.0f" % s["mem_total"],
+             *("%.2f" % x for x in (s["load"] + [0, 0, 0])[:3]))
+    w = st.get("wan")
+    if w:
+        peak = max([h[2] for h in st.get("hist", [])] or [0])
+        line("W", 1 if w["up"] else 0, w["ip"], w["uptime"], "%.0f" % w["rx_rate"], "%.0f" % w["tx_rate"], w["rx"], w["tx"],
+             int(w.get("down_since", 0)), "%.0f" % peak)
+    for h in st.get("hist", []):
+        line("H", *h)
+    pending = set(st.get("pending", []))
+    for r in st.get("radios", []):
+        line("Q", r["id"], r["band"], r["channel"], r["width"], ",".join(r["ssids"]), r["clients"], 1 if r["on"] else 0,
+             1 if r["mine"] else 0, 1 if r["id"] in pending else 0)
+    for c in st.get("clients", []):
+        line("C", c["host"], c["ip"], c["mac"], c["lease"], c["band"], c["tag"])
+
+
+SEV = {"emerg": "err", "alert": "err", "crit": "err", "err": "err", "error": "err", "warn": "warn", "warning": "warn", "notice": "notice"}
+
+
+def log():
+    cfg = settings()
+    st = load_state()
+    try:
+        r = call(cfg, st, "file", "exec", {"command": "/usr/libexec/syslog-wrapper"}, timeout=6) or {}
+        save_state(st)
+    except (Unreachable, LoginFailed, LookupError):
+        return
+    out = (r.get("stdout") or "").splitlines()
+    for l in reversed(out[-300:]):
+        m = re.match(r"\w{3} \w{3} +\d+ (\d\d:\d\d:\d\d) \d{4} (\S+)\.(\w+) (.*)", l)
+        if m:
+            line("T", m.group(1), SEV.get(m.group(3), "info"), m.group(2) + " " + m.group(4) if m.group(2) not in ("daemon", "kern", "user") else m.group(4))
+        elif l.strip():
+            line("T", "", "info", l)
+
+
+# ---------- the bar ----------
+def human_rate(b):
+    if b >= 1e6:
+        return "%.1f MB/s" % (b / 1e6)
+    return "%d KB/s" % round(b / 1e3)
+
+
+def dur(s):
+    s = int(s)
+    if s >= 86400:
+        return "%d d %d h" % (s // 86400, s % 86400 // 3600)
+    if s >= 3600:
+        return "%d h %d min" % (s // 3600, s % 3600 // 60)
+    if s >= 60:
+        return "%d min" % (s // 60)
+    return "%d s" % s
+
+
+ICON = "󰑩"  # nf-md-router_wireless
+
+
+def bar_line(st):
+    now = time.time()
+    status = st.get("status", "unreach")
+    host = st.get("host", "the router")
+    o = {"icon": ICON}
+    if status == "rebooting":
+        o.update(text="%d s" % (now - st.get("reboot_at", now)), text_tone="yellow", icon_tone="yellow", tooltip="Router rebooting · counts until it answers")
+    elif status == "nopass":
+        o.update(**{"class": "dim", "pill": "?", "badge_tone": "dnd", "tooltip": "Router · click to save the router password"})
+    elif status == "fail":
+        o.update(**{"class": "dim", "pill": "!", "badge_tone": "red", "tooltip": "Router · the saved password was refused"})
+    elif status != "ok":
+        seen = st.get("last_seen", 0)
+        o.update(**{"class": "dim", "tooltip": "%s not answering%s" % (host, " · last seen " + time.strftime("%H:%M", time.localtime(seen)) if seen else "")})
+    else:
+        s, w = st.get("sys", {}), st.get("wan", {})
+        n = len(st.get("clients", []))
+        tip = "%s · up %s · WAN %s · ↓ %s ↑ %s" % (s.get("model", "Router"), dur(s.get("uptime", 0)), w.get("ip", "?"),
+                                                  human_rate(w.get("rx_rate", 0)), human_rate(w.get("tx_rate", 0)))
+        if not w.get("up"):
+            o.update(text="WAN down", text_tone="red", icon_tone="red", text2=dur(now - (w.get("down_since") or now)), text2_tone="red",
+                     tooltip="WAN down · LAN and Wi-Fi still work · " + tip)
+        else:
+            o.update(text=str(n), tooltip=tip)
+            load = (s.get("load") or [0])[0]
+            if s.get("mem_total") and s["mem_used"] / s["mem_total"] > 0.8 or load > 2:
+                o["icon_tone"] = "yellow"
+            if any(now - c.get("seen", 0) < 2 and c.get("tag") == "NEW" for c in st.get("clients", [])) or now - st.get("new_at", 0) < 2:
+                o["outline"] = True
+    return json.dumps(o, ensure_ascii=False)
+
+
+def bar(follow):
+    if not follow:
+        print(bar_line(poll()))
+        return
+    last, seen_n = "", None
+    while True:
+        st = poll()
+        n = len(st.get("known") or {})
+        if seen_n is not None and n > seen_n:  # a new client: the outline for 2 s
+            st["new_at"] = time.time()
+        seen_n = n
+        out = bar_line(st)
+        if out != last:
+            print(out, flush=True)
+            last = out
+        if st.get("new_at") and time.time() - st["new_at"] < 2:
+            time.sleep(2.1)
+            st.pop("new_at", None)
+            out = bar_line(st)
+            print(out, flush=True)
+            last = out
+        time.sleep(max(1, float(settings().get("scanInterval") or 3)) if st.get("status") in ("ok", "rebooting") else 30)
+
+
+# ---------- actions ----------
+def act(verb, args):
+    cfg = settings()
+    st = load_state()
+    try:
+        if verb == "copy":
+            subprocess.run(["wl-copy"], input=args[0] if args else "", text=True, timeout=5)
+            print("Copied " + (args[1] if len(args) > 1 else args[0] if args else ""))
+        elif verb == "wanip":
+            ip = st.get("wan", {}).get("ip", "")
+            if ip:
+                subprocess.run(["wl-copy"], input=ip, text=True, timeout=5)
+                subprocess.run(["notify-send", "-a", "Router", "Copied the WAN IP", ip], capture_output=True)
+        elif verb == "reboot":
+            if call(cfg, st, "system", "reboot") is None:
+                print("The router didn’t allow a reboot for " + cfg["routerUser"])
+                return
+            st["status"], st["reboot_at"] = "rebooting", time.time()
+            save_state(st)
+            print("Router rebooting · usually back in about 90 s")
+        elif verb == "radio":
+            name, on = args[0], args[1] == "on"
+            call(cfg, st, "uci", "set", {"config": "wireless", "section": name, "values": {"disabled": "0" if on else "1"}})
+            call(cfg, st, "uci", "commit", {"config": "wireless"})
+            r = None
+            r = call(cfg, st, "file", "exec", {"command": "/sbin/wifi", "params": ["reload"]}, timeout=8)
+            band = next((x["band"] for x in st.get("radios", []) if x["id"] == name), name)
+            if r is not None and r.get("code", 1) == 0:
+                print("%s %s" % (band, "on" if on else "off"))
+            else:
+                p = set(st.get("pending", []))
+                p.add(name)
+                st["pending"] = sorted(p)
+                print("%s %s · saved · applies at next reboot (wifi reload not allowed)" % (band, "on" if on else "off"))
+            for x in st.get("radios", []):
+                if x["id"] == name:
+                    x["on"] = on
+            save_state(st)
+        elif verb == "password":
+            pw = os.environ.get("K4_INPUT", "")
+            if not pw:
+                print("Type the router password")
+                return
+            try:
+                tok = login(cfg, pw)
+            except LoginFailed:
+                st["status"] = "fail"
+                save_state(st)
+                print("The router said no to that password")
+                return
+            if not secret_set(cfg["routerUser"], pw):
+                print("Could not save to the keyring")
+                return
+            st["token"], st["status"] = tok, "ok"
+            save_state(st)
+            poll(force=True)
+            print("Saved to the keyring · connected to " + cfg["routerHost"])
+        elif verb == "retry":
+            st = poll(force=True)
+            print("Connected to " + cfg["routerHost"] if st.get("status") == "ok" else "Still no answer from " + cfg["routerHost"])
+        elif verb == "luci":
+            subprocess.Popen(["xdg-open", "%s://%s" % (cfg.get("scheme", "http"), cfg["routerHost"])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            print("k4:close")
+        else:
+            print("Unknown action: " + verb)
+    except Unreachable:
+        print("Can’t reach " + cfg["routerHost"])
+    except (LoginFailed, LookupError):
+        print("Not logged in to the router · Ctrl+K saves the password")
+
+
+def do_card(ip, key, _id=""):
+    """A new-client card's buttons (k4-notify runs CMD KEY ID)."""
+    if key == "copy":
+        subprocess.run(["wl-copy"], input=ip, text=True, timeout=5)
+    elif key in ("open", "default"):
+        subprocess.Popen([SELF, "open", "clients"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def open_window(page):
+    if subprocess.run(["pkill", "-f", "^k4 --router"]).returncode == 0:
+        return
+    args = ["k4", "--router"]
+    if page:
+        args += ["--open", page]
+    mx, w = os.environ.get("K4_BAR_MX"), os.environ.get("K4_BAR_WIDTH", "0")
+    if mx and int(w or 0) > 0:
+        args += ["--popup", "%s,%s,%s,right,%s" % (mx, os.environ.get("K4_BAR_MW", "0"), w, os.environ.get("K4_BAR_POS", "top"))]
+    p = subprocess.Popen(["sh", "-c", '"$0" data | "$@"', SELF] + args)
+    p.wait()
+
+
+def main():
+    a = sys.argv[1:] or ["open"]
+    if a[0] == "data":
+        data()
+    elif a[0] == "log":
+        log()
+    elif a[0] == "bar":
+        bar("--follow" in a)
+    elif a[0] == "do":
+        act(a[1] if len(a) > 1 else "", a[2:])
+    elif a[0] == "do-card":
+        do_card(a[1], a[2] if len(a) > 2 else "open")
+    elif a[0] == "open":
+        open_window(a[1] if len(a) > 1 else "")
+    elif a[0] == "poll":
+        poll(force=True)
+    else:
+        sys.stderr.write(__doc__)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except BrokenPipeError:
+        pass

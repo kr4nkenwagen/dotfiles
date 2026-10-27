@@ -203,6 +203,9 @@ spec() {
   m microphone right exec "$SELF status microphone --follow" 0 - "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle" - "$p audio" "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SOURCE@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-" "flash"
   m audio right exec "$SELF status audio --follow" 0 - "$p audio" "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle" - "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-" -
   m network right exec "$SELF status network --follow" 0 - "$p wifi" "nmcli radio wifi \"\$(nmcli radio wifi | grep -q enabled && echo off || echo on)\"" - - - -
+  # the OpenWrt router (k4-router): clients, the WAN rate in the tooltip; only with a router set up
+  { [ -f ~/.config/k4/router.json ] || [ -f ~/.config/omarchy/plugins/kr4nk.openwrt/settings.json ]; } && command -v k4-router >/dev/null \
+    && m router right exec "k4-router bar --follow" 0 - "k4-router open" "k4-router do wanip" - - - "px=7"
   m bluetooth right exec "$SELF status bluetooth" 5 - "$p bt" "bluetoothctl power \"\$(bluetoothctl show | grep -q 'Powered: yes' && echo off || echo on)\"" - - - -
   m brightness right exec "$SELF status brightness" 2 - "$p display" - - "brightnessctl set 5%+" "brightnessctl set 5%-" "flash"
   m battery right exec "$SELF status battery" 30 - "$p battery" - - - - -

@@ -1243,6 +1243,18 @@ share_rows() { local st dir n first
   item "Received files" 'k4-share received' "${dir/#$HOME/\~}"
   item "Trusted devices" : "${n:-0}${first:+ · $first}" ls-trusted; }
 
+# The OpenWrt router (k4-router): the Router rows in Network, when a router is set up
+router_set() { [ -f ~/.config/k4/router.json ] || [ -f ~/.config/omarchy/plugins/kr4nk.openwrt/settings.json ]; }
+router_rows() { local st id band ch ss n on mine rest flags
+  st=$(timeout 6 k4-router data 2>/dev/null)
+  hdr "Router"
+  item "Router…" 'k4-router open' "$(awk -F'\t' '$1 == "S" { print $2 }' <<<"$st")"
+  stay "Reboot router" 'k4-router do reboot' "" "confirm=Reboot the router?|Everyone’s internet and Wi-Fi drop for about 90 s, including this machine’s."
+  while IFS=$'\t' read -r _ id band ch _ ss n on mine rest; do
+    flags=""; [ "$on" = 1 ] && [ "$mine" = 1 ] && flags="confirm=Turn off $band? This machine is connected through it.|It drops off Wi-Fi until it reconnects on another band."
+    tog "$band Wi-Fi" "notify Router \"\$(k4-router do radio $id $([ "$on" = 1 ] && echo off || echo on) | tail -1)\"" "$([ "$on" = 1 ] && echo on || echo off)" "${ss//,/, } · $n clients" "$flags"
+  done < <(grep $'^Q\t' <<<"$st"); }
+
 # SSH (k4-ssh, the window on Super+Shift+S): the SSH rows in Utilities
 ssh_unit() { systemctl list-unit-files sshd.service >/dev/null 2>&1 && echo sshd || echo ssh; }
 ssh_on() { systemctl is-active -q "$(ssh_unit)"; }
@@ -1811,6 +1823,7 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            hdr "DNS"
            stay "DNS provider" dns_cycle "$(dns_now)"
            if command -v k4-share >/dev/null; then share_rows; fi
+           if command -v k4-router >/dev/null && router_set; then router_rows; fi
            hdr "More"
            stay "Ethernet" eth_toggle "$(eth_state)"
            command -v k4-secret >/dev/null && item "Keyring" 'k4-secret' "$(k4-secret count) saved by k4"
