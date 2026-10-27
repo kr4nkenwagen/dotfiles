@@ -515,8 +515,9 @@ find ~ ~/.config ~/.local/bin -maxdepth 1 -xtype l -lname "*${DOTFILES_DIR##*/}*
 # Unstow packages that belong to other profiles. An older init.sh stowed the
 # Omarchy hypr config everywhere, which breaks a non-Omarchy machine.
 all_stow_dirs=(fish nvim tmux theme menus aerc qutebrowser ghostty hypr omarchy vesktop wayland sway hyprland)
-# ubuntu/ became wayland/ + sway/ (same files): drop links into the old package first.
-find ~/.config ~/.local/bin -xtype l -lname '*dotfiles/ubuntu/*' -print -delete 2>/dev/null | sed 's/^/:: removed old link /' || true
+# ubuntu/ became wayland/ + sway/ (same files). ubuntu/ now only holds links to them, so a
+# machine that just pulled keeps working; here its old stow links are replaced for good.
+find ~/.config ~/.local/bin -type l -lname '*dotfiles/ubuntu/*' -print -delete 2>/dev/null | sed 's/^/:: removed old link /' || true
 unstow=()
 for d in "${all_stow_dirs[@]}"; do
   [ -d "$d" ] || continue
