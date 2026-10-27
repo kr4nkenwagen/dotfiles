@@ -462,7 +462,10 @@ def bar(follow):
         print(bar_line(poll()))
         return
     last, seen_n = "", None
+    parent = os.getppid()
     while True:
+        if os.getppid() != parent:  # the bar that started it is gone
+            return
         st = poll()
         n = len(st.get("known") or {})
         if seen_n is not None and n > seen_n:  # a new client: the outline for 2 s
