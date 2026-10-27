@@ -1375,7 +1375,41 @@ scale_pick() { local o i levels=(1 1.25 1.5 2); o=$(focused_output); [ -n "$o" ]
 scale_set() {  # scale_set OUTPUT SCALE; persisted in ~/.local/state/sway/display.conf
   local o="$1" v="$2"; swaymsg output "$o" scale "$v" >/dev/null; mkdir -p "$STATE"
   { grep -v "^output $o scale" "$STATE/display.conf" 2>/dev/null; echo "output $o scale $v"; } > "$STATE/display.conf.new" && mv "$STATE/display.conf.new" "$STATE/display.conf"
+  [ "$(outputs_geo | wc -l)" -gt 1 ] && arrange_apply   # its size changed: line the screens up again
   notify Scale "$o  $v×"; }
+# Arrangement (Display › Arrangement): each other screen right of, left of, above or below the
+# built-in one (else the first), edge to edge from their real sizes; the sides are kept in
+# $STATE/arrange (name<TAB>side) and applied again on every change.
+outputs_geo() { swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | select(.active) | [.name, .rect.width, .rect.height] | @tsv'; }   # name w h (logical)
+output_pos() {  # output_pos NAME X Y; kept in display.conf, which the sway config includes
+  swaymsg output "$1" pos "$2" "$3" >/dev/null; mkdir -p "$STATE"
+  { grep -v "^output $1 pos" "$STATE/display.conf" 2>/dev/null; echo "output $1 pos $2 $3"; } > "$STATE/display.conf.new" && mv "$STATE/display.conf.new" "$STATE/display.conf"; }
+arrange_anchor() { outputs_geo | awk -F'\t' '$1 ~ /^(eDP|LVDS|DSI)/ { print $1; f = 1; exit } NR == 1 { first = $1 } END { if (!f) print first }' | head -1; }
+arrange_side() { awk -F'\t' -v n="$1" '$1 == n { s = $2 } END { print s ? s : "Right" }' "$STATE/arrange" 2>/dev/null || echo Right; }
+arrange_set() {  # arrange_set NAME (side in K4_VALUE, or $2)
+  local side="${2:-${K4_VALUE:-Right}}"; mkdir -p "$STATE"
+  { grep -v "^$1	" "$STATE/arrange" 2>/dev/null; printf '%s\t%s\n' "$1" "$side"; } > "$STATE/arrange.new" && mv "$STATE/arrange.new" "$STATE/arrange"
+  arrange_apply; notify Display "$1 · $(printf '%s' "$side" | tr '[:upper:]' '[:lower:]') of $(arrange_anchor)"; }
+arrange_apply() {
+  local anchor aw ah n w h side x y rx lx ty by
+  anchor=$(arrange_anchor); [ -n "$anchor" ] || return
+  read -r aw ah < <(outputs_geo | awk -F'\t' -v a="$anchor" '$1 == a { print $2, $3 }')
+  rx=$aw lx=0 ty=0 by=$ah
+  local -a names=("$anchor") xs=(0) ys=(0)
+  while IFS=$'\t' read -r n w h; do
+    [ "$n" = "$anchor" ] && continue
+    side=$(arrange_side "$n")
+    case "$side" in
+      Left) lx=$((lx - w)); x=$lx; y=0 ;;
+      Above) ty=$((ty - h)); y=$ty; x=$(( (aw - w) / 2 )) ;;
+      Below) y=$by; by=$((by + h)); x=$(( (aw - w) / 2 )) ;;
+      *) x=$rx; y=0; rx=$((rx + w)) ;;
+    esac
+    names+=("$n"); xs+=("$x"); ys+=("$y")
+  done < <(outputs_geo)
+  local mx=0 my=0 i   # no negative positions: the leftmost and topmost start at 0
+  for i in "${!names[@]}"; do [ "${xs[$i]}" -lt "$mx" ] && mx=${xs[$i]}; [ "${ys[$i]}" -lt "$my" ] && my=${ys[$i]}; done
+  for i in "${!names[@]}"; do output_pos "${names[$i]}" $(( xs[i] - mx )) $(( ys[i] - my )); done; }
 external_outputs() { swaymsg -t get_outputs | jq -r '.[] | select(.name | test("^eDP|^LVDS|^DSI") | not) | "\(.name)\t\(.active)"'; }
 external_state() { external_outputs | awk -F'\t' '$2 == "true" { on = 1 } END { print on ? "on" : (NR ? "off" : "none") }'; }
 toggle_external() { local n a want; want=disable; [ "$(external_state)" = off ] && want=enable
@@ -1801,6 +1835,14 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            while IFS=$'\t' read -r n a; do
              tog "$n  $([[ $n =~ ^(eDP|LVDS|DSI) ]] && echo built-in || echo external)" "output_toggle $(printf %q "$n")" "$([ "$a" = true ] && echo on || echo off)" "$([ "$a" = true ] && echo enabled || echo disabled)"
            done < <(outputs_tsv | cut -f1,2)
+           if [ -z "$OMARCHY" ] && [ "$(outputs_geo | wc -l)" -gt 1 ]; then   # Omarchy keeps positions in monitors.lua
+             a=$(arrange_anchor)
+             hdr "Arrangement · relative to $a"
+             while IFS=$'\t' read -r n _ _; do [ "$n" = "$a" ] && continue
+               choice "$n" "arrange_set $(printf %q "$n")" "$(arrange_side "$n")" "Right|Left|Above|Below"
+             done < <(outputs_geo)
+             stay "Line them up again" 'arrange_apply; notify Display "Arranged"' "after a resolution or scale change"
+           fi
            hdr "More"
            tog "Night light" 'toggle_night; sleep 0.3; notify "Night light" "$(onoff night_on)"' "$(onoff night_on)"
            item "Scale" : "$(outputs_tsv | awk -F'\t' '$3 == "true" { print $4; exit }')" scale ;;
@@ -2010,7 +2052,12 @@ if [ "$WM" = hyprland ]; then
   outputs_tsv() { hyprctl -j monitors all 2>/dev/null | jq -r '.[] | [.name, ((.disabled // false) | not | tostring), (.focused | tostring), (.scale | tostring)] | @tsv'; }
   focused_output() { hyprctl -j monitors 2>/dev/null | jq -r '.[] | select(.focused) | .name'; }
   screen_size() { hyprctl -j monitors 2>/dev/null | jq -r '(map(.width) | max | tostring) + "x" + (map(.height) | max | tostring)'; }
-  scale_set() { hypr_keep display "$1" "hl.monitor({ output = \"$1\", mode = \"preferred\", position = \"auto\", scale = $2 })"; notify Scale "$1  $2×"; }
+  hypr_monitor_pos() { hyprctl -j monitors 2>/dev/null | jq -r --arg o "$1" '.[] | select(.name == $o) | "\(.x)x\(.y)"'; }
+  scale_set() { local p; p=$(hypr_monitor_pos "$1"); hypr_keep display "$1" "hl.monitor({ output = \"$1\", mode = \"preferred\", position = \"${p:-auto}\", scale = $2 })"
+    [ -z "$OMARCHY" ] && [ "$(outputs_geo | wc -l)" -gt 1 ] && arrange_apply; notify Scale "$1  $2×"; }
+  outputs_geo() { hyprctl -j monitors 2>/dev/null | jq -r '.[] | [.name, ((if .transform % 2 == 1 then .height else .width end) / .scale | floor), ((if .transform % 2 == 1 then .width else .height end) / .scale | floor)] | @tsv'; }
+  output_pos() { local sc; sc=$(outputs_tsv | awk -F'\t' -v o="$1" '$1 == o { print $4 }')
+    hypr_keep display "$1" "hl.monitor({ output = \"$1\", mode = \"preferred\", position = \"$2x$3\", scale = ${sc:-1} })"; }
   set_scale() { local o; o=$(focused_output); [ -n "$o" ] && scale_set "$o" "$1"; }
   output_toggle() {  # never the last active output
     local on n; on=$(outputs_tsv | awk -F'\t' -v o="$1" '$1 == o { print $2 }'); n=$(outputs_tsv | awk -F'\t' '$2 == "true"' | wc -l)
