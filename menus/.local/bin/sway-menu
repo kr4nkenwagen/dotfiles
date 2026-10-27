@@ -2146,7 +2146,7 @@ case "${1:-}" in
   bar-start) bar_start ;;
   power) power_menu ;;   # the system menu (k4 --power; Super+Esc via k4-power)
   power-tiles) power_tiles ;;   # what k4 --power reads (dry runs: sway-menu power-tiles | k4 --power --dry-run x.png)
-  call) case "${2:-}" in toggle_night|toggle_idle|toggle_dnd|record_toggle|kb_cycle) "$2" ;; wifi_join) shift 2; wifi_join "$@" ;; *) echo "sway-menu call: not callable: ${2:-}" >&2; exit 2 ;; esac ;;   # the k4 bar's indicator clicks   # the status bar picked in Toggle › Status bar (Hyprland autostart runs it)
+  call) case "${2:-}" in toggle_night|toggle_idle|toggle_dnd|record_toggle|kb_cycle|toggle_bar|toggle_gaps|color_picker) "$2" ;; wifi_join) shift 2; wifi_join "$@" ;; *) echo "sway-menu call: not callable: ${2:-}" >&2; exit 2 ;; esac ;;   # the k4 bar's indicator clicks   # the status bar picked in Toggle › Status bar (Hyprland autostart runs it)
   idle) idle ;;
   pkg-install) pkg_install ;;
   pkg-remove) pkg_remove ;;
@@ -2174,6 +2174,7 @@ case "${1:-}" in
   menu) main_menu ;;                                    # the k4 bar's menu button
   calendar|battery|toggle|update|system|apps|bt|capture) k4_main "$1" ;; # the k4 bar's popups; capture: Super+Ctrl+C
   kb-next) kb_cycle ;;
+  keybindings) show_keybindings ;;   # Super+K, as on Omarchy
   timezone) if [ "$LAUNCHER" = k4 ]; then k4_main timezone; else tz_menu; fi ;;
   k4-section) k4_section "${2:?section}" ;;
   k4-page) shift; k4_page "${1:?page}" "${@:2}" ;;
