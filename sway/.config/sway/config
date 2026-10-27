@@ -55,7 +55,8 @@ exec dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY SWAYSO
 # The status bar: k4's (k4-bar, one per output) unless Toggle › Status bar picked Waybar or k4 is missing
 exec_always sh -c 'pkill -x waybar; pkill -f "^k4 --bar"; sleep 0.3; if [ "$(cat ~/.local/state/sway/bar 2>/dev/null || echo k4)" = k4 ] && [ -x ~/.local/bin/k4 ]; then exec ~/.local/bin/k4-bar; else exec waybar -c $theme/waybar.jsonc -s $theme/waybar.css; fi'
 # notifications: k4's (k4-notify: popups, the Super+N centre), mako without k4
-exec sh -c '[ -x ~/.local/bin/k4 ] && exec ~/.local/bin/k4-notify daemon || exec mako -c $theme/mako.ini'
+# (a mako already started by an early notification gives way: it doesn't let k4 take over)
+exec sh -c 'if [ -x ~/.local/bin/k4 ]; then pkill -x mako; sleep 0.2; exec ~/.local/bin/k4-notify daemon; else exec mako -c $theme/mako.ini; fi'
 exec ~/.local/bin/k4-share daemon   # LocalSend for k4: receive and send (port 53317 tcp/udp must be open)
 exec lxpolkit
 exec nm-applet

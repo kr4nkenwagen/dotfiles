@@ -1,0 +1,5 @@
+# k4's notifications (k4-notify) when something notifies before the session started them: this
+# user file comes before the system's, so mako (or another daemon) isn't started in their place.
+[D-BUS Service]
+Name=org.freedesktop.Notifications
+Exec=/bin/sh -c 'if [ -x "$HOME/.local/bin/k4" ]; then exec "$HOME/.local/bin/k4-notify" daemon; else exec mako; fi'
