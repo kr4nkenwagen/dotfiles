@@ -8,7 +8,7 @@
 
 html:is([data-color-mode], [style*="--ds-"]) {
   /* surfaces */
-  --ds-surface: var(--t-bg) !important;
+  --ds-surface: transparent !important; /* the page shows the desktop through, as other sites do */
   --ds-surface-hovered: var(--t-hover) !important;
   --ds-surface-pressed: var(--t-pressed) !important;
   --ds-surface-sunken: var(--t-sunken) !important;
@@ -351,8 +351,10 @@ html:is([data-color-mode], [style*="--ds-"]) {
 
 /* all.css paints every page's root see-through and links in its own colour: in Atlassian
    apps the root takes the theme's background and links keep the token colour. */
-html:is([data-color-mode], [style*="--ds-"]):not(#\9) { background-color: var(--t-bg) !important; }
-html:is([data-color-mode], [style*="--ds-"]) body { background-color: var(--ds-surface) !important; color: var(--ds-text) !important; }
+/* The root carries the terminal-like translucency (--bg_translucent, from ghostty's opacity) like
+   every other page; the body and the base surface stay clear over it, raised ones solid. */
+html:is([data-color-mode], [style*="--ds-"]):not(#\9) { background-color: var(--bg_translucent) !important; }
+html:is([data-color-mode], [style*="--ds-"]) body { background-color: transparent !important; color: var(--ds-text) !important; }
 html:is([data-color-mode], [style*="--ds-"]) a { color: var(--ds-link) !important; }
 html:is([data-color-mode], [style*="--ds-"]) a:visited { color: var(--ds-link) !important; }
 /* Buttons and lozenges that put text on a coloured fill */
@@ -393,7 +395,8 @@ body#jira .aui-banner {
 body#jira #summary-val,
 body#jira .issue-header h1 { color: var(--t-fg) !important; }
 
-/* Self-hosted Jira without design tokens (older Data Center, AUI): the same theme by hand. */
+/* Self-hosted Jira without design tokens (older Data Center, AUI): the same theme by hand; the
+   page itself clear over all.css's translucent root. */
 html:not([data-color-mode]):not([style*="--ds-"]) body#jira,
 html:not([data-color-mode]):not([style*="--ds-"]) body#jira #page,
 html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-page-panel,
@@ -401,7 +404,7 @@ html:not([data-color-mode]):not([style*="--ds-"]) body#jira .aui-page-panel-cont
 html:not([data-color-mode]):not([style*="--ds-"]) body#jira .issue-view,
 html:not([data-color-mode]):not([style*="--ds-"]) body#jira .issue-body-content,
 html:not([data-color-mode]):not([style*="--ds-"]) body#jira #content {
-  background-color: var(--t-bg) !important;
+  background-color: transparent !important;
   color: var(--t-fg) !important;
   border-color: var(--t-border) !important;
 }
