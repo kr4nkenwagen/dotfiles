@@ -101,9 +101,24 @@ def secret_put(kind, value):
 
 
 def bridge_secret():
+    """provisioning.shared_secret from the bridge's config: the JSON setup wrote, or the YAML the
+    bridge rewrites it as on its first start (no YAML module needed for one key)."""
     try:
-        with open(os.path.join(CONF, "meta.yaml")) as f: return json.load(f)["provisioning"]["shared_secret"]
-    except (OSError, ValueError, KeyError): return os.environ.get("K4_MESSENGER_PROV_SECRET", "")
+        text = open(os.path.join(CONF, "meta.yaml")).read()
+    except OSError:
+        return os.environ.get("K4_MESSENGER_PROV_SECRET", "")
+    try:
+        return json.loads(text)["provisioning"]["shared_secret"]
+    except (ValueError, KeyError, TypeError):
+        pass
+    inside = False
+    for line in text.splitlines():
+        if line and not line[0].isspace() and not line.startswith("#"):
+            inside = line.split("#")[0].strip() == "provisioning:"
+        elif inside:
+            m = re.match(r"\s+shared_secret:\s*(.*?)\s*$", line)
+            if m: return m.group(1).strip("'\"")
+    return os.environ.get("K4_MESSENGER_PROV_SECRET", "")
 
 
 def prov(method, path, body=None):
