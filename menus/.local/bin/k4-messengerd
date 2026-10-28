@@ -176,16 +176,29 @@ def hs_config(registration):
     return tok, old != text
 
 
+def first_user_token():
+    """continuwuity's one-time token for the first account: printed in its log at start (the
+    configured token works only once an account exists)."""
+    try:
+        out = subprocess.run(["journalctl", "--user", "-u", "k4-matrix.service", "-n", "5000", "--no-pager", "-o", "cat"],
+                             capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    found = re.findall(r"using the registration token (\S+?) ?\.", out)
+    return found[-1] if found else ""
+
+
 def register(tok):
     password = secrets.token_urlsafe(24)
     body = {"username": "me", "password": password, "inhibit_login": False, "initial_device_display_name": "k4"}
-    st, r = http("POST", HS + "/_matrix/client/v3/register", body)
-    if st == 401 and "session" in r:  # user-interactive auth: the registration token
-        body["auth"] = {"type": "m.login.registration_token", "token": tok, "session": r["session"]}
+    st, r = 0, {}
+    for t in [x for x in (first_user_token(), tok) if x]:
+        st, r = http("POST", HS + "/_matrix/client/v3/register", body)  # user-interactive auth: a new session
+        if st != 401 or "session" not in r: break
+        body["auth"] = {"type": "m.login.registration_token", "token": t, "session": r["session"]}
         st, r = http("POST", HS + "/_matrix/client/v3/register", body)
-        if st == 401 and "session" in r:  # some servers want m.login.dummy after the token
-            body["auth"] = {"type": "m.login.dummy", "session": r["session"]}
-            st, r = http("POST", HS + "/_matrix/client/v3/register", body)
+        body.pop("auth", None)
+        if st == 200: break
     if st != 200 or "access_token" not in r:
         raise SystemExit("k4-messengerd: registering %s failed: %s" % (ME, r.get("error", st)))
     secret_put("matrix", r["access_token"])
