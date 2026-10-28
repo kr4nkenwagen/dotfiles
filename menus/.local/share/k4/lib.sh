@@ -26,6 +26,7 @@ k4flag() { k4clean "$1" | tr ';' ','; }                                         
 item() { printf 'A\t%s\t%s\t%s\t%s\t%s\n' "$(k4id "$2")" "$(k4clean "$1")" "$(k4clean "${3:-}")" "${4:-}" "${5:-}"; }  # item LABEL ACTION [META] [VIEW] [FLAGS]
 stay() { item "$1" "$2" "${3:-}" "" "stay${4:+;$4}"; }                                    # runs in place, menu stays open
 slider() { item "$1" "$2" "" "" "slider=${3:-0};step=${4:-5}"; }
+tog() { stay "$1" "$2" "${4:-}" "toggle=$3${5:+;$5}"; }   # tog LABEL ACTION on|off [META] [FLAGS]: a switch row (Space/Enter flips it)
 choice() { item "$1" "$2" "$3" "" "choice=$4${5:+;$5}"; }   # choice LABEL ACTION VALUE 'A|B|C' [FLAGS]: ← → runs ACTION with $K4_VALUE
 hdr() { printf 'H\t%s\t%s\n' "$(k4clean "$1")" "${2:-}"; }                                # hdr TEXT [COUNT]
 empty() { printf 'E\t%s\n' "$(k4clean "$1")"; }                                           # "Nothing to review" under a heading

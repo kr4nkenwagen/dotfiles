@@ -14,6 +14,8 @@
 #                                   number in its window title ("(3) Discord"), else its notifications in k4's history
 #   k4-tray pin-click N [menu]      a click on that icon (menu: the right click, the popup at its menu)
 #   k4-tray popup [ITEM]            the popup (from a bar click: under it; again: closes it)
+#   k4-tray needs-menu              the bar's right click: the menu of the app that needs you most
+#                                   (most unread among those asking for attention), else the popup
 # ITEM = the bus name and object path the watcher lists ("<name>/<path>").
 export PATH="$HOME/.local/bin:$PATH"
 STATE="$HOME/.local/state/sway"
@@ -185,5 +187,13 @@ case "${1:-popup}" in
     if [ "${3:-}" = menu ]; then popup "$it"
     else [ "$(act "$it" open)" = "k4:menu" ] && popup "$it"; fi ;;
   popup) popup "${2:-}" ;;
+  needs-menu)
+    best="" most=-1
+    while IFS= read -r it; do
+      [ -n "$it" ] || continue; p=$(props "$it") || continue
+      [ "$(jq -r '.Status // ""' <<<"$p")" = NeedsAttention ] || continue
+      c=$(count "$(jq -r '.Id // ""' <<<"$p")"); [ "$c" -gt "$most" ] && { most=$c; best=$it; }
+    done < <(items)
+    popup "$best" ;;
   *) echo "usage: k4-tray list|menu ITEM|act ITEM VERB|status|pinned N|pin-click N [menu]|popup" >&2; exit 2 ;;
 esac

@@ -91,14 +91,14 @@ status() {
     if [ -n "$OMARCHY" ]; then [ -f "$HOME/.local/state/omarchy/indicators/stay-awake" ] || { out; return; }
     else pgrep -x swayidle >/dev/null || pgrep -x hypridle >/dev/null && { out; return; }; fi
     out icon 󰅶 tooltip "Stay awake (idle lock off) · click turns the lock back on" ;;
-  updates)
+  updates)  # the count of waiting updates (followed: see follow_status)
     local n
     if command -v checkupdates >/dev/null; then n=$(checkupdates --nocolor 2>/dev/null | wc -l)
     else n=$(apt list --upgradable 2>/dev/null | grep -c upgradable) || true; fi
     [ "${n:-0}" -gt 0 ] || { out; return; }
-    out icon 󰇚 icon_tone blue text "$([ "$n" -gt 99 ] && echo 99+ || echo "$n")" tooltip "$n updates waiting · click updates · right click checks now" ;;
+    out icon 󰇚 icon_tone blue text "$([ "$n" -gt 99 ] && echo 99+ || echo "$n")" tooltip "$n updates waiting · click updates in a terminal · right click checks now" ;;
   weather)  # icon and temperature; offline: the last value, dim, with a yellow !
-    local j; j=$(sway-weather 2>/dev/null) || { out icon 󰑓 text "–°" class dim; return; }
+    local j; j=$(sway-weather 2>/dev/null) || { out icon 󰑓 text "–°" class dim tooltip "Fetching the weather…"; return; }
     local text cls tip icon temp
     text=$(jq -r '.text // ""' <<<"$j"); cls=$(jq -r '.class // ""' <<<"$j"); tip=$(jq -r '.tooltip // ""' <<<"$j")
     icon=${text%% *}; temp=${text#* }; [ "$temp" = "$text" ] && temp=""
@@ -178,6 +178,13 @@ follow_status() {  # status, then again on every change of what it shows
            status media; exec sleep infinity ;;   # blocks: the bar restarts a follower that ends
     microphone|audio) follow sh -c 'pactl subscribe | grep --line-buffered -E "sink|source|server"' ;;
     network) follow nmcli monitor ;;
+    updates)  # "…" while checking, then the count; every hour, or at once on SIGUSR1 (the right click)
+      local w=""; trap '[ -n "$w" ] && kill "$w" 2>/dev/null' USR1
+      while :; do
+        out icon 󰑓 class dim text "…" tooltip "Checking for updates…"
+        status updates
+        sleep 3600 & w=$!; wait "$w"; w=""
+      done ;;
     keyboard) if [ -n "$HYPR" ]; then follow sh -c 'socat -U - "UNIX-CONNECT:$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock" | grep --line-buffered "^activelayout>>"'
               else follow swaymsg -m -t subscribe '["input"]'; fi ;;
     *) status "$1" ;;
@@ -188,7 +195,7 @@ spec() {
   local p="$SELF popup" c="sway-menu call"
   printf 'B\theight=26\tposition=%s\ttransparent=%s\n' "$(cat "$STATE/bar-position" 2>/dev/null || echo top)" "$([ "$(cat "$STATE/bar-background" 2>/dev/null)" = transparent ] && echo 1 || echo 0)"
   m() { local IFS=$'\t'; printf 'M\t%s\n' "$*"; }
-  m menu left icon 󰕰 0 accent "$p menu" "${TERMINAL:-ghostty}" - - - "px=9"
+  m menu left icon 󰕰 0 accent "$p menu" "${TERMINAL:-ghostty}" - - - "px=9;tip=k4 menu · Super+Space"
   m workspaces left workspaces - 0 - - - - - - -
   m window left window - 0 - - - - - - -
   m clock center clock "%H:%M;%a %d %b|%Y-%m-%d %H:%M:%S;w%V" 0 - "$p calendar" - - - - "px=10;next=~/.cache/k4/cal/today.tsv"
@@ -205,9 +212,9 @@ spec() {
   m pin0 right exec "k4-tray pinned 0" 3 - "k4-tray pin-click 0" "k4-tray pin-click 0 menu" - - - "px=4"   # tray apps pinned to the bar
   m pin1 right exec "k4-tray pinned 1" 3 - "k4-tray pin-click 1" "k4-tray pin-click 1 menu" - - - "px=4"
   m pin2 right exec "k4-tray pinned 2" 3 - "k4-tray pin-click 2" "k4-tray pin-click 2 menu" - - - "px=4"
-  m tray right exec "k4-tray status" 3 - "k4-tray popup" "k4-tray popup" - - - "px=6"   # the tray: chevron, count, red count needing you
-  m updates right exec "$SELF status updates" 3600 - "$p update" "$SELF status updates >/dev/null" - - - -
-  m perf right exec "k4-perf bar" 2 - "k4-perf popup" "k4-perf util btop" - - - "px=7"   # CPU and memory in use; the System popup
+  m tray right exec "k4-tray status" 3 - "k4-tray popup" "k4-tray needs-menu" - - - "px=6"   # the tray: chevron, count, red count needing you
+  m updates right exec "$SELF status updates --follow" 0 - "sway-menu run-update" "pkill -USR1 -f 'k4-ba[r] status updates --follow'" - - - -
+  m perf right exec "k4-perf bar" 2 - "k4-perf popup" "k4-perf util btop" - - - "px=7;wide"   # CPU and memory in use; the System popup
   command -v k4-bus >/dev/null && m bus right exec "k4-bus bar" 60 - "$p bus" "k4-bus act refresh >/dev/null" - - - "px=6;maxw=150;slim"   # the next bus at your stop: its line in a box, the minutes
   m weather right exec "$SELF status weather" 900 - "$p weather" "rm -f ~/.cache/sway-weather.json" - - - -
   m microphone right exec "$SELF status microphone --follow" 0 - "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle" - "$p audio" "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SOURCE@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-" "flash"

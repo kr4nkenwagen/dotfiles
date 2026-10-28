@@ -2347,6 +2347,7 @@ case "${1:-}" in
   kb-next) kb_cycle ;;
   keybindings) show_keybindings ;;
   displays) displays_open ;;
+  run-update) eval "$(update_cmd)" ;;                 # the bar's update module: the update in a terminal
   net-job) shift; case "${1:-}" in wifi) shift; wifi_join_job "$@" ;; bt) shift; bt_connect_job "$@" ;; esac ;;   # wifi_join / bt_connect in the background
   displays-watch) displays_watch ;;                    # started with the session: per-setup layouts                           # Display › Arrange by dragging…
   displays-apply) shift; displays_apply "$@" ;;   # Super+K, as on Omarchy

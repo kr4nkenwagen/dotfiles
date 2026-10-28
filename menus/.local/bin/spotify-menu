@@ -17,9 +17,10 @@ meta() { busctl --user -j get-property "$DEST" "$OBJ" "$P" Metadata 2>/dev/null 
 focus() {  # bring the Spotify window forward
   if [ -n "${SWAYSOCK:-}" ]; then swaymsg '[class="Spotify"] focus' >/dev/null 2>&1
   elif command -v hyprctl >/dev/null; then hyprctl dispatch focuswindow 'class:^(Spotify|spotify)$' >/dev/null 2>&1; fi; }
-set_shuffle() { busctl --user set-property "$DEST" "$OBJ" "$P" Shuffle b "$([ "$K4_VALUE" = On ] && echo true || echo false)"; notify Shuffle "$K4_VALUE"; }
 set_repeat() {  # Off / Playlist / Track -> MPRIS None / Playlist / Track
   busctl --user set-property "$DEST" "$OBJ" "$P" LoopStatus s "$([ "$K4_VALUE" = Off ] && echo None || echo "$K4_VALUE")"; notify Repeat "$K4_VALUE"; }
+toggle_shuffle() { local v=true; [ "$(prop Shuffle)" = true ] && v=false
+  busctl --user set-property "$DEST" "$OBJ" "$P" Shuffle b "$v"; notify Shuffle "$([ $v = true ] && echo on || echo off)"; }
 shuffle_now() { [ "$(prop Shuffle)" = true ] && echo On || echo Off; }
 repeat_now() { local l; l=$(prop LoopStatus); [ "$l" = None ] || [ -z "$l" ] && echo Off || echo "$l"; }
 now() { local t a; t=$(meta xesam:title); a=$(meta xesam:artist); printf '%s' "${t:-—}${a:+ — $a}"; }
@@ -42,7 +43,7 @@ section() {
   fi
   query search
   local st t steps; st=$(prop PlaybackStatus); t=$(meta xesam:title)
-  hints "↵" Run "← →" "Shuffle / repeat" "⌫" Back
+  hints "↵" Run "Space" Shuffle "← →" Repeat "⌫" Back
   if [ -z "$t" ]; then
     desc "Nothing playing" "" "Search Spotify…"
     notice "Nothing playing" "Start something in Spotify, or search from here." muted
@@ -60,9 +61,9 @@ section() {
     stay "Next track" 'call Next; sleep 0.4; notify Playing "$(now)"' "" "mark=»"
     stay "Previous track" 'call Previous; sleep 0.4; notify Playing "$(now)"' "" "mark=«"
   fi
-  choice "Shuffle" set_shuffle "$(shuffle_now)" "On|Off" "mark=⇄"
-  choice "Repeat" set_repeat "$(repeat_now)" "Off|Playlist|Track" "mark=↻"
   [ -z "$t" ] && return
+  tog "Shuffle" toggle_shuffle "$([ "$(shuffle_now)" = On ] && echo on || echo off)" "" "mark=⇄"
+  choice "Repeat" set_repeat "$(repeat_now)" "Off|Playlist|Track" "mark=↻"
   hdr "More"
   stay "Copy track link" 'copy "track link" "$(meta xesam:url)" "track link"'
   item "Bring Spotify forward" 'focus'

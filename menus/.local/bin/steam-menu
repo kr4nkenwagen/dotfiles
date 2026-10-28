@@ -99,7 +99,7 @@ section() { local id name t m art n i=0 rows=()
   if ! running; then
     desc "Steam isn't running" "$(plural "$n" games)" "Search games…"
     notice "Steam isn't running" "Games still launch (Steam starts first). Status needs Steam open." muted
-    stay "Start Steam" 'bg steam; notify Starting Steam' "" current
+    [ -n "$(desktop_id)" ] || stay "Start Steam" 'bg steam; notify Starting Steam' "" current   # launch_row already offers "Launch Steam"
   else
     desc "$n installed · newest played first" "$(plural "$n" games)" "Search games…"
   fi
