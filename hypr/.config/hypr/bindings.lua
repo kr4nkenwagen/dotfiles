@@ -173,6 +173,7 @@ hl.unbind("SUPER + CTRL + S")
 o.bind("SUPER + CTRL + S", "Send to a nearby device (k4, LocalSend)", "k4-share send clipboard")
 hl.unbind("SUPER + CTRL + P") -- Omarchy's power popup (Super+Esc is k4's)
 o.bind("SUPER + CTRL + P", "Passwords (k4, pass)", "pass-menu")
+o.bind("SUPER + ALT + A", "Ask Claude (k4)", "k4-claude window ask")
 hl.unbind("SUPER + SHIFT + S") -- Omarchy's Google Maps web app
 o.bind("SUPER + SHIFT + S", "SSH hosts, server and keys (k4)", "k4-ssh open")
 hl.unbind("SUPER + comma")

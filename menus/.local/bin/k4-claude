@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+# k4-claude: Claude in k4 (k4 --claude): ask Claude through the Claude Code CLI with your own
+# login (tools off, answers streamed), the Claude Code sessions running on this machine (jump to
+# one, start one, stop a background one), a card when a session needs you (a Notification hook),
+# and the plan's usage windows as Claude Code reports them. Also the bar's Claude module.
+#   k4-claude [window] [ask|sessions|usage]   the window (from a bar click: the popup on Sessions)
+#   k4-claude data                            its data: S, A, U, P lines, R and L (src/claude.odin)
+#   k4-claude act VERB …                      ask follow copy term jump new stop probe model
+#   k4-claude bar                             the bar module's JSON
+#   k4-claude hook                            the Notification hook (stdin: Claude Code's JSON)
+#   k4-claude note-act KEY ID                 a card's button (open, dismiss)
+#   k4-claude jumpwait                        the session that has waited longest (the module's right click)
+#   k4-claude statusline                      the status line command (stdin: Claude Code's JSON)
+#   k4-claude summary|part|section|available  the Apps integration (lib.sh)
+K4_NAME=k4-claude K4_ID=claude K4_TITLE=Claude K4_KEY=C K4_ICON=✻ K4_DESC="Ask Claude, your Claude Code sessions, usage"
+. "$HOME/.local/share/k4/lib.sh"
+SELF=$(command -v k4-claude || echo "$0")
+MODEL_FILE="$K4_STATE/claude-model"
+LIMITS="$K4_CACHE/claude-limits.json"   # {"five_hour": {used, resets}, "seven_day": {…}, "at": unix}
+STATUS="$K4_CACHE/claude-status.json"   # the status line's last JSON
+NOTES="${XDG_RUNTIME_DIR:-/tmp}/k4-claude-notes"
+MODELS="haiku|sonnet|fable"
+# the CLI itself: ~/.local/bin/claude may be a mise wrapper that prints and installs on every call
+CLAUDE=$HOME/.local/share/mise/installs/claude/latest/claude
+[ -x "$CLAUDE" ] || CLAUDE=$(mise which claude 2>/dev/null) || true
+[ -x "$CLAUDE" ] || CLAUDE=$(command -v claude)
+mkdir -p "$K4_STATE" "$K4_CACHE" "$NOTES"
+available() { command -v claude >/dev/null; }
+missing() { missing_body "ask Claude and follow your Claude Code sessions from here" "curl -fsSL https://claude.ai/install.sh | bash" "https://claude.com/claude-code"; }
+
+agents() { (cd / && timeout 10 "$CLAUDE" agents --json 2>/dev/null) || echo '[]'; }
+model() { cat "$MODEL_FILE" 2>/dev/null || echo sonnet; }
+logged_in() { (cd / && timeout 10 "$CLAUDE" auth status 2>/dev/null) | jq -e '.loggedIn' >/dev/null 2>&1; }
+pct() { awk -v u="${1:-0}" 'BEGIN { printf "%d%%", u * 100 + 0.5 }'; }
+
+summary() { local j w b; j=$(agents); w=$(jq '[.[] | select(.status == "waiting")] | length' <<<"$j"); b=$(jq '[.[] | select(.status == "busy")] | length' <<<"$j")
+  echo "$b working$([ "$w" -gt 0 ] && echo " · $w wait for you")"; }
+section() {
+  desc "Ask Claude, your Claude Code sessions, usage" "$(summary)"
+  item "Ask Claude" "bg $(printf %q "$SELF") window ask" "your Claude Code login"
+  item "Sessions" "bg $(printf %q "$SELF") window sessions" "$(summary)"
+  item "Usage" "bg $(printf %q "$SELF") window usage" "$(limits_line)"
+}
+
+window_label() {  # five_hour -> "5-hour window", seven_day -> "Weekly · all models", seven_day_fable -> "Weekly · Fable"
+  case "$1" in
+    five_hour) echo "5-hour window" ;; seven_day) echo "Weekly · all models" ;;
+    seven_day_*) m=${1#seven_day_}; echo "Weekly · ${m^}" ;; *) echo "$1" ;;
+  esac; }
+resets() {  # resets UNIX -> "resets 15:30 · in 1 h 44 min" / "resets Mon 09:00"
+  local t=${1%.*} d; [ "${t:-0}" -gt 0 ] || return 0
+  d=$(( t - $(date +%s) ))
+  if [ "$d" -le 0 ]; then echo "resets now"
+  elif [ "$d" -lt 86400 ]; then printf 'resets %s · in %s\n' "$(date -d "@$t" +%H:%M)" "$([ "$d" -ge 3600 ] && echo "$(( d / 3600 )) h ")$(( d / 60 % 60 )) min"
+  else printf 'resets %s\n' "$(date -d "@$t" '+%a %H:%M')"; fi; }
+limits_line() { [ -s "$LIMITS" ] && jq -r '[(.five_hour | select(.) | "5-hour \((.used * 100 + 0.5) | floor)%"), (.seven_day | select(.) | "weekly \((.used * 100 + 0.5) | floor)%")] | join(" · ")' "$LIMITS" 2>/dev/null; }
+save_window() {  # save_window KEY USED RESETS
+  local old; old=$(cat "$LIMITS" 2>/dev/null || echo '{}')
+  jq -n --argjson o "$old" --arg k "$1" --arg u "$2" --arg r "$3" --argjson t "$(date +%s)" '$o + {($k): {used: ($u | tonumber), resets: ($r | tonumber)}, at: $t}' > "$LIMITS.new" 2>/dev/null && mv "$LIMITS.new" "$LIMITS"; }
+save_limits() {  # save_limits FIVE_USED FIVE_RESETS WEEK_USED WEEK_RESETS (empty: keep)
+  local old; old=$(cat "$LIMITS" 2>/dev/null || echo '{}')
+  jq -n --argjson o "$old" --arg fu "$1" --arg fr "$2" --arg wu "$3" --arg wr "$4" --argjson t "$(date +%s)" '
+    $o + (if $fu != "" then {five_hour: {used: ($fu | tonumber), resets: ($fr | tonumber)}} else {} end)
+       + (if $wu != "" then {seven_day: {used: ($wu | tonumber), resets: ($wr | tonumber)}} else {} end) + {at: $t}' > "$LIMITS.new" 2>/dev/null && mv "$LIMITS.new" "$LIMITS"; }
+
+data() {
+  local j
+  printf 'S\t%s\t%s\t%s\t%s\n' "$(logged_in && echo 1 || echo 0)" "$(model)" "$MODELS" "$(jq -r '.at // 0' "$LIMITS" 2>/dev/null || echo 0)"
+  j=$(agents)
+  jq -r '.[] | [(.pid // "" | tostring), (.name // ""), (.cwd // ""), (.kind // "interactive"), (.status // .state // "idle"), (.waitingFor // ""), (.pid // "" | tostring), (.id // "")] | map(gsub("[\t\n\u001f]"; " ")) | join("\u001f")' <<<"$j" \
+  | while IFS=$'\x1f' read -r pid name cwd kind st wf p2 id; do   # \x1f: read keeps empty fields
+      since=$(jq -r '((.statusUpdatedAt // .startedAt // 0) / 1000 | floor)' "$HOME/.claude/sessions/$pid.json" 2>/dev/null || echo 0)
+      printf 'A\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$name" "$cwd" "$kind" "$st" "$wf" "${since:-0}" "$id"
+    done
+  if [ -s "$LIMITS" ]; then
+    jq -r 'to_entries[] | select(.value | type == "object") | "\(.key)\t\(.value.used)\t\(.value.resets)"' "$LIMITS" 2>/dev/null \
+    | while IFS=$'\t' read -r k u r; do printf 'U\t%s\t%s\t%s\t%s\n' "$k" "$(window_label "$k")" "$u" "$(resets "$r")"; done
+  fi
+  local sessions_j; sessions_j=$j
+  jq -r '.projects // {} | keys[]' "$HOME/.claude.json" 2>/dev/null | while read -r d; do
+    [ -d "$d" ] && [ "$d" != "$HOME" ] || continue
+    n=$(jq --arg d "$d" '[.[] | select(.cwd == $d)] | length' <<<"$sessions_j")
+    printf 'P\t%s\t%s\n' "$d" "$([ "$n" -gt 0 ] && echo "$n session$([ "$n" = 1 ] || echo s) running" || echo "${d##*/}")"
+  done | head -10
+  printf 'R\t%s act\nL\t%s data\n' "$SELF" "$SELF"; }
+
+# The CLI's stream as k4 lines: k4:sid, k4:delta (text, \n for new lines), k4:limit, k4:err.
+stream() {
+  jq --unbuffered -r '
+    if .type == "system" and .subtype == "init" then "k4:sid \(.session_id)\nk4:meta \(now | localtime | strftime("%H:%M"))"
+    elif .type == "stream_event" and .event.type == "content_block_delta" and (.event.delta.text // null) != null then "k4:delta \(.event.delta.text | gsub("\\\\"; "\\\\") | gsub("\n"; "\\n"))"
+    elif .type == "rate_limit_event" then (.rate_limit_info.unifiedWindows // {} | to_entries[] | "k4:limit \(.key) \(.value.utilization) \(.value.resetsAt)")
+    elif .type == "result" and (.is_error or (.api_error_status != null)) then "k4:err \(.result // .api_error_status | tostring | gsub("\n"; " "))"
+    elif .type == "result" and ((.result // "") | test("reached your .* limit"; "i")) then "k4:err \(.result | gsub("\n"; " "))"
+    else empty end' 2>/dev/null \
+  | while IFS= read -r l; do
+      case "$l" in "k4:limit "*) set -- $l; save_window "$2" "$3" "$4" ;; esac
+      printf '%s\n' "$l"
+    done; }
+ask() {  # ask MODEL TEXT [SESSION]
+  cd "$HOME" || return
+  "$CLAUDE" -p "$2" --model "$1" ${3:+--resume "$3"} --output-format stream-json --verbose --include-partial-messages --tools "" 2>&1 | stream
+}
+
+tmux_pane() { jq -r '.tmux // empty' "$HOME/.claude/sessions/$1.json" 2>/dev/null; }
+focus_terminal() {  # the terminal window used last (it shows the tmux client we just switched)
+  local addr
+  addr=$(hyprctl clients -j 2>/dev/null | jq -r '[.[] | select(.class | test("ghostty|kitty|foot|alacritty|wezterm"; "i"))] | sort_by(.focusHistoryID) | first | .address // empty')
+  [ -n "$addr" ] && hyprctl dispatch focuswindow "address:$addr" >/dev/null 2>&1; }
+jump() {  # jump PID: its tmux pane in the terminal used last, else the window that runs it
+  local pane sess win p client
+  pane=$(tmux_pane "$1")
+  if [ -n "$pane" ] && command -v tmux >/dev/null; then
+    sess=${pane%%:*}; win=${pane#*:}; win=${win%%.*}; p=${pane##*.}
+    client=$(tmux list-clients -F '#{client_activity} #{client_tty}' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2)
+    [ -n "$client" ] && tmux switch-client -c "$client" -t "$sess" 2>/dev/null
+    tmux select-window -t "$win" 2>/dev/null; tmux select-pane -t "$p" 2>/dev/null
+    focus_terminal; echo k4:close; return
+  fi
+  hyprctl dispatch focuswindow "pid:$1" >/dev/null 2>&1; echo k4:close; }
+
+act() {
+  local verb="$1"; shift
+  case "$verb" in
+    ask) ask "$1" "$2" ;;
+    follow) ask "$2" "$3" "$1" ;;
+    copy) printf '%s' "${K4_INPUT:-}" | wl-copy && echo "Copied"; echo k4:noreload ;;
+    term) tui sh -c "cd \"\$HOME\" && $(printf %q "$CLAUDE") --resume $(printf %q "$1")"; echo k4:close ;;
+    jump) jump "$1" ;;
+    new)
+      if command -v tmux >/dev/null && tmux list-clients >/dev/null 2>&1 && [ -n "$(tmux list-clients 2>/dev/null)" ]; then
+        tmux new-window -c "$1" -n claude "$CLAUDE" 2>/dev/null; focus_terminal
+      else bg ghostty --working-directory="$1" -e "$CLAUDE"; fi
+      echo k4:close ;;
+    stop) (cd / && "$CLAUDE" stop "$1" >/dev/null 2>&1) && echo "Stopped $1" || { echo "Could not stop $1"; echo k4:tone red; } ;;
+    probe)  # one tiny request: the limits as Claude Code reports them
+      (cd / && "$CLAUDE" -p "Reply with exactly: ok" --model haiku --output-format stream-json --verbose --tools "" --no-session-persistence 2>/dev/null) | stream >/dev/null
+      echo "Checked · $(limits_line)" ;;
+    model) printf '%s\n' "$1" > "$MODEL_FILE"; echo "Asking $1 from now on"; echo k4:noreload ;;
+  esac; }
+
+bar() {  # hidden with no session; "N working", a red tag for those waiting, the highest window over 80%
+  local j n w b top used resets dnd tone glyph=󰚩
+  j=$(agents)
+  n=$(jq length <<<"$j"); w=$(jq '[.[] | select(.status == "waiting")] | length' <<<"$j"); b=$(jq '[.[] | select(.status == "busy")] | length' <<<"$j")
+  [ "$n" -gt 0 ] || { echo '{}'; return; }
+  read -r used resets < <(jq -r '[.five_hour, .seven_day] | map(select(.)) | max_by(.used) // {} | "\(.used // 0) \(.resets // 0)"' "$LIMITS" 2>/dev/null || echo "0 0")
+  dnd=$(k4 --notify-ctl status 2>/dev/null | cut -f2); tone=red; [ "$dnd" = 1 ] && tone=dnd
+  tip="$(jq -r '[.[] | select(.status == "waiting") | "\(.name // .cwd) waits: \(.waitingFor // "input")"] | join(" · ")' <<<"$j")"
+  [ -n "$tip" ] || tip="$n Claude Code session$([ "$n" = 1 ] || echo s)"
+  [ -n "$(limits_line)" ] && tip+=" · $(limits_line)"
+  if awk -v u="${used:-0}" 'BEGIN { exit !(u >= 1) }'; then   # a limit reached: until it resets
+    jq -cn --arg g "$glyph" --arg r "$(date -d "@${resets%.*}" +%H:%M 2>/dev/null)" --arg tip "$tip" '{icon: $g, icon_tone: "red", text: "limit", text_tone: "red", text2: $r, tooltip: $tip}'; return
+  fi
+  jq -cn --arg g "$glyph" --argjson w "$w" --argjson b "$b" --arg tone "$tone" --arg tip "$tip" --argjson u "${used:-0}" '
+    {icon: $g, tooltip: $tip}
+    + (if $b > 0 then {text: "\($b) working", text_tone: "dim"} elif $w > 0 then {text: "waits", text_tone: "red"} else {text: "idle", text_tone: "dim"} end)
+    + (if $w > 0 then {badge: $w, badge_tone: $tone} else {} end)
+    + (if $u >= 0.8 then {text2: "\(($u * 100 + 0.5) | floor)%", text2_tone: (if $u >= 0.95 then "red" else "yellow" end), text2_bold: true} else {} end)'; }
+jumpwait() {  # the session that has waited longest
+  local pid
+  pid=$(agents | jq -r '[.[] | select(.status == "waiting")] | .[].pid' | while read -r p; do printf '%s\t%s\n' "$(jq -r '.statusUpdatedAt // 0' "$HOME/.claude/sessions/$p.json" 2>/dev/null)" "$p"; done | sort -n | head -1 | cut -f2)
+  [ -n "$pid" ] && jump "$pid" >/dev/null; return 0; }
+
+hook() {  # Claude Code's Notification hook: a card naming the session and what it needs (none under do not disturb)
+  local in sid msg cwd tp pid name nid quote="" body
+  in=$(cat)
+  sid=$(jq -r '.session_id // empty' <<<"$in"); msg=$(jq -r '.message // .title // empty' <<<"$in"); cwd=$(jq -r '.cwd // empty' <<<"$in"); tp=$(jq -r '.transcript_path // empty' <<<"$in")
+  [ "$(k4 --notify-ctl status 2>/dev/null | cut -f2)" = 1 ] && return 0
+  read -r pid name < <(agents | jq -r --arg s "$sid" '.[] | select(.sessionId == $s) | "\(.pid // "") \(.name // "")"' | head -1)
+  [ -n "$name" ] || name=${cwd##*/}
+  [ -n "$msg" ] || msg="Waiting for you"
+  body="${msg} · ${cwd/#$HOME/\~}"
+  if printf '%s' "$msg" | grep -qi 'waiting for your input' && [ -f "$tp" ]; then   # the question it asked, quoted
+    quote=$(tail -n 50 "$tp" | jq -rs '[.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | last // ""' 2>/dev/null | tail -n 3 | tr '\n\t' '  ' | cut -c1-220)
+    body="${cwd/#$HOME/\~}"
+  fi
+  nid=$(k4 --notify-ctl "$(printf 'post\t0\tClaude\t%s needs you\t%s\t1\t-1\t0\tNEEDS YOU\t\t%s\topen:Open,dismiss:Dismiss\t%s note-act' "${name//$'\t'/ }" "${body//$'\t'/ }" "${quote//$'\t'/ }" "$SELF")" 2>/dev/null | tr -dc 0-9)
+  [ -n "$nid" ] && [ -n "$pid" ] && echo "$pid" > "$NOTES/$nid"
+  [ -n "$nid" ] || notify-send -a Claude "$name needs you" "$msg" 2>/dev/null
+  return 0; }
+note_act() {  # a card's button: open jumps to the session, dismiss closes the card
+  local pid; pid=$(cat "$NOTES/$2" 2>/dev/null)
+  case "$1" in
+    open) [ -n "$pid" ] && jump "$pid" >/dev/null ;;
+    dismiss) k4 --notify-ctl "close $2" >/dev/null 2>&1 ;;
+  esac
+  rm -f "$NOTES/$2"; return 0; }
+
+statusline() {  # keeps Claude Code's JSON (limits when it has them) and prints a short line
+  local in fu fr wu wr
+  in=$(cat)
+  printf '%s' "$in" > "$STATUS"
+  read -r fu fr wu wr < <(jq -r '[(.rate_limits.five_hour.used_percentage // .rate_limits.five_hour.utilization // ""), (.rate_limits.five_hour.resets_at // .rate_limits.five_hour.resetsAt // ""), (.rate_limits.seven_day.used_percentage // .rate_limits.seven_day.utilization // ""), (.rate_limits.seven_day.resets_at // .rate_limits.seven_day.resetsAt // "")] | map(tostring) | join(" ")' <<<"$in" 2>/dev/null)
+  if [ -n "$fu" ]; then awk -v u="$fu" 'BEGIN { exit !(u > 1) }' && fu=$(awk -v u="$fu" 'BEGIN { print u / 100 }'); save_limits "$fu" "${fr:-0}" "" ""; fi
+  if [ -n "$wu" ]; then awk -v u="$wu" 'BEGIN { exit !(u > 1) }' && wu=$(awk -v u="$wu" 'BEGIN { print u / 100 }'); save_limits "" "" "$wu" "${wr:-0}"; fi
+  local line l
+  line=$(jq -r '[(.model.display_name // .model.id // empty), ((.workspace.current_dir // .cwd // "") | split("/") | last)] | map(select(. != "")) | join(" · ")' <<<"$in" 2>/dev/null)
+  l=$(limits_line)
+  printf '%s%s\n' "$line" "${l:+ · $l}"; }
+
+window() {
+  pkill -f '^k4 --claude' && exit 0
+  local pop=() open=${1:-}
+  if [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ]; then pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,${K4_BAR_SIDE:-right},${K4_BAR_POS:-top}"); open=${open:-sessions}; fi
+  data | k4 --claude ${open:+--open "$open"} "${pop[@]}" >/dev/null; }
+
+case "${1:-window}" in
+  window) window "${2:-}"; exit 0 ;;
+  data) data; exit 0 ;;
+  act) shift; act "$@"; exit 0 ;;
+  bar) bar; exit 0 ;;
+  hook) hook; exit 0 ;;
+  jumpwait) jumpwait; exit 0 ;;
+  note-act) note_act "${2:-}" "${3:-}"; exit 0 ;;
+  statusline) statusline; exit 0 ;;
+esac
+k4_dispatch "$@"

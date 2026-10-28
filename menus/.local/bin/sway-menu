@@ -1913,6 +1913,7 @@ k4_section() { local s="$1" rec="Start"; [ "$s" = capture ] && recording && rec=
              command -v media-menu >/dev/null && item "Media" 'media-menu window' "$(media-menu summary 2>/dev/null)"
              command -v k4-drives >/dev/null && item "Drives" 'k4-drives window' "$(k4-drives count) attached"
              command -v k4-snap >/dev/null && item "Snapshots" 'k4-snap window' "btrfs · snapper"
+             command -v k4-claude >/dev/null && item "Claude" 'k4-claude window' "ask · sessions · usage · Super+Alt+A"
              command -v k4-bus >/dev/null && item "Bus departures" 'k4-bus window' "$(jq -r '.name // "pick a stop"' "$HOME/.local/state/k4/bus.json" 2>/dev/null || echo "pick a stop")"
              [ -s "$HOME/.local/state/sway/tray-hidden" ] && stay "Show hidden tray apps" 'rm -f "$HOME/.local/state/sway/tray-hidden"; notify Tray "hidden apps are back"' "$(wc -l < "$HOME/.local/state/sway/tray-hidden") hidden"
              if command -v k4-ssh >/dev/null; then ssh_rows; fi ;;
@@ -1922,6 +1923,7 @@ k4_section() { local s="$1" rec="Start"; [ "$s" = capture ] && recording && rec=
           if [ "$(bar_kind)" = k4 ]; then
             choice "Bar position" 'bar_pref bar-position' "$(bar_pref_now bar-position Top)" "Top|Bottom"
             choice "Bar background" 'bar_pref bar-background' "$(bar_pref_now bar-background Opaque)" "Opaque|Transparent"
+            choice "Bar items" 'bar_pref bar-items' "$(bar_pref_now bar-items Full)" "Full|Icons"
           fi
           tog "Starfield" 'starfield-toggle >/dev/null; notify Starfield "$(starfield-toggle status)"' "$(starfield-toggle status 2>/dev/null || echo on)"
           tog "Launcher" toggle_launcher "$([ "$LAUNCHER" = k4 ] && echo on || echo off)"

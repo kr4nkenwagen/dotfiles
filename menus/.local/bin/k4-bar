@@ -4,6 +4,7 @@
 #   k4-bar                 (re)start a bar on every active output (the sway config / Hyprland autostart runs it)
 #   k4-bar stop
 #   k4-bar spec            the module list k4 --bar reads
+#   k4-bar icons [on|off|toggle]   modules as icons only (the info in their tooltips), or in full
 #   k4-bar status MODULE   one module's line (Waybar JSON); --follow keeps printing on changes
 #   k4-bar cal-note-act KEY ID   a meeting card's buttons (join, snooze, open)
 # Modules (left · center · right): menu, workspaces, window · clock, media (any MPRIS player, via
@@ -248,7 +249,7 @@ follow_status() {  # status, then again on every change of what it shows
 # id side kind arg interval tone left right middle up down flags ("-" = none)
 spec() {
   local p="$SELF popup" c="sway-menu call"
-  printf 'B\theight=26\tposition=%s\ttransparent=%s\n' "$(cat "$STATE/bar-position" 2>/dev/null || echo top)" "$([ "$(cat "$STATE/bar-background" 2>/dev/null)" = transparent ] && echo 1 || echo 0)"
+  printf 'B\theight=26\tposition=%s\ttransparent=%s\ticons=%s\n' "$(cat "$STATE/bar-position" 2>/dev/null || echo top)" "$([ "$(cat "$STATE/bar-background" 2>/dev/null)" = transparent ] && echo 1 || echo 0)" "$([ "$(cat "$STATE/bar-items" 2>/dev/null)" = icons ] && echo 1 || echo 0)"
   m() { local IFS=$'\t'; printf 'M\t%s\n' "$*"; }
   m menu left icon 󰕰 0 accent "$p menu" "${TERMINAL:-ghostty}" - - - "px=9;tip=k4 menu · Super+Space"
   m workspaces left workspaces - 0 - - - - - - -
@@ -271,6 +272,7 @@ spec() {
   m tray right exec "k4-tray status" 3 - "k4-tray popup" "k4-tray needs-menu" - - - "px=6"   # the tray: chevron, count, red count needing you
   m updates right exec "$SELF status updates --follow" 0 - "sway-menu run-update" "pkill -USR1 -f 'k4-ba[r] status updates --follow'" - - - -
   m perf right exec "k4-perf bar" 2 - "k4-perf popup" "k4-perf util btop" - - - "px=7;wide"   # CPU and memory in use; the System popup
+  command -v k4-claude >/dev/null && m claude right exec "k4-claude bar" 5 - "$p claude" "k4-claude jumpwait" "k4-claude window ask" - - "px=7"   # Claude Code sessions: working, a red tag for those waiting for you
   command -v k4-bus >/dev/null && m bus right exec "k4-bus bar" 60 - "$p bus" "k4-bus act refresh >/dev/null" - - - "px=6;maxw=150;slim"   # the next bus at your stop: its line in a box, the minutes
   m weather right exec "$SELF status weather" 900 - "$p weather" "rm -f ~/.cache/sway-weather.json" - - - -
   m microphone right exec "$SELF status microphone --follow" 0 - "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle" - "$p audio" "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SOURCE@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-" "flash"
@@ -287,7 +289,7 @@ spec() {
 
 popup() {  # popup PAGE: the k4 page under the clicked module; a second click closes it, another
   # module's click swaps it for that one
-  local cur="${XDG_RUNTIME_DIR:-/tmp}/k4-popup" pat='^k4 --(menu|media|drives|keyring|bus)'
+  local cur="${XDG_RUNTIME_DIR:-/tmp}/k4-popup" pat='^k4 --(menu|media|drives|keyring|bus|claude)'
   pat="${pat%)}|messenger)"   # (Messenger's popup too)
   if pgrep -f "$pat" >/dev/null; then
     pkill -f "$pat"
@@ -302,6 +304,7 @@ popup() {  # popup PAGE: the k4 page under the clicked module; a second click cl
     keyring) exec k4-secret window ;;
     bus) exec k4-bus window ;;
     messenger) exec k4-messenger window ;;
+    claude) exec k4-claude window sessions ;;
     *) exec sway-menu "$1" ;;
   esac; }
 
@@ -323,6 +326,12 @@ case "${1:-}" in
   "") start ;;
   stop) stop ;;
   spec) spec ;;
+  icons)  # icons only, or full: the setting, then the bars again
+    cur=$(cat "$STATE/bar-items" 2>/dev/null || echo full)
+    case "${2:-toggle}" in on) v=icons ;; off) v=full ;; *) [ "$cur" = icons ] && v=full || v=icons ;; esac
+    mkdir -p "$STATE"; echo "$v" > "$STATE/bar-items"
+    pgrep -f '^k4 --bar' >/dev/null && start
+    echo "Bar items · $([ "$v" = icons ] && echo "icons only" || echo full)" ;;
   status) if [ "${3:-}" = --follow ]; then follow_status "${2:?module}"; else status "${2:?module}"; fi ;;
   popup) popup "${2:?page}" ;;
   cal-note-act) cal_note_act "${2:?key}" "${3:?id}" ;;
