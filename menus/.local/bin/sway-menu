@@ -1852,7 +1852,7 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
            while IFS=$'\t' read -r n a; do
              tog "$n  $([[ $n =~ ^(eDP|LVDS|DSI) ]] && echo built-in || echo external)" "output_toggle $(printf %q "$n")" "$([ "$a" = true ] && echo on || echo off)" "$([ "$a" = true ] && echo enabled || echo disabled)"
            done < <(outputs_tsv | cut -f1,2)
-           if [ -z "$OMARCHY" ] && [ "$(outputs_geo | wc -l)" -gt 1 ]; then   # Omarchy keeps positions in monitors.lua
+           if [ "$(outputs_geo | wc -l)" -gt 1 ]; then   # Omarchy too: its autostart.lua loads the kept positions
              a=$(arrange_anchor)
              hdr "Arrangement · relative to $a"
              item "Arrange by dragging…" 'displays_open' "the screens as rectangles"
@@ -2072,7 +2072,7 @@ if [ "$WM" = hyprland ]; then
   screen_size() { hyprctl -j monitors 2>/dev/null | jq -r '(map(.width) | max | tostring) + "x" + (map(.height) | max | tostring)'; }
   hypr_monitor_pos() { hyprctl -j monitors 2>/dev/null | jq -r --arg o "$1" '.[] | select(.name == $o) | "\(.x)x\(.y)"'; }
   scale_set() { local p; p=$(hypr_monitor_pos "$1"); hypr_keep display "$1" "hl.monitor({ output = \"$1\", mode = \"preferred\", position = \"${p:-auto}\", scale = $2 })"
-    [ -z "$OMARCHY" ] && [ "$(outputs_geo | wc -l)" -gt 1 ] && [ ! -f "$STATE/arrange-custom" ] && arrange_apply; notify Scale "$1  $2×"; }
+    [ "$(outputs_geo | wc -l)" -gt 1 ] && [ ! -f "$STATE/arrange-custom" ] && arrange_apply; notify Scale "$1  $2×"; }
   outputs_geo() { hyprctl -j monitors 2>/dev/null | jq -r '.[] | [.name, ((if .transform % 2 == 1 then .height else .width end) / .scale | floor), ((if .transform % 2 == 1 then .width else .height end) / .scale | floor)] | @tsv'; }
   output_pos() { local sc; sc=$(outputs_tsv | awk -F'\t' -v o="$1" '$1 == o { print $4 }')
     hypr_keep display "$1" "hl.monitor({ output = \"$1\", mode = \"preferred\", position = \"$2x$3\", scale = ${sc:-1} })"; }
