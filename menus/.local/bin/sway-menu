@@ -348,27 +348,49 @@ wifi_secured() { [ -n "$1" ] && [ "$1" != "--" ]; }
 KEY_FAILED="!The saved password did not work. It was forgotten; type the new one."
 wifi_key() { command -v k4-secret >/dev/null && k4-secret lookup wifi "$1" 2>/dev/null; }
 wifi_keep() { [ -n "$2" ] && command -v k4-secret >/dev/null && printf '%s' "$2" | k4-secret store wifi "$1" 2>/dev/null; return 0; }
-wifi_join() {  # wifi_join SSID SECURITY [hidden]
-  local ssid="$1" sec="$2" hidden="${3:-}" pw="${K4_INPUT:-}" out again typed=""
+# Connecting runs in the background (net-job), so the page keeps answering: the network's row
+# shows Connecting…, then the result (a wrong password asks again with the field in red). The
+# job's state is a file per network or device in $NETJOB; a notification only when the popup
+# is closed by then.
+NETJOB="${XDG_RUNTIME_DIR:-/tmp}/k4-net"
+job_key() { printf '%s' "$1" | md5sum | cut -c1-12; }
+job_state() {  # job_state KEY -> connecting | ok | badpass:MSG | fail:MSG (results last 90 s)
+  local f="$NETJOB/$(job_key "$1")"; [ -f "$f" ] || return 0
+  local st; st=$(cat "$f")
+  if [ "$st" = connecting ]; then [ -n "$(find "$f" -newermt '-120 seconds' 2>/dev/null)" ] && echo "$st"
+  else [ -n "$(find "$f" -newermt '-90 seconds' 2>/dev/null)" ] && echo "$st"; fi; }
+job_set() { mkdir -p "$NETJOB"; printf '%s\n' "$2" > "$NETJOB/$(job_key "$1")"; }
+job_busy() { grep -lqx connecting "$NETJOB"/* 2>/dev/null && find "$NETJOB" -newermt '-120 seconds' -type f 2>/dev/null | grep -q .; }
+popup_open() { pgrep -f '^k4 --menu' >/dev/null; }
+wifi_join() {  # wifi_join SSID SECURITY [hidden]: asks for a password when needed, then connects in the background
+  local ssid="$1" sec="$2" hidden="${3:-}" again
   again="wifi_join $(printf %q "$ssid") $(printf %q "$sec") $hidden"
+  if [ "$(job_state "$ssid")" = connecting ]; then echo "Still connecting to $ssid…"; return; fi
+  if [ -z "${K4_INPUT:-}" ] && wifi_secured "$sec" && ! nmcli -g NAME con show 2>/dev/null | grep -qxF -- "$ssid" && [ -z "$(wifi_key "$ssid")" ]; then
+    k4ask "$again" "Password for $ssid" "$sec network" password; return
+  fi
+  job_set "$ssid" connecting
+  setsid -f env K4_INPUT="${K4_INPUT:-}" K4_RUN= "$SELF" net-job wifi "$ssid" "$sec" "$hidden" >/dev/null 2>&1 </dev/null
+  echo "Connecting to $ssid…"; }
+wifi_join_job() {  # the background half: nmcli, then the state file (and a notification when no popup is open)
+  local ssid="$1" sec="$2" hidden="${3:-}" pw="${K4_INPUT:-}" out typed=""
   [ -n "$pw" ] && typed=1
   if [ -z "$pw" ] && wifi_secured "$sec"; then pw=$(wifi_key "$ssid") || pw=""; fi
+  done_ok() { [ -n "$typed" ] && wifi_keep "$ssid" "$pw"; job_set "$ssid" ok; popup_open || notify Wi-Fi "Connected to $ssid"; }
+  bad() {  # a wrong password: a saved key is forgotten; the row asks again in red
+    [ -z "$typed" ] && [ -n "$pw" ] && k4-secret clear wifi "$ssid" 2>/dev/null
+    job_set "$ssid" "badpass:$1"; popup_open || notify "Wi-Fi" "Wrong password for $ssid"; }
   if nmcli -g NAME con show 2>/dev/null | grep -qxF -- "$ssid"; then
-    if [ -n "$pw" ]; then nmcli con mod id "$ssid" wifi-sec.psk "$pw" >/dev/null 2>&1; fi
-    if out=$(nmcli con up id "$ssid" 2>&1); then [ -n "$typed" ] && wifi_keep "$ssid" "$pw"; notify Wi-Fi "Connected to $ssid"; return; fi
-    if wifi_secured "$sec"; then
-      if [ -z "$typed" ] && [ -n "$pw" ]; then k4-secret clear wifi "$ssid" 2>/dev/null; k4ask "$again" "Password for $ssid" "$KEY_FAILED" password
-      else k4ask "$again" "Password for $ssid" "The saved password did not work" password; fi
-    else notify Wi-Fi "$(printf '%s' "$out" | tail -1)"; fi
-    return
-  fi
-  if wifi_secured "$sec" && [ -z "$pw" ]; then k4ask "$again" "Password for $ssid" "$sec network" password; return; fi
-  if out=$(nmcli dev wifi connect "$ssid" ${pw:+password "$pw"} ${hidden:+hidden yes} 2>&1); then [ -n "$typed" ] && wifi_keep "$ssid" "$pw"; notify Wi-Fi "Connected to $ssid"
+    [ -n "$pw" ] && nmcli con mod id "$ssid" wifi-sec.psk "$pw" >/dev/null 2>&1
+    if out=$(nmcli con up id "$ssid" 2>&1); then done_ok; return; fi
+    if wifi_secured "$sec"; then bad "The password did not work"; return; fi
   else
+    if out=$(nmcli dev wifi connect "$ssid" ${pw:+password "$pw"} ${hidden:+hidden yes} 2>&1); then done_ok; return; fi
     nmcli con delete id "$ssid" >/dev/null 2>&1   # a failed attempt leaves a profile with the wrong password
-    if [ -z "$typed" ] && [ -n "$pw" ]; then k4-secret clear wifi "$ssid" 2>/dev/null; k4ask "$again" "Password for $ssid" "$KEY_FAILED" password; return; fi
-    notify Wi-Fi "$(printf '%s' "$out" | tail -1 | sed 's/^Error: //')"
-  fi; }
+    if wifi_secured "$sec" && printf '%s' "$out" | grep -qiE 'secrets were required|password|802-11-wireless-security|psk'; then bad "The password was wrong"; return; fi
+  fi
+  out=$(printf '%s' "$out" | tail -1 | sed 's/^Error: //')
+  job_set "$ssid" "fail:$out"; popup_open || notify "Couldn’t connect to $ssid" "$out"; }
 wifi_hidden() { local h="${K4_INPUT:-}"; [ -n "$h" ] || return 0; K4_INPUT="" wifi_join "$h" WPA hidden; }
 wifi_disconnect() { nmcli dev disconnect "$(nmcli -t -f DEVICE,TYPE dev | awk -F: '$2=="wifi"{print $1; exit}')" >/dev/null 2>&1; notify Wi-Fi Disconnected; }
 wifi_connect() {  # wifi_connect SSID SECURITY [hidden]
@@ -1068,6 +1090,12 @@ net_wifi_tab() {
     | while IFS=$'\t' read -r conn ssid sig freq rate sec; do [ "$ssid" = "$cur" ] && continue; printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$([ -n "${saved[$ssid]:-}" ] && echo 1 || echo 0)$(printf '%03d' "$sig")" "$ssid" "$sig" "$freq" "$rate" "$sec"; done \
     | sort -r | while IFS=$'\t' read -r _ ssid sig freq rate sec; do
     sub="$(wifi_band "$freq")"; flags="stay;mark=$(wifi_glyph "$sig")"
+    local st; st=$(job_state "$ssid")
+    case "$st" in
+      connecting) item "$ssid" "echo Still connecting to $(printf %q "$ssid")…" "" "" "$flags;markc=accent;line2=Connecting…;line2c=accent"; continue ;;
+      badpass:*) item "$ssid" "wifi_join $(printf %q "$ssid") $(printf %q "$sec")" "" "" "$flags;lock;line2=${st#badpass:} · ↵ type it again;line2c=red;input=${ssid//[;|]/ } needs a password ($sec).|!${st#badpass:}. Type it again.|password"; continue ;;
+      fail:*) sub="Couldn’t connect · ↵ retry"; flags+=";line2c=red" ;;
+    esac
     [ -n "${keyed[$ssid]:-}" ] && sub="${sec%% *} · key saved"
     [ -n "${saved[$ssid]:-}" ] && [ -z "${keyed[$ssid]:-}" ] && sub+=" · saved"
     case "$sec" in *802.1X*) sub+=" · 802.1X" ;; esac
@@ -1084,7 +1112,7 @@ net_wifi_tab() {
   else hints "↑↓" Move "← →" Choose "↵" Connect "r" Rescan "y" "Copy IP"; fi; }
 net_page() {  # net_page [eth|wifi]: no tab named: the one in use
   local dev edev est econ eup eprim espeed on cur csig cfreq crate csec rdev tab="${1:-}" portal=""
-  printf 'O\twidth=424;height=524;refresh=8\n'
+  printf 'O\twidth=424;height=524;refresh=%s\n' "$(job_busy && echo 1 || echo 8)"
   net_state
   if [ -z "$dev" ] && [ -z "$edev" ]; then
     printf 'D\tOffline\t\t\nST\tno adapter\tdim\nN\tNo network adapter\tThis computer has neither Wi-Fi nor Ethernet. VPN lives in the launcher under Network.\tmuted\n'
@@ -1128,11 +1156,17 @@ bt_info_tsv() {  # MAC NAME ICON PAIRED CONNECTED TRUSTED RSSI BATTERY, every de
 bt_visible() { bluetoothctl show 2>/dev/null | grep -q "Discoverable: yes"; }
 bt_visible_toggle() { if bt_visible; then bluetoothctl discoverable off >/dev/null; notify "Hidden" "from nearby devices"
   else bluetoothctl discoverable-timeout 180 >/dev/null 2>&1; bluetoothctl discoverable on >/dev/null; notify "Visible as $(hostname)" "for 3 minutes"; fi; }
-bt_connect() { if timeout 15 bluetoothctl connect "$1" 2>/dev/null | grep -q "Connection successful"; then notify Connected "$2"
-  else notify "Couldn’t connect to $2" "· is it nearby with Bluetooth on?"; fi; }
+bt_connect() {  # bt_connect MAC NAME: in the background; the device's row shows Connecting…, then the result
+  [ "$(job_state "$1")" = connecting ] && { echo "Still connecting to $2…"; return; }
+  job_set "$1" connecting
+  setsid -f env K4_RUN= "$SELF" net-job bt "$1" "$2" >/dev/null 2>&1 </dev/null
+  echo "Connecting to $2…"; }
+bt_connect_job() {
+  if timeout 15 bluetoothctl connect "$1" 2>/dev/null | grep -q "Connection successful"; then job_set "$1" ok; popup_open || notify Connected "$2"
+  else job_set "$1" "fail:Is it nearby with Bluetooth on?"; popup_open || notify "Couldn’t connect to $2" "· is it nearby with Bluetooth on?"; fi; }
 bt_popup() {
   local on mac name icon paired conn trusted rssi bat g kind n_conn=0 low="" names=() conns=() pairs=() near=()
-  printf 'O\twidth=424;height=524;refresh=4\n'
+  printf 'O\twidth=424;height=524;refresh=%s\n' "$( { job_busy || [ -f "$BT_PAIR_DIR/target" ] && [ ! -f "$BT_PAIR_DIR/ok" ] && [ ! -f "$BT_PAIR_DIR/fail" ]; } && echo 1 || echo 4)"
   if ! bluetoothctl show >/dev/null 2>&1 || ! bluetoothctl show 2>/dev/null | grep -q Controller; then
     printf 'D\tNo Bluetooth\t\t\nST\tno adapter\tdim\nN\tNo Bluetooth adapter\tThis computer has no Bluetooth controller.\tmuted\n'; return
   fi
@@ -1161,7 +1195,11 @@ bt_popup() {
     done; fi
   if [ ${#pairs[@]} -gt 0 ]; then hdr "Paired"
     for r in "${pairs[@]}"; do IFS=$'\t' read -r mac name icon <<<"$r"; IFS=$'\t' read -r g kind < <(bt_icon "$icon")
-      item "$name" "bt_connect $mac $(printf %q "$name")" "" "" "stay;mark=$g;tall;line2=$kind"
+      case "$(job_state "$mac")" in
+        connecting) item "$name" "echo Still connecting to $(printf %q "$name")…" "" "" "stay;mark=$g;markc=accent;tall;line2=Connecting…;line2c=accent" ;;
+        fail:*) item "$name" "bt_connect $mac $(printf %q "$name")" "" "" "stay;mark=$g;tall;line2=Couldn’t connect · ↵ retry;line2c=red" ;;
+        *) item "$name" "bt_connect $mac $(printf %q "$name")" "" "" "stay;mark=$g;tall;line2=$kind" ;;
+      esac
     done; fi
   [ ${#conns[@]} -eq 0 ] && [ ${#pairs[@]} -eq 0 ] && printf 'N\tNo paired devices yet\tPut a device in pairing mode and pick it from Nearby.\tmuted\n'
   printf 'H\tNearby\t\t↻ scanning\taccent\n'
@@ -1171,6 +1209,13 @@ bt_popup() {
     [ -n "${known_names[$name]:-}" ] && continue   # a paired device's second (LE) address
     IFS=$'\t' read -r g kind < <(bt_icon "$icon")
     local s=weak; [ "${rssi:--100}" -gt -75 ] 2>/dev/null && s=fair; [ "${rssi:--100}" -gt -60 ] 2>/dev/null && s=strong
+    if [ "$(cat "$BT_PAIR_DIR/target" 2>/dev/null | cut -f1)" = "$mac" ]; then   # this one is pairing
+      if [ -f "$BT_PAIR_DIR/fail" ]; then item "$name" "bt_pair_start $mac $(printf %q "$name")" "" "" "stay;mark=$g;tall;line2=Couldn’t pair · $(head -c 60 "$BT_PAIR_DIR/fail") · ↵ retry;line2c=red"
+      elif [ -f "$BT_PAIR_DIR/ok" ]; then item "$name" ":" "" "" "stay;mark=$g;markc=accent;tall;line2=Paired;line2c=accent"
+      elif [ -f "$BT_PAIR_DIR/code" ] && [ ! -f "$BT_PAIR_DIR/answer" ]; then item "$name" "k4page $(printf %q "Pair $name") '' bt-pair $mac $(printf %q "$name")" "›" "" "stay;mark=$g;markc=yellow;tall;bold;line2=Confirm code $(cat "$BT_PAIR_DIR/code") · ↵;line2c=yellow"
+      else item "$name" "echo Still pairing with $(printf %q "$name")…" "" "" "stay;mark=$g;markc=accent;tall;line2=Pairing…;line2c=accent"; fi
+      continue
+    fi
     item "$name" "bt_pair_start $mac $(printf %q "$name")" "" "" "stay;mark=$g;tall;line2=$kind · $s signal$([ "$kind" = "Unknown device" ] && echo ';dim;markc=muted')"
   done
   shown_near=$(for r in "${near[@]}"; do IFS=$'\t' read -r _ name _ <<<"$r"; [ -n "${known_names[$name]:-}" ] || echo x; done | grep -c x)
@@ -1201,23 +1246,18 @@ bt_dev_page() {  # bt_dev_page MAC: a connected device
 BT_PAIR_DIR="${XDG_RUNTIME_DIR:-/tmp}/k4-bt-pair"
 bt_pair_start() {  # bt_pair_start MAC NAME: pair (k4-bt-pair answers bluez); a code to compare opens the code page
   local mac="$1" name="$2" i
-  rm -rf "$BT_PAIR_DIR"; mkdir -p "$BT_PAIR_DIR"
+  rm -rf "$BT_PAIR_DIR"; mkdir -p "$BT_PAIR_DIR"; printf '%s\t%s\n' "$mac" "$name" > "$BT_PAIR_DIR/target"
   setsid -f k4-bt-pair "$mac" "$BT_PAIR_DIR" >/dev/null 2>&1 </dev/null
-  for i in $(seq 1 150); do
+  for i in $(seq 1 10); do   # a code usually comes at once: show it straight away; else the row keeps track
     [ -f "$BT_PAIR_DIR/code" ] && { k4page "Pair $name" "" bt-pair "$mac" "$name"; return; }
-    [ -f "$BT_PAIR_DIR/ok" ] && { notify "Paired and connected" "$name"; return; }
-    [ -f "$BT_PAIR_DIR/fail" ] && { notify "Couldn’t pair with $name" "· $(cat "$BT_PAIR_DIR/fail")"; return; }
+    [ -f "$BT_PAIR_DIR/ok" ] || [ -f "$BT_PAIR_DIR/fail" ] && break
     sleep 0.2
   done
-  notify Pairing "$name · still waiting"; }
+  echo "Pairing with $name…"; }
 bt_pair_answer() {  # bt_pair_answer yes|no NAME: the code page's answer, then wait for bluez
-  local i; echo "$1" > "$BT_PAIR_DIR/answer"
+  echo "$1" > "$BT_PAIR_DIR/answer"
   [ "$1" = no ] && { notify "Pairing cancelled" ""; echo k4:back; return; }
-  for i in $(seq 1 100); do
-    [ -f "$BT_PAIR_DIR/ok" ] && { notify "Paired and connected" "$2"; echo k4:back; return; }
-    [ -f "$BT_PAIR_DIR/fail" ] && { notify "Couldn’t pair with $2" "· $(cat "$BT_PAIR_DIR/fail")"; echo k4:back; return; }
-    sleep 0.2
-  done; notify Pairing "$2 · still waiting"; echo k4:back; }
+  echo "Pairing with $2…"; echo k4:back; }   # the device's row in Nearby follows it
 bt_pair_page() {  # bt_pair_page MAC NAME: compare the code on both
   local mac="$1" name="$2" code icon g kind
   printf 'O\twidth=424;height=524\n'
@@ -2306,6 +2346,7 @@ case "${1:-}" in
   kb-next) kb_cycle ;;
   keybindings) show_keybindings ;;
   displays) displays_open ;;
+  net-job) shift; case "${1:-}" in wifi) shift; wifi_join_job "$@" ;; bt) shift; bt_connect_job "$@" ;; esac ;;   # wifi_join / bt_connect in the background
   displays-watch) displays_watch ;;                    # started with the session: per-setup layouts                           # Display › Arrange by dragging…
   displays-apply) shift; displays_apply "$@" ;;   # Super+K, as on Omarchy
   timezone) if [ "$LAUNCHER" = k4 ]; then k4_main timezone; else tz_menu; fi ;;
