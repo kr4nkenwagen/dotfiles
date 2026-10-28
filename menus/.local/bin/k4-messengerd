@@ -31,6 +31,8 @@ import urllib.error, urllib.parse, urllib.request
 import http.client as httplib  # (the module: "http" below is the request helper)
 
 HOME = os.path.expanduser("~")
+# systemd starts the daemon at boot with PATH=/usr/local/bin:/usr/bin: k4-secret is in ~/.local/bin
+os.environ["PATH"] = os.path.join(HOME, ".local/bin") + os.pathsep + os.environ.get("PATH", "")
 RUN = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
 CONF = os.path.join(HOME, ".config/k4-messenger")
 DATA = os.path.join(HOME, ".local/share/k4-messenger")
@@ -316,8 +318,8 @@ def setup():
     say("Step 5/5 · k4's service")
     if unit("k4-messenger.service", "k4's Messenger service", "%s daemon" % SELF, after="k4-meta-bridge.service"):
         systemctl("daemon-reload")
-        systemctl("restart", "k4-messenger.service")
-    systemctl("enable", "--now", "k4-messenger.service")
+    systemctl("enable", "k4-messenger.service")
+    systemctl("restart", "k4-messenger.service")  # always: a running one may not have the token yet
     say("Ready · log in to Messenger next")
 
 
@@ -349,7 +351,7 @@ class Service:
     def __init__(self):
         self.lock = threading.RLock()
         self.token = secret_get("matrix")
-        self.rooms = {}  # id -> {name, group, unread, ts, last, last_sender, last_mine, names}
+        self.rooms = {}  # id -> {name, titled, group, unread, ts, last, last_sender, last_mine, names, members}
         self.me = {ME}
         self.state, self.account, self.note = "down", "", ""
         self.open_room, self.open_seen, self.limit = None, 0, 40
@@ -405,7 +407,10 @@ class Service:
         ev = (lg.get("state") or {}).get("state_event", "")
         with self.lock:
             self.account = lg.get("name") or lg.get("id") or ""
-            if lg.get("id"): self.me.add("@meta_%s:%s" % (lg["id"], SERVER))
+            ghost = "@meta_%s:%s" % (lg["id"], SERVER) if lg.get("id") else ""
+            if ghost and ghost not in self.me:  # your own ghost is no other member: the names again
+                self.me.add(ghost)
+                for room in self.rooms.values(): self.settle(room)
         if ev in ("BAD_CREDENTIALS", "LOGGED_OUT"): self.set_state("relogin", (lg.get("state") or {}).get("message", "Messenger logged the bridge out"))
         elif ev in ("UNKNOWN_ERROR", "TRANSIENT_DISCONNECT"): self.set_state("error", (lg.get("state") or {}).get("message", "Messenger is not answering"))
         else: self.set_state("ok")
@@ -445,7 +450,7 @@ class Service:
                 if ev.get("type") == "m.room.member" and ev.get("state_key") == ME: inviter = ev.get("sender", "")
             if GHOST.match(inviter) or inviter == BOT:
                 http("POST", HS + "/_matrix/client/v3/join/" + q(rid), {}, self.token)
-        new = []
+        new, need = [], []
         with self.lock:
             for rid, jr in rooms.get("join", {}).items():
                 room = self.rooms.get(rid)
@@ -456,10 +461,13 @@ class Service:
                     room = self.rooms[rid] = {"name": "", "group": False, "unread": 0, "ts": 0, "last": "", "last_sender": "", "last_mine": False, "names": {}}
                 for e in state:
                     t, c = e.get("type"), e.get("content", {})
-                    if t == "m.room.name": room["name"] = c.get("name", "") or room["name"]
+                    if t == "m.room.name":
+                        room["titled"] = bool(c.get("name"))
+                        if c.get("name"): room["name"] = c["name"]
                     if t == "m.room.member" and c.get("displayname"): room["names"][e.get("state_key", "")] = c["displayname"]
+                if "members" not in room or any(e.get("type") == "m.room.member" for e in state): need.append(rid)
                 summ = jr.get("summary", {})
-                if "m.joined_member_count" in summ: room["group"] = summ["m.joined_member_count"] > 3
+                if "m.joined_member_count" in summ and "members" not in room: room["group"] = summ["m.joined_member_count"] > 3
                 un = jr.get("unread_notifications", {})
                 if "notification_count" in un: room["unread"] = un["notification_count"]
                 for e in jr.get("timeline", {}).get("events", []):
@@ -467,18 +475,39 @@ class Service:
                     mine = e.get("sender") in self.me
                     room.update(ts=e.get("origin_server_ts", 0) // 1000, last=msg_text(e), last_sender=e.get("sender", ""), last_mine=mine)
                     if not first and not mine: new.append((rid, e))
-                if not room["name"]:
-                    others = [n for u, n in room["names"].items() if u not in self.me and u != BOT]
-                    room["name"] = ", ".join(others[:3]) or "Conversation"
+                self.settle(room)
             if self.open_room and time.time() - self.open_seen < 8 and self.open_room in self.rooms:
                 self.rooms[self.open_room]["unread"] = 0  # the window shows it: read
             self.save_cache()
             self.write_status()
+        if need: self.fetch_members(need)
         for rid, e in new: self.card(rid, e)
         if self.open_room and any(rid == self.open_room for rid, _ in new) and time.time() - self.open_seen < 8:
             self.mark_read(self.open_room)
 
     # --- cards ---
+    # Lazy-loaded members name only who spoke lately: an unnamed chat is named from all of them
+    def fetch_members(self, rids):
+        got = {}
+        for rid in rids:
+            try: st, r = http("GET", HS + "/_matrix/client/v3/rooms/%s/joined_members" % q(rid), token=self.token, timeout=10)
+            except (urllib.error.URLError, OSError, httplib.HTTPException): continue
+            if st == 200: got[rid] = {u: (m or {}).get("display_name") or u.split(":")[0].lstrip("@") for u, m in r.get("joined", {}).items()}
+        with self.lock:
+            for rid, members in got.items():
+                room = self.rooms.get(rid)
+                if room is None: continue
+                room["members"] = members
+                room["names"].update(members)
+                self.settle(room)
+            self.save_cache()
+
+    def settle(self, room):  # the name (when the chat has none) and group from who is in it
+        others = [n for u, n in (room.get("members") or room["names"]).items() if u not in self.me and u != BOT]
+        if "members" in room: room["group"] = len(others) > 1
+        if not room.get("titled"):
+            room["name"] = ", ".join(others[:3]) + (" +%d" % (len(others) - 3) if len(others) > 3 else "") or room["name"] or "Conversation"
+
     def card(self, rid, e):
         with self.lock:
             room = self.rooms.get(rid)

@@ -33,7 +33,7 @@ section() {
   local f id name un ts who last _g mine n=0
   hdr "Conversations"
   while IFS=$'\t' read -r f id name un ts who last _g mine; do
-    [ "$f" = C ] || continue; n=$((n + 1)); [ "$n" -le 8 ] || break
+    [ "$f" = C ] || continue; n=$((n + 1)); [ "$n" = 9 ] && hdr "Older"   # all of them: the search finds any name
     item "$name" "bg $(printf %q "$SELF") window $(printf %q "$id")" "$([ "${un:-0}" -gt 0 ] && echo "$un new · ")$([ "$mine" = 1 ] && echo "you: ")$last" "" "$([ "${un:-0}" -gt 0 ] && echo "chip=$un")"
   done < <(ctl rooms)
   [ "$n" -gt 0 ] || empty "No conversations yet"; }
