@@ -6,6 +6,7 @@ K4_NAME=k4-messenger K4_ID=messenger K4_TITLE=Messenger K4_KEY=E K4_ICON=󰍦 K4
 #   k4-messenger window [ROOM]   the window (again: closes it; from a bar click: under it)
 #   k4-messenger data            its data (k4-messengerd ctl data)
 #   k4-messenger act VERB [ARG]  open ROOM, close, more, send ROOM ($K4_INPUT), read ROOM,
+#                                search QUERY (k4:person ID NAME lines), start ID NAME (k4:open ROOM),
 #                                setup (its steps in $XDG_RUNTIME_DIR/k4-messenger-setup.log),
 #                                login ($K4_INPUT: the cookies)
 #   k4-messenger bar             the bar module (the unread count; hidden until set up)
@@ -45,6 +46,12 @@ act() {
   case "$verb" in
     open|read|close|more) ctl "$verb" "$@" >/dev/null; echo k4:noreload; [ "$verb" = read ] && echo "Marked read" ;;
     send) ctl send "$1" | tail -1 ;;
+    search) local r n; r=$(ctl search "$*"); n=$(grep -c '^P' <<<"$r")   # the window lists them (k4:person ID NAME)
+            case "$r" in error*) echo "${r#error	}"; echo k4:tone red; return ;; esac
+            grep '^P' <<<"$r" | sed 's/^P\t/k4:person\t/'; echo k4:noreload
+            [ "$n" -gt 0 ] && echo "$n on Messenger" || echo "Nobody called “$*” on Messenger" ;;
+    start) local r; r=$(ctl start "$1" "${2:-}")
+           case "$r" in ok*) printf 'k4:open\t%s\n' "${r#ok	}"; echo "${2:-The chat} · say hi" ;; *) echo "${r#error	}"; echo k4:tone red ;; esac ;;
     setup) local log="${XDG_RUNTIME_DIR:-/tmp}/k4-messenger-setup.log"   # the window reads the steps while it runs
            "$D" setup > "$log" 2>&1; tail -1 "$log"
            if systemctl --user is-active -q k4-messenger.service; then echo k4:tone green; else echo k4:tone red; fi ;;

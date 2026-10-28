@@ -16,6 +16,8 @@
       more                   older messages in the open conversation
       send ROOM TEXT         a message (TEXT may also come in $K4_INPUT)
       read ROOM              mark it read
+      search QUERY           people on Messenger: P id name per match
+      start ID [NAME]        the chat with that person (made if new); "ok ROOM", and it opens
       login-start            the cookie login's instructions
       login-cookies          the cookies ($K4_INPUT: JSON, "name=value; …" or a "Copy as cURL")
       note KEY ID            a card's button (reply: the text in $K4_INPUT)
@@ -251,6 +253,7 @@ def bridge_files():
         "bridge": {"permissions": {ME: "admin"}},
         "provisioning": {"shared_secret": shared, "allow_matrix_auth": True},
         "encryption": {"allow": False},
+        "backfill": {"enabled": True, "max_initial_messages": 50},
         "logging": {"min_level": "info", "writers": [{"type": "stdout", "format": "pretty"}]},
     }
     reg = {"id": "meta", "url": url, "as_token": as_token, "hs_token": hs_token, "sender_localpart": secrets.token_hex(16),
@@ -262,6 +265,19 @@ def bridge_files():
         with open(path, "w") as f: json.dump(obj, f, indent=2)
         os.chmod(path, 0o600)
     return reg_path, True
+
+
+def ensure_backfill():
+    """Chats the bridge adds come with their last messages (the bridge ships with backfill off).
+    Its config is YAML once it has run: the one key is switched in place. True when changed."""
+    path = os.path.join(CONF, "meta.yaml")
+    try: text = open(path).read()
+    except OSError: return False
+    if text.lstrip().startswith("{"): return False  # still setup's JSON: it has the key
+    new = re.sub(r"(?m)^(backfill:\n(?:[ \t]*#.*\n)*[ \t]+enabled:[ \t]*)false\b", r"\1true", text, count=1)
+    if new == text: return False
+    with open(path, "w") as f: f.write(new)
+    return True
 
 
 def setup():
@@ -292,7 +308,7 @@ def setup():
         if "meta" not in admin_command(token, "!admin appservices list"):
             raise SystemExit("k4-messengerd: the homeserver did not take the bridge: %s" % reply[:200])
     exe = "%s -c %s -r %s" % (os.path.join(LIB, "mautrix-meta"), os.path.join(CONF, "meta.yaml"), reg_path)
-    if unit("k4-meta-bridge.service", "Messenger bridge", exe, after="k4-matrix.service"):
+    if unit("k4-meta-bridge.service", "Messenger bridge", exe, after="k4-matrix.service") | ensure_backfill():
         systemctl("daemon-reload")
         systemctl("restart", "k4-meta-bridge.service")
     systemctl("enable", "--now", "k4-meta-bridge.service")
@@ -572,6 +588,21 @@ class Service:
                 subprocess.Popen(["setsid", "-f", SELF.replace("k4-messengerd", "k4-messenger"), "window"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 return "ok\n"
             return "ok\n"
+        if c == "search" and args:
+            st, r = prov("POST", "/v3/search_users", {"query": "\t".join(args)})
+            if st != 200: return "error\t%s\n" % field(r.get("error", st))
+            return "".join("P\t%s\t%s\n" % (field(u.get("id", "")), field(u.get("name") or u.get("id", ""))) for u in r.get("results", []) if u.get("id"))
+        if c == "start" and args:
+            st, r = prov("POST", "/v3/create_dm/" + q(args[0]), {})
+            rid = r.get("dm_room_mxid") or r.get("room_id") or ""
+            if st != 200 or not rid: return "error\t%s\n" % field(r.get("error") or "Messenger did not open the chat (%s)" % st)
+            http("POST", HS + "/_matrix/client/v3/join/" + q(rid), {}, self.token)  # (an invite to a new portal)
+            with self.lock:
+                if rid not in self.rooms:  # shown at once; the next sync fills it in
+                    self.rooms[rid] = {"name": args[1] if len(args) > 1 else (r.get("name") or "Conversation"), "group": False, "unread": 0,
+                                       "ts": int(time.time()), "last": "", "last_sender": "", "last_mine": False, "names": {}}
+                self.open_room, self.open_seen, self.limit = rid, time.time(), 40
+            return "ok\t%s\n" % rid
         if c == "login-start":
             st, r = prov("POST", "/v3/login/start/messenger", {})
             if st != 200: return "error\t%s\n" % field(r.get("error", st))
