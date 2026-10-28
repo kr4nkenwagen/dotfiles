@@ -4,15 +4,18 @@
 # or anything else may mount them).
 #   k4-drives window             the popup (from a bar click: under it; again: closes it)
 #   k4-drives data               its data: D lines, R and L (src/drives.odin)
-#   k4-drives act VERB DEV       open mount unmount eject force cancel copy unlock ($K4_INPUT)
+#   k4-drives act VERB DEV       open mount unmount eject force cancel copy paste unlock ($K4_INPUT)
 #   k4-drives list               DEV<TAB>KIND<TAB>LABEL<TAB>MODEL<TAB>MOUNT<TAB>STATE, one a filesystem
 #   k4-drives count              how many
 #   k4-drives bar [--follow]     the module's JSON (hidden with none); --follow: again on every change,
 #                                and a card for each drive plugged in
 #   k4-drives newest open|eject  the bar's middle and right click
-#   k4-drives note-act KEY ID    a card's buttons (open, eject, send)
+#   k4-drives note-act KEY ID    a card's buttons (open, eject, send; force, show on a busy card)
+#   k4-drives copy-job DEV DIR FILE…  rsync FILEs into DIR, its progress in $RUN/copy-DEV (from paste)
 # Eject unmounts (and locks) everything on the drive, then powers it off. Something holding a file
 # open makes it "busy": the popup names what, and "Close them and eject" asks them to quit first.
+# Paste copies the files copied in a file manager (text/uri-list) onto the drive in the background;
+# the card and the bar module show how far it is.
 export PATH="$HOME/.local/bin:$PATH"
 SELF=$(command -v k4-drives || echo "$0")
 RUN="${XDG_RUNTIME_DIR:-/tmp}/k4-drives"
@@ -60,6 +63,15 @@ fields() {  # fields LINE: sets dev kind label model size fs mp locked id clr (r
   dev=${f[0]:-} kind=${f[1]:-} label=${f[2]:-} model=${f[3]:-} size=${f[4]:-0} fs=${f[5]:-} mp=${f[6]:-} locked=${f[7]:-0} id=${f[8]:-} clr=${f[9]:-}; size=${size%.*}; }
 line_of() { list | awk -F'\t' -v d="$1" '$1 == d'; }
 busy_note() { cat "$RUN/busy-${1//\//_}" 2>/dev/null; }
+copy_file() { echo "$RUN/copy-${1//\//_}"; }
+copying() { local p; p=$(cat "$(copy_file "$1").pid" 2>/dev/null) && kill -0 "$p" 2>/dev/null; }
+copy_note() {  # copy_note DEV: "Copying 3 items · 42% · 0:31 left", "Copied 3 items" for a minute after
+  local f; f=$(copy_file "$1"); [ -f "$f" ] || return 1
+  local pct eta n; IFS=$'\t' read -r pct eta n < "$f"
+  if copying "$1"; then echo "Copying $n $([ "$n" = 1 ] && echo item || echo items) · ${pct:-0}%$([ "${eta:--}" != - ] && [ "${pct:-0}" -gt 0 ] && e=${eta#0:} && echo " · ${e#0} left")"
+  elif [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 60 ]; then
+    if [ "$eta" = 0 ]; then echo "Copied $n $([ "$n" = 1 ] && echo item || echo items)"; else echo "Copy stopped$(e=$(tail -1 "$f.err" 2>/dev/null | cut -c1-80); [ -n "$e" ] && echo " · $e")"; fi
+  else rm -f "$f" "$f.err"; return 1; fi; }
 
 data() {
   local l dev kind label model size fs mp locked id clr used use state note f
@@ -73,6 +85,7 @@ data() {
     state=unmounted; [ -n "$mp" ] && state=mounted; [ "$locked" = 1 ] && state=locked
     note=""
     if note=$(busy_note "$dev") && [ -n "$note" ]; then state=busy
+    elif note=$(copy_note "$dev"); then copying "$dev" && state=writing
     elif [ -n "$mp" ] && [ "$(awk '{ print $2 }' "/sys/class/block/$(basename "$(disk_of "$dev")")/inflight" 2>/dev/null)" -gt 0 ] 2>/dev/null; then state=writing; note="Writing to it · eject waits until it is done."; fi
     printf 'D\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$dev" "$kind" "$label" "$model · $(human "$size")${fs:+ · $fs}" "$mp" "$used" "$use" "$state" "$note"
   done < <(list)
@@ -124,21 +137,60 @@ act() {
            else echo "Still busy · close what uses $mp yourself"; echo k4:tone red; fi ;;
     cancel) rm -f "$RUN/busy-${dev//\//_}"; echo "Left $label as it is" ;;
     copy) printf '%s' "${mp:-$dev}" | wl-copy; echo "Copied ${mp:-$dev}" ;;
+    paste) paste_to "$dev" "$label" "$mp" ;;
     unlock) if out=$(printf '%s' "${K4_INPUT:-}" | udisksctl unlock -b "$dev" --key-file /dev/stdin 2>&1); then
               clr=$(printf '%s' "$out" | grep -o '/dev/[^ .]*' | tail -1)
               out=$(udisksctl mount -b "$clr" 2>&1); echo "Unlocked $label · mounted at $(printf '%s' "$out" | sed -n 's/.* at \(.*\)$/\1/p' | sed 's/\.$//')"
             else echo "Wrong passphrase · try again"; echo k4:tone red; fi ;;
   esac; }
 
+paste_to() {  # paste_to DEV LABEL MOUNT: the files copied in a file manager, onto the drive
+  local u src=()
+  [ -n "$3" ] || { echo "Mount $2 first"; echo k4:tone yellow; return; }
+  copying "$1" && { echo "Already copying to $2 · wait for it"; echo k4:tone yellow; return; }
+  while IFS= read -r u; do
+    u=${u%$'\r'}; [[ $u == file://* ]] || continue
+    u=${u#file://}; u=/${u#*/}; u=$(printf '%b' "${u//%/\\x}")
+    [ -e "$u" ] && src+=("$u")
+  done < <(wl-paste -n -t text/uri-list 2>/dev/null)
+  [ ${#src[@]} -gt 0 ] || { echo "Nothing to paste · copy files in your file manager first"; echo k4:tone yellow; return; }
+  setsid -f "$SELF" copy-job "$1" "$3" "${src[@]}" >/dev/null 2>&1 </dev/null
+  echo "Copying ${#src[@]} $([ ${#src[@]} = 1 ] && echo item || echo items) to $2"; }
+
+copy_job() {  # copy_job DEV DIR FILE…: rsync's progress as "PERCENT<TAB>ETA<TAB>COUNT" (ETA - not yet known, 0 done, xN failed)
+  local dev="$1" dir="$2" f n rc; shift 2; f=$(copy_file "$dev"); n=$#
+  echo $$ > "$f.pid"; printf '0\t-\t%s\n' "$n" > "$f"; : > "$f.err"
+  # FAT and exFAT keep no owners or permissions: only the data and the times
+  rsync -rtL --modify-window=2 --info=progress2 --no-inc-recursive "$@" "$dir/" 2>"$f.err" | stdbuf -o0 tr '\r' '\n' |
+    while read -r _ pct _ eta _; do [[ $pct == *% ]] && printf '%s\t%s\t%s\n' "${pct%\%}" "$eta" "$n" > "$f.tmp" && mv "$f.tmp" "$f"; done
+  rc=${PIPESTATUS[0]}; sync -f "$dir/" 2>/dev/null
+  printf '100\t%s\t%s\n' "$([ "$rc" = 0 ] && echo 0 || echo "x$rc")" "$n" > "$f"; rm -f "$f.pid"
+  pgrep -f '^k4 --driv[e]s' >/dev/null && return  # the popup says it
+  local label; label=$(line_of "$dev" | cut -f3)
+  if [ "$rc" = 0 ]; then notify-send -a Drives "Copied $n $([ "$n" = 1 ] && echo item || echo items) to ${label:-$dev}"
+  else notify-send -a Drives -u critical "Copy to ${label:-$dev} stopped" "$(tail -1 "$f.err")"; fi; }
+
+eject_said() {  # eject_said DEV OUTPUT: a card for what eject said; a busy drive's card can close what holds it
+  local nid
+  if [[ $2 == "Can’t eject"* ]]; then
+    nid=$(k4 --notify-ctl "$(printf 'post\t0\tDrives\t%s\t%s\t1\t-1\t-1\t\t󰕓\t\tforce:Close them and eject,show:Show which\t%s note-act' \
+      "$(printf '%s' "$2" | head -1 | sed 's/ · .*//')" "$(busy_note "$1")" "$SELF")" 2>/dev/null | tr -dc 0-9)
+    [ -n "$nid" ] && printf '%s\n' "$1" > "$RUN/note-$nid" && return
+  fi
+  notify-send -a Drives "$(printf '%s' "$2" | head -1)"; }
+
 bar() {
-  local n=0 l dev kind label model size fs mp locked id clr tip="" busy="" safe=""
+  local n=0 l dev kind label model size fs mp locked id clr tip="" busy="" safe="" writing="" c pct=""
   while IFS= read -r l; do
     [ -n "$l" ] || continue; fields "$l"; n=$((n + 1))
     [ -n "$(busy_note "$dev")" ] && busy=1
+    if copying "$dev"; then c=$(copy_note "$dev"); pct=$(cut -f1 "$(copy_file "$dev")"); writing="$label · ${c#Copying }"
+    elif [ -n "$mp" ] && [ "$(awk '{ print $2 }' "/sys/class/block/$(basename "$(disk_of "$dev")")/inflight" 2>/dev/null)" -gt 0 ] 2>/dev/null; then writing="${writing:-Writing to $label}"; fi
     tip+="${tip:+ · }$label ($([ -n "$mp" ] && df -h --output=avail "$mp" 2>/dev/null | tail -1 | tr -d ' ' | sed 's/$/ free/' || echo "not mounted"))"
   done < <(list)
   for f in "$RUN"/safe-*; do [ -f "$f" ] && [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 5 ] && safe=1; done
   if [ -n "$busy" ]; then jq -cn --arg t "$tip" '{icon: "󰕓", icon_tone: "yellow", text: "busy", text_tone: "yellow", tooltip: "Can’t eject: something still uses it · \($t)"}'
+  elif [ -n "$writing" ]; then jq -cn --arg t "$writing" --arg p "${pct:+$pct%}" '{icon: "󰕓", icon_tone: "accent", text: (if $p == "" then "writing" else $p end), text_tone: "accent", tooltip: "\($t) · eject waits until it is done"}'
   elif [ "$n" -eq 0 ] && [ -n "$safe" ]; then jq -cn '{icon: "󰕓", icon_tone: "accent", text: "✓", tooltip: "Safe to remove"}'
   elif [ "$n" -eq 0 ]; then echo '{}'
   else jq -cn --arg t "$tip" --arg n "$([ "$n" -gt 1 ] && echo "$n")" '{icon: "󰕓", text: $n, tooltip: "\($t) · middle click opens, right click ejects the newest"}'; fi; }
@@ -174,14 +226,16 @@ newest() {  # the drive plugged in last: open it or eject it
   [ -n "$dev" ] || exit 0
   case "$1" in
     open) act open "$dev" >/dev/null ;;
-    eject) out=$(act eject "$dev"); notify-send -a Drives "$(printf '%s' "$out" | head -1)" ;;
+    eject) eject_said "$dev" "$(act eject "$dev")" ;;
   esac; }
 
 note_act() {  # note_act KEY ID: a card's button
   local dev; dev=$(cat "$RUN/note-$2" 2>/dev/null); [ -n "$dev" ] || exit 0
   case "$1" in
     open) act open "$dev" >/dev/null ;;
-    eject) out=$(act eject "$dev"); notify-send -a Drives "$(printf '%s' "$out" | head -1)" ;;
+    eject) eject_said "$dev" "$(act eject "$dev")" ;;
+    force) notify-send -a Drives "$(act force "$dev" | head -1)" ;;
+    show) exec "$SELF" window ;;
     send) mp=$(line_of "$dev" | cut -f7); [ -n "$mp" ] && exec k4-share send-file "$mp" ;;
     unlock) exec "$SELF" window ;;
   esac; }
@@ -201,5 +255,6 @@ case "${1:-window}" in
   bar) if [ "${2:-}" = --follow ]; then follow; else bar; fi ;;
   newest) newest "${2:?open|eject}" ;;
   note-act) note_act "${2:?key}" "${3:?id}" ;;
+  copy-job) shift; copy_job "$@" ;;
   *) sed -n '2,16p' "$0" >&2; exit 2 ;;
 esac
