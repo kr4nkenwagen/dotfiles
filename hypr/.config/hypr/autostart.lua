@@ -2,6 +2,8 @@
 -- o.launch_on_start("my-service")
 o.launch_on_start("~/scripts/windowrule.sh")
 o.launch_on_start("clipse -listen")
+-- each copy's app, and secrets out of the history after 12 s (k4's Clipboard window)
+o.launch_on_start("~/.local/bin/k4-clip watch")
 -- k4's notifications (Omarchy's are off: disabledPlugins in ~/.config/omarchy/shell.json)
 o.launch_on_start("~/.local/bin/k4-notify daemon")
 -- LocalSend for k4: receives from phones and computers nearby, sends from Super+Ctrl+S

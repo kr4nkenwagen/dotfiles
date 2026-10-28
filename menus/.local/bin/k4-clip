@@ -2,8 +2,47 @@
 # k4-clip: the clipboard history in k4's Clipboard window (k4 --clip, the Kestrel design's),
 # over clipse's history: ↵ pastes into the window you were in, ⇧↵ copies, ^P pins, Del deletes.
 # Super+Ctrl+V opens it; again closes it.
+#   k4-clip watch   with the session: notes each copy's app and whether it is a secret in
+#                   ~/.local/state/k4/clip-meta.tsv (epoch, app, 1|0), for the window's rows. A
+#                   secret (a password manager's copy, or one marked x-kde-passwordManagerHint)
+#                   leaves clipse's history 12 s after the copy.
 export PATH="$HOME/.local/bin:$PATH"
-pkill -f '^k4 --clip' && exit 0
-out=$(clipse-menu clip-list | k4 --clip) || exit 0
-IFS=$'\t' read -r verb id <<<"$out"
-[ -n "$verb" ] && [ -n "$id" ] && exec clipse-menu clip-act "$verb" "$id"
+META="$HOME/.local/state/k4/clip-meta.tsv"
+HIST="$HOME/.config/clipse/clipboard_history.json"
+SECRET_APPS='1password|bitwarden|keepassxc|org\.keepassxc|lastpass|dashlane|passwordsafe|gnome-secrets|proton-pass|seahorse'
+
+focused_app() {
+  if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then hyprctl activewindow -j 2>/dev/null | jq -r '.class // ""'
+  elif [ -n "${SWAYSOCK:-}" ]; then swaymsg -t get_tree 2>/dev/null | jq -r '.. | objects | select(.focused? == true) | (.app_id // .window_properties.class // "")' | head -1; fi; }
+
+note() {  # one copy (wl-paste --watch runs it with the copy on stdin, unread)
+  local now types app secret=0
+  now=$(date +%s.%N | cut -c1-14)
+  types=$(wl-paste --list-types 2>/dev/null)
+  app=$(focused_app)
+  { grep -qx 'x-kde-passwordManagerHint' <<<"$types" || grep -qiE "^($SECRET_APPS)$" <<<"$app"; } && secret=1
+  mkdir -p "${META%/*}"
+  printf '%s\t%s\t%s\n' "$now" "$(printf '%s' "$app" | tr '\t\n' '  ')" "$secret" >> "$META"
+  [ "$(wc -l < "$META")" -gt 400 ] && { tail -200 "$META" > "$META.$$" && mv "$META.$$" "$META"; }
+  [ "$secret" = 1 ] && (setsid -f "$0" forget "$now" >/dev/null 2>&1 </dev/null)
+  return 0; }
+
+forget() {  # forget EPOCH: 12 s after a secret's copy, its entry leaves the history (it never comes back)
+  sleep 12
+  [ -f "$HIST" ] || return 0
+  local off tmp="$HIST.k4.$$"
+  off=$(date +%z | sed -E 's/^([+-])([0-9]{2})([0-9]{2})$/\1(\2*3600+\3*60)/'); off=$(( off ))
+  jq --argjson at "$1" --argjson off "$off" '.clipboardHistory |= map(select(
+      ((.recorded[0:19] | strptime("%Y-%m-%d %H:%M:%S") | mktime) - $off) as $t | ($t - $at | fabs) > 2 or .pinned))' "$HIST" > "$tmp" \
+    && mv "$tmp" "$HIST"; }
+
+case "${1:-}" in
+  watch) pgrep -f '^wl-paste --watch k4-cli[p] note' >/dev/null && exit 0
+         exec wl-paste --watch k4-clip note ;;
+  note) cat >/dev/null; note ;;
+  forget) forget "${2:?epoch}" ;;
+  *) pkill -f '^k4 --clip' && exit 0
+     out=$(clipse-menu clip-list | k4 --clip) || exit 0
+     IFS=$'\t' read -r verb id <<<"$out"
+     [ -n "$verb" ] && [ -n "$id" ] && exec clipse-menu clip-act "$verb" "$id" ;;
+esac

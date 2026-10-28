@@ -57,14 +57,20 @@ section() {
 }
 # ---------- k4 --clip (the Kestrel design's Clipboard window; k4-clip opens it) ----------
 # clip-list: S recording · R/L the runner and loader · E id epoch pinned kind label lines chars image body
-# (body: lines joined by \x1f, capped); newest first as clipse keeps them.
+# app secret (body: lines joined by \x1f, capped; app and secret 1|0 from k4-clip watch's notes, the
+# nearest within 2 s); newest first as clipse keeps them.
 clip_list() {
   local off; off=$(date +%z | sed -E 's/^([+-])([0-9]{2})([0-9]{2})$/\1(\2*3600+\3*60)/'); off=$(( off ))
   printf 'S\t%s\n' "$(recording && echo 1 || echo 0)"
   printf 'R\t%s clip-act\nL\t%s clip-list\n' "$SELF_PATH" "$SELF_PATH"
   [ -f "$HIST" ] || return 0
-  jq -r --argjson off "$off" '.clipboardHistory[] |
+  local meta="$HOME/.local/state/k4/clip-meta.tsv"; [ -f "$meta" ] || meta=/dev/null
+  jq -r --argjson off "$off" --rawfile meta "$meta" '
+    ($meta | split("\n") | map(select(length > 0) | split("\t") | {t: (.[0] | tonumber? // 0), app: (.[1] // ""), s: (.[2] // "0")})) as $m |
+    .clipboardHistory[] |
     ((.recorded[0:19] | strptime("%Y-%m-%d %H:%M:%S") | mktime) - $off) as $t |
+    ($t + (.recorded[19:] | tonumber? // 0)) as $tf |
+    ([$m[] | select((.t - $tf | fabs) <= 2)] | min_by(.t - $tf | fabs) // {app: "", s: "0"}) as $who |
     (if (.filePath // "null") != "null" then .filePath else "" end) as $img |
     (.value // "") as $v |
     ($v | gsub("\r"; "") | split("\n")) as $all |
@@ -74,7 +80,7 @@ clip_list() {
     ["E", .recorded, ($t | tostring), (if .pinned then "1" else "0" end), $k,
      (if $img != "" then ($img | split("/") | last) else ($lines[0] | gsub("\t"; " ") | .[0:200]) end),
      ($all | length | tostring), ($v | length | tostring), $img,
-     ($v[0:6000] | gsub("\t"; "    ") | gsub("\r"; "") | gsub("\n"; "\u001f"))] | @tsv' "$HIST" 2>/dev/null; }
+     ($v[0:6000] | gsub("\t"; "    ") | gsub("\r"; "") | gsub("\n"; "\u001f")), $who.app, $who.s] | @tsv' "$HIST" 2>/dev/null; }
 clip_value() { jq -j --arg r "$1" '.clipboardHistory[] | select(.recorded == $r) | .value' "$HIST"; }
 clip_file() { jq -r --arg r "$1" '.clipboardHistory[] | select(.recorded == $r) | .filePath // ""' "$HIST"; }
 clip_copy() {  # clip_copy ID [plain]: the entry back on the clipboard

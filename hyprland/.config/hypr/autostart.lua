@@ -12,4 +12,5 @@ hl.on("hyprland.start", function()
   hl.exec_cmd("k4-share daemon")
   hl.exec_cmd("sway-menu displays-watch") -- each set of screens gets the layout it had last time
   hl.exec_cmd("clipse -listen")
+  hl.exec_cmd("k4-clip watch") -- each copy's app; secrets leave the history after 12 s
 end)

@@ -63,6 +63,7 @@ exec lxpolkit
 exec nm-applet
 exec blueman-applet
 exec clipse -listen
+exec ~/.local/bin/k4-clip watch  # each copy's app; secrets leave the history after 12 s
 exec $menu_sys idle
 
 # Applications. Tools that live in ~/.local/bin or ~/.cargo/bin go through `sway-menu tui`,
