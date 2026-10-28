@@ -6,6 +6,8 @@ o.launch_on_start("clipse -listen")
 o.launch_on_start("~/.local/bin/k4-notify daemon")
 -- LocalSend for k4: receives from phones and computers nearby, sends from Super+Ctrl+S
 o.launch_on_start("~/.local/bin/k4-share daemon")
+-- Each set of screens gets the layout it had last time (Display › Arrangement)
+o.launch_on_start("~/.local/bin/sway-menu displays-watch")
 -- The status bar: k4's (k4-bar hides Omarchy's) unless Toggle › Status bar picked Omarchy's
 o.exec_on_start("~/.local/bin/sway-menu bar-start")
 

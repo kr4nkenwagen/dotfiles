@@ -57,6 +57,7 @@ exec_always sh -c 'pkill -x waybar; pkill -f "^k4 --bar"; sleep 0.3; if [ "$(cat
 # notifications: k4's (k4-notify: popups, the Super+N centre), mako without k4
 # (a mako already started by an early notification gives way: it doesn't let k4 take over)
 exec sh -c 'if [ -x ~/.local/bin/k4 ]; then pkill -x mako; sleep 0.2; exec ~/.local/bin/k4-notify daemon; else exec mako -c $theme/mako.ini; fi'
+exec ~/.local/bin/sway-menu displays-watch   # each set of screens gets the layout it had last time
 exec ~/.local/bin/k4-share daemon   # LocalSend for k4: receive and send (port 53317 tcp/udp must be open)
 exec lxpolkit
 exec nm-applet

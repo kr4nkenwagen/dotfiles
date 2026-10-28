@@ -121,7 +121,7 @@ arch_desktop_packages=(
   qrencode zbar chafa libvips socat jq noto-fonts-emoji xdg-desktop-portal-gtk polkit-gnome
   gnome-keyring xdg-terminal-exec fuzzel mako awww bluetui impala wiremix lazygit starship
   carapace-bin dust eza bat fd fzf zoxide btop keychain fwupd wayland libxkbcommon
-  greetd greetd-tuigreet openssh noto-fonts xdg-user-dirs
+  greetd greetd-tuigreet openssh noto-fonts xdg-user-dirs wl-mirror
 )
 arch_sway_packages=(sway swaylock swayidle swaybg waybar xdg-desktop-portal-wlr)
 arch_hyprland_packages=(hyprland hyprlock hypridle hyprsunset xdg-desktop-portal-hyprland hyprpolkitagent)
@@ -142,7 +142,7 @@ ubuntu_desktop_packages=(
   waybar mako-notifier fuzzel xdg-terminal-exec wireplumber
   brightnessctl playerctl pavucontrol pulseaudio-utils wtype fonts-noto-color-emoji grim slurp network-manager-gnome blueman ghostty
   wf-recorder wdisplays wlsunset power-profiles-daemon libnotify-bin libgtk-3-bin chafa qrencode
-  libvips-tools
+  libvips-tools wl-mirror
   libwayland-dev libxkbcommon-dev clang
 )
 

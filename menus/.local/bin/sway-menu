@@ -1373,8 +1373,7 @@ mode_pick() { local o rows=() i; o=$(focused_output); [ -n "$o" ] || return
 scale_pick() { local o i levels=(1 1.25 1.5 2); o=$(focused_output); [ -n "$o" ] || return
   i=$(pick_index "Scale ($o)" "${levels[@]}") && [[ $i =~ ^[0-9]+$ ]] || return; scale_set "$o" "${levels[$i]}"; }
 scale_set() {  # scale_set OUTPUT SCALE; persisted in ~/.local/state/sway/display.conf
-  local o="$1" v="$2"; swaymsg output "$o" scale "$v" >/dev/null; mkdir -p "$STATE"
-  { grep -v "^output $o scale" "$STATE/display.conf" 2>/dev/null; echo "output $o scale $v"; } > "$STATE/display.conf.new" && mv "$STATE/display.conf.new" "$STATE/display.conf"
+  local o="$1" v="$2"; output_scale "$o" "$v"
   [ "$(outputs_geo | wc -l)" -gt 1 ] && [ ! -f "$STATE/arrange-custom" ] && arrange_apply   # its size changed: line the screens up again (not a dragged layout)
   notify Scale "$o  $v×"; }
 # Arrangement (Display › Arrangement): each other screen right of, left of, above or below the
@@ -1394,6 +1393,51 @@ displays_apply() {  # displays_apply NAME X Y [NAME X Y …]
   while [ $# -ge 3 ]; do output_pos "$1" "$2" "$3"; shift 3; done
   mkdir -p "$STATE"; : > "$STATE/arrange-custom"
   echo "Applied · Esc closes"; }
+# Display profiles: each set of connected screens (by make, model and serial: the same monitor on
+# another port is the same, another monitor on the same port is not) remembers its layout, saved
+# whenever it changes here; displays-watch applies it when that set is plugged in again.
+PROFILES="$STATE/display-profiles"
+outputs_state() {  # ident<TAB>name<TAB>on<TAB>x<TAB>y<TAB>scale, every connected screen
+  swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | [([.make, .model, .serial] | map(. // "") | join(" ")), .name, (if .active then 1 else 0 end), .rect.x, .rect.y, (.scale // 1)] | @tsv'; }
+output_scale() {  # output_scale NAME SCALE, kept in display.conf
+  swaymsg output "$1" scale "$2" >/dev/null; mkdir -p "$STATE"
+  { grep -v "^output $1 scale" "$STATE/display.conf" 2>/dev/null; echo "output $1 scale $2"; } > "$STATE/display.conf.new" && mv "$STATE/display.conf.new" "$STATE/display.conf"; }
+profile_key() { outputs_state | cut -f1 | sort | md5sum | cut -c1-12; }
+profile_file() { printf '%s/%s.tsv' "$PROFILES" "$(profile_key)"; }
+profile_save() {  # the layout of the screens connected now
+  [ -n "${PROFILE_APPLYING:-}" ] && return 0
+  local st; st=$(outputs_state); [ "$(printf '%s\n' "$st" | grep -c .)" -gt 1 ] || return 0   # one screen: nothing to remember
+  mkdir -p "$PROFILES"; printf '%s\n' "$st" | cut -f1,3- > "$(profile_file)"; }
+profile_apply() {  # the remembered layout for the screens connected now; 1 when there is none
+  local f; f=$(profile_file); [ -f "$f" ] || return 1
+  local -A name=() on=()
+  local id n a x y sc
+  while IFS=$'\t' read -r id n a x y sc; do name[$id]=$n; on[$id]=$a; done < <(outputs_state)
+  export PROFILE_APPLYING=1
+  while IFS=$'\t' read -r id a x y sc; do   # turn on first, so turning one off never hits the last one
+    n=${name[$id]:-}; [ -n "$n" ] || continue
+    [ "$a" = 1 ] && [ "${on[$id]}" = 0 ] && output_toggle "$n" >/dev/null
+  done < "$f"
+  while IFS=$'\t' read -r id a x y sc; do
+    n=${name[$id]:-}; [ -n "$n" ] || continue
+    if [ "$a" = 1 ]; then output_scale "$n" "$sc"; output_pos "$n" "$x" "$y"
+    elif [ "${on[$id]}" = 1 ]; then output_toggle "$n" >/dev/null; fi
+  done < "$f"
+  unset PROFILE_APPLYING; return 0; }
+profile_forget() { rm -f "$(profile_file)"; notify Display "This setup's layout is forgotten"; }
+displays_event_stream() { swaymsg -m -t subscribe '["output"]' 2>/dev/null; }
+displays_watch() {  # applies a set's layout when screens come and go (started with the session)
+  local pid="${XDG_RUNTIME_DIR:-/tmp}/sway-menu-displays-watch.pid" last="" key
+  [ -f "$pid" ] && kill -0 "$(cat "$pid")" 2>/dev/null && return 0
+  echo $$ > "$pid"
+  while :; do
+    while IFS= read -r _; do
+      while IFS= read -r -t 1 _; do :; done   # a burst of events: act once it settles
+      key=$(profile_key); [ "$key" = "$last" ] && continue; last=$key
+      profile_apply || { [ "$(outputs_geo | wc -l)" -gt 1 ] && [ -f "$STATE/arrange" ] && arrange_apply; } || true
+    done < <(displays_event_stream)
+    sleep 2   # the compositor restarted or the stream ended: listen again
+  done; }
 arrange_anchor() { outputs_geo | awk -F'\t' '$1 ~ /^(eDP|LVDS|DSI)/ { print $1; f = 1; exit } NR == 1 { first = $1 } END { if (!f) print first }' | head -1; }
 arrange_side() { awk -F'\t' -v n="$1" '$1 == n { s = $2 } END { print s ? s : "Right" }' "$STATE/arrange" 2>/dev/null || echo Right; }
 arrange_set() {  # arrange_set NAME (side in K4_VALUE, or $2)
@@ -1422,6 +1466,11 @@ arrange_apply() {
   for i in "${!names[@]}"; do output_pos "${names[$i]}" $(( xs[i] - mx )) $(( ys[i] - my )); done; }
 # The laptop's own screen (eDP/LVDS/DSI): Super+Ctrl+Delete and the lid. Closing the lid turns it
 # off only while another screen is on (output_toggle never turns off the last one).
+# Mirroring (Display › Mirror): one screen's picture fullscreen on another, through wl-mirror.
+mirror_to() {  # mirror_to SOURCE TARGET
+  command -v wl-mirror >/dev/null || { notify Mirror "Needs wl-mirror ($(pkg_hint wl-mirror))"; return; }
+  pkill -x wl-mirror; bg wl-mirror --fullscreen-output "$2" "$1"; notify Mirror "$1 on $2 · Display › Stop mirroring ends it"; }
+mirror_stop() { pkill -x wl-mirror && notify Mirror "Stopped"; }
 laptop_output() { outputs_tsv | awk -F'\t' '$1 ~ /^(eDP|LVDS|DSI)/ { print $1; exit }'; }
 laptop_on() { local l; l=$(laptop_output); [ -n "$l" ] || return; [ "$(outputs_tsv | awk -F'\t' -v o="$l" '$1 == o { print $2 }')" = true ] || output_toggle "$l"; }
 laptop_off() { local l; l=$(laptop_output); [ -n "$l" ] || return; [ "$(outputs_tsv | awk -F'\t' -v o="$l" '$1 == o { print $2 }')" = true ] && output_toggle "$l"; }
@@ -1860,6 +1909,14 @@ k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
                choice "$n" "arrange_set $(printf %q "$n")" "$(arrange_side "$n")" "Right|Left|Above|Below"
              done < <(outputs_geo)
              stay "Line them up again" 'arrange_apply; notify Display "Arranged"' "after a resolution or scale change"
+             hdr "Mirror"
+             if pgrep -x wl-mirror >/dev/null; then stay "Stop mirroring" mirror_stop; fi
+             while IFS=$'\t' read -r n _ _; do while IFS=$'\t' read -r t _ _; do [ "$t" = "$n" ] && continue
+               stay "Show $n on $t" "mirror_to $(printf %q "$n") $(printf %q "$t")" "fullscreen"
+             done < <(outputs_geo); done < <(outputs_geo)
+             hdr "This setup"
+             if [ -f "$(profile_file)" ]; then stay "Forget this setup's layout" profile_forget "remembered for these screens" "confirm=Forget the layout for these screens?|They go back to the sides above next time."
+             else stay "This setup" : "remembered once you arrange it"; fi
            fi
            hdr "More"
            tog "Night light" 'toggle_night; sleep 0.3; notify "Night light" "$(onoff night_on)"' "$(onoff night_on)"
@@ -2076,6 +2133,9 @@ if [ "$WM" = hyprland ]; then
   outputs_geo() { hyprctl -j monitors 2>/dev/null | jq -r '.[] | [.name, ((if .transform % 2 == 1 then .height else .width end) / .scale | floor), ((if .transform % 2 == 1 then .width else .height end) / .scale | floor)] | @tsv'; }
   output_pos() { local sc; sc=$(outputs_tsv | awk -F'\t' -v o="$1" '$1 == o { print $4 }')
     hypr_keep display "$1" "hl.monitor({ output = \"$1\", mode = \"preferred\", position = \"$2x$3\", scale = ${sc:-1} })"; }
+  outputs_state() { hyprctl -j monitors all 2>/dev/null | jq -r '.[] | [([.make, .model, .serial] | map(. // "") | join(" ")), .name, (if (.disabled // false) then 0 else 1 end), .x, .y, .scale] | @tsv'; }
+  output_scale() { local p; p=$(hypr_monitor_pos "$1"); hypr_keep display "$1" "hl.monitor({ output = \"$1\", mode = \"preferred\", position = \"${p:-auto}\", scale = $2 })"; }
+  displays_event_stream() { socat -U - "UNIX-CONNECT:${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock" 2>/dev/null | grep --line-buffered -E '^monitor(added|removed)'; }
   outputs_place() { hyprctl -j monitors 2>/dev/null | jq -r '.[] | [.name, ((if .transform % 2 == 1 then .height else .width end) / .scale | floor), ((if .transform % 2 == 1 then .width else .height end) / .scale | floor), .x, .y, (if (.name | test("^(eDP|LVDS|DSI)")) then 1 else 0 end), ([.make, .model] | map(select(. != null and . != "")) | join(" "))] | @tsv'; }
   set_scale() { local o; o=$(focused_output); [ -n "$o" ] && scale_set "$o" "$1"; }
   output_toggle() {  # never the last active output
@@ -2197,6 +2257,10 @@ k4_gone() { local i
   else
     for i in $(seq 20); do pgrep -f '^k4 --menu' >/dev/null || break; sleep 0.05; done
   fi; }
+for f in arrange_apply displays_apply scale_set output_toggle; do   # each layout change is remembered for this set of screens
+  eval "$(declare -f "$f" | sed "1s/^$f/layout_$f/")"
+  eval "$f() { layout_$f \"\$@\"; local r=\$?; profile_save; return \$r; }"
+done
 for f in shot shot_region shot_window qr_scan color_picker; do
   eval "$(declare -f "$f" | sed "1s/^$f/wm_$f/")"
   eval "$f() { k4_gone; wm_$f \"\$@\"; }"
@@ -2241,7 +2305,8 @@ case "${1:-}" in
   calendar|battery|toggle|update|system|apps|bt|capture) k4_main "$1" ;; # the k4 bar's popups; capture: Super+Ctrl+C
   kb-next) kb_cycle ;;
   keybindings) show_keybindings ;;
-  displays) displays_open ;;                           # Display › Arrange by dragging…
+  displays) displays_open ;;
+  displays-watch) displays_watch ;;                    # started with the session: per-setup layouts                           # Display › Arrange by dragging…
   displays-apply) shift; displays_apply "$@" ;;   # Super+K, as on Omarchy
   timezone) if [ "$LAUNCHER" = k4 ]; then k4_main timezone; else tz_menu; fi ;;
   k4-section) k4_section "${2:?section}" ;;
