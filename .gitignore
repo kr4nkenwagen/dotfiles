@@ -28,3 +28,4 @@ tmux/.config/tmux/theme-colors.conf
 menus/.local/share/k4/localsend/
 __pycache__/
 qutebrowser/.config/qutebrowser/userstyles/theme-*.css
+fish/.config/fish/fish_variables

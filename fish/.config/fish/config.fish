@@ -69,9 +69,11 @@ end
 if not set -q TMUX; and not set -q SSH_CONNECTION
     tmux
 end
-set -U fish_greeting ""
+set -g fish_greeting ""
 set -g fish_key_bindings fish_vi_key_bindings
-set -Ux CARAPACE_BRIDGES 'zsh,fish,inshellisense'
+set -gx CARAPACE_BRIDGES 'zsh,fish,inshellisense'
+# (set -g, not -U: fish_variables is per machine and no longer tracked)
+test -d ~/rp2040/pico-sdk; and set -gx PICO_SDK_PATH ~/rp2040/pico-sdk
 if command -q carapace
     carapace _carapace | source
 end

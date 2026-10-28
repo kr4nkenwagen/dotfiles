@@ -315,7 +315,6 @@ if translucent:
             sys.meta_path.insert(0, _WebviewPatchFinder())
     except Exception as e:
         print(f"qutebrowser config: overlay stacking fix not applied: {e!r}")
-c.colors.webpage.darkmode.enabled = True
 c.content.blocking.method = 'both'
 c.statusbar.show = 'in-mode'
 c.tabs.show = 'never'
@@ -466,6 +465,8 @@ except Exception as e:
 # Sites that follow the system's light/dark preference (Jira's "Match browser" theme among
 # them) take the theme's: dark backgrounds ask for dark pages.
 c.colors.webpage.preferred_color_scheme = 'dark' if theme_dark else 'light'
+# Chromium's forced dark mode only with a dark theme: a light theme gets pages as they are.
+c.colors.webpage.darkmode.enabled = theme_dark
 
 # ==========================================
 # FULL MENU & COMPLETION TEXT COLOR STYLING
