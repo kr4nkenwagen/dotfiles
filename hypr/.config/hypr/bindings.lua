@@ -165,6 +165,7 @@ o.bind("SUPER + CTRL + C", "Capture (k4)", "sway-menu capture")
 -- Notifications through k4 (k4-notify; it replaces Omarchy's notification service): Super+N the
 -- centre, and Omarchy's comma keys on k4's service.
 o.bind("SUPER + N", "Notifications (k4)", "k4-notify center")
+o.bind("SUPER + ALT + N", "Notifications: keyboard", "k4-notify focus") -- ↑↓ ↵ 1–3 Del Space r(eply) Esc on the popups
 o.bind("SUPER + period", "Tray (k4)", "k4-tray popup")
 o.bind("SUPER + SHIFT + ESCAPE", "System performance (k4)", "k4-perf popup")
 hl.unbind("SUPER + CTRL + S")

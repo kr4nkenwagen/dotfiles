@@ -5,6 +5,7 @@
 #   k4-bar stop
 #   k4-bar spec            the module list k4 --bar reads
 #   k4-bar status MODULE   one module's line (Waybar JSON); --follow keeps printing on changes
+#   k4-bar cal-note-act KEY ID   a meeting card's buttons (join, snooze, open)
 # Modules (left · center · right): menu, workspaces, window · clock, media (any MPRIS player, via
 # media-menu) · indicators (do not disturb, night light, recording, stay awake: each shown only
 # when on), a LocalSend transfer, removable drives (k4-drives, only with one in), pinned tray apps
@@ -75,10 +76,13 @@ status() {
     now=$(date +%s)
     while IFS=$'\t' read -r st en title video; do
       [ -n "$st" ] && [ "$st" -gt "$now" ] && [ $((st - now)) -le 600 ] || continue
-      local seen="$HOME/.cache/k4/cal/notified"
+      local seen="$HOME/.cache/k4/cal/notified" snz="$HOME/.cache/k4/cal/snoozed" until
       if ! grep -qx "$st $title" "$seen" 2>/dev/null; then
         mkdir -p "${seen%/*}"; echo "$st $title" >> "$seen"
-        notify-send -a k4 "$title" "In $(( (st - now + 59) / 60 )) min${video:+ · $video}" 2>/dev/null
+        cal_card "$st" "$title" "$video"
+      elif until=$(awk -F'\t' -v k="$st $title" '$2 == k { print $1 }' "$snz" 2>/dev/null | tail -1) && [ -n "$until" ] && [ "$now" -ge "$until" ]; then
+        awk -F'\t' -v k="$st $title" '$2 != k' "$snz" > "$snz.$$" && mv "$snz.$$" "$snz"   # snoozed: back now
+        cal_card "$st" "$title" "$video"
       fi
       out icon 󰂚 icon_tone yellow text "$(date -d "@$st" +%H:%M)" text_tone yellow tooltip "$title in $(( (st - now + 59) / 60 )) min · click opens the calendar"
       return
@@ -166,9 +170,42 @@ status() {
       Charging) out icon 󱐋 icon_tone accent battery "$c" text "$c%" tooltip "Charging · $c%" ;;
       Full|"Not charging") out icon 󰚥 icon_tone dim battery "$c" text full text_tone dim tooltip "Full · on AC" ;;
       *) [ "$c" -le 10 ] && cls=critical || { [ "$c" -le 25 ] && cls=warning; }
-         out battery "$c" text "$c%" class "$cls" tooltip "$st · $c%" ;;
-    esac ;;
+         out battery "$c" text "$c%" class "$cls" tooltip "$st · $c%"
+         battery_card "$c" ;;
+    esac
+    [ "$st" = Discharging ] || rm -f "${XDG_RUNTIME_DIR:-/tmp}/k4-battery-warned" ;;
   esac; }
+
+cal_card() {  # cal_card START TITLE VIDEO: the meeting's card (Join Meet, Snooze 5 min, Open) until acted on
+  local now nid acts="default:,snooze:Snooze 5 min,open:Open"; now=$(date +%s)
+  [[ ${3:-} == http* ]] && acts="join:Join Meet,$acts"   # (default: a click on the card opens it)
+  nid=$(k4 --notify-ctl "$(printf 'post\t0\tCalendar\t%s\t%s\t1\t-1\t0\t\t󰃭\t\t%s\t%s cal-note-act' \
+    "$2" "In $(( ($1 - now + 59) / 60 )) min · $(date -d "@$1" +%H:%M)${3:+ · ${3#https://}}" "$acts" "$SELF")" 2>/dev/null | tr -dc 0-9)
+  if [ -n "$nid" ]; then printf '%s\t%s\t%s\n' "$1" "$2" "${3:-}" > "${XDG_RUNTIME_DIR:-/tmp}/k4-cal-note-$nid"
+  else notify-send -a k4 "$2" "In $(( ($1 - now + 59) / 60 )) min${3:+ · $3}" 2>/dev/null; fi; }
+
+cal_note_act() {  # cal_note_act KEY ID: the meeting card's buttons
+  local f="${XDG_RUNTIME_DIR:-/tmp}/k4-cal-note-$2" st title video
+  IFS=$'\t' read -r st title video < "$f" 2>/dev/null || exit 0; rm -f "$f"
+  case "$1" in
+    join) [ -n "$video" ] && setsid -f xdg-open "$video" >/dev/null 2>&1 ;;
+    snooze) mkdir -p "$HOME/.cache/k4/cal"; printf '%s\t%s\n' "$(( $(date +%s) + 300 ))" "$st $title" >> "$HOME/.cache/k4/cal/snoozed" ;;
+    open|default) exec "$SELF" popup calendar ;;
+  esac; }
+
+battery_card() {  # battery_card PERCENT: a yellow card once at 15%, a critical one at 5% (until it charges)
+  local f="${XDG_RUNTIME_DIR:-/tmp}/k4-battery-warned" was lvl; was=$(cat "$f" 2>/dev/null)
+  if [ "$1" -le 5 ]; then lvl=5; elif [ "$1" -le 15 ]; then lvl=15; else return 0; fi
+  [ "$was" = "$lvl" ] && return 0
+  [ "$lvl" = 15 ] && [ "$was" = 5 ] && return 0
+  echo "$lvl" > "$f"
+  if [ "$lvl" = 5 ]; then
+    k4 --notify-ctl "$(printf 'post\t0\tBattery\tBattery critically low · %s%%\tPlug in now, or save your work.\t2\t-1\t0\t\t󰂃\t\t\t' "$1")" >/dev/null 2>&1 ||
+      notify-send -u critical -a Battery "Battery critically low · $1%" "Plug in now, or save your work."
+  else
+    k4 --notify-ctl "$(printf 'post\t0\tBattery\tBattery low · %s%%\tPlug in soon.\twarn\t-1\t-1\t\t󰁻\t\t\t' "$1")" >/dev/null 2>&1 ||
+      notify-send -a Battery "Battery low · $1%" "Plug in soon."
+  fi; }
 
 follow_status() {  # status, then again on every change of what it shows
   MOD=$1
@@ -267,5 +304,6 @@ case "${1:-}" in
   spec) spec ;;
   status) if [ "${3:-}" = --follow ]; then follow_status "${2:?module}"; else status "${2:?module}"; fi ;;
   popup) popup "${2:?page}" ;;
+  cal-note-act) cal_note_act "${2:?key}" "${3:?id}" ;;
   *) sed -n '2,9p' "$0" >&2; exit 2 ;;
 esac

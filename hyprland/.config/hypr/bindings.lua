@@ -35,6 +35,7 @@ o.bind("SUPER + ESCAPE", "System menu (k4)", "k4-power")
 o.bind("SUPER + SHIFT + ESCAPE", "System performance (k4)", "k4-perf popup")
 o.bind("SUPER + SHIFT + S", "SSH hosts, server and keys (k4)", "k4-ssh open")
 o.bind("SUPER + N", "Notifications (k4)", "k4-notify center")
+o.bind("SUPER + ALT + N", "Notifications: keyboard", "k4-notify focus") -- ↑↓ ↵ 1–3 Del Space r(eply) Esc on the popups
 o.bind("SUPER + COMMA", "Dismiss notification", "k4-notify dismiss")
 o.bind("SUPER + SHIFT + COMMA", "Dismiss all notifications", "k4-notify clear")
 o.bind("SUPER + CTRL + COMMA", "Do not disturb", "k4-notify dnd")

@@ -6,7 +6,10 @@
 #   media-menu window        the popup (from a bar click: under it; again: closes it)
 #   media-menu data          its data: P and N lines, R and L (src/media.odin)
 #   media-menu act VERB BUS [ARG]   toggle next prev seek ±S setpos S volume N shuffle loop pick raise
-#   media-menu bar           the bar module's JSON; bar --follow: again on every change
+#   media-menu bar           the bar module's JSON; bar --follow: again on every change, and a
+#                            now-playing card when the track changes (not with the media popup
+#                            open, under do not disturb, or right after the media keys' box)
+#   media-menu note-act KEY ID   the card's buttons (prev, toggle, next)
 #   media-menu ctl VERB      play-pause | next | previous on the player, with the OSD (media keys)
 #   media-menu players | active | summary | part | section | available   (lib.sh: the Apps menu)
 K4_NAME=media-menu K4_ID=media K4_TITLE=Media K4_KEY=N K4_ICON=󰝚 K4_DESC="Any MPRIS player: now playing and controls"
@@ -101,10 +104,35 @@ bar() {  # the module: note, title · artist; paused dims; nothing playing hides
   [ -n "$t" ] && [ "$st" != Stopped ] || { echo '{}'; return; }
   if [ "$st" = Playing ]; then jq -cn --arg t "$t" --arg a "$a" --arg p "$(name_of "$b")" '{icon: "󰝚", icon_tone: "accent", text: $t, text2: $a, tooltip: "\($t) — \($a) · \($p)"}'
   else jq -cn --arg t "$t" --arg a "$a" --arg p "$(name_of "$b")" '{icon: "󰏤", text: $t, text2: $a, class: "dim", tooltip: "Paused · \($t) — \($a) · \($p)"}'; fi; }
+NOTE_RUN="${XDG_RUNTIME_DIR:-/tmp}/k4-media"
+now_card() {  # now_card [quiet]: a card for a new track (one card, updated in place: every bar's follower posts the same id)
+  local b j st t a art key id dnd
+  b=$(active) || return 0
+  j=$(all "$b"); st=$(jq -r '.PlaybackStatus.data // "Stopped"' <<<"$j")
+  t=$(jq -r '.Metadata.data["xesam:title"].data // ""' <<<"$j")
+  a=$(jq -r '(.Metadata.data["xesam:artist"].data // []) | if type == "array" then join(", ") else . end' <<<"$j")
+  [ -n "$t" ] && [ "$st" = Playing ] || return 0
+  key="$b|$t|$a"; mkdir -p "$NOTE_RUN"
+  [ "$(cat "$NOTE_RUN/last" 2>/dev/null)" = "$key" ] && return 0
+  printf '%s' "$key" > "$NOTE_RUN/last"
+  [ -n "${1:-}" ] && return 0                                       # the follower starting: no card for what already plays
+  pgrep -f '^k4 --medi[a]' >/dev/null && return 0                   # the popup shows it
+  [ $(( $(date +%s) - $(stat -c %Y "$NOTE_RUN/osd" 2>/dev/null || echo 0) )) -lt 3 ] && return 0   # the keys' box just did
+  dnd=$(k4 --notify-ctl status 2>/dev/null | cut -f2); [ "$dnd" = 1 ] && return 0
+  art=$(cover "$(jq -r '.Metadata.data["mpris:artUrl"].data // ""' <<<"$j")")
+  id=$(cat "$NOTE_RUN/note" 2>/dev/null); id=${id:-0}
+  id=$(k4 --notify-ctl "$(printf 'post\t%s\t%s\t%s\t%s\t0\t-1\t5000\tNOW PLAYING\t\t\tprev:Previous,toggle:Pause,next:Next\t%s note-act\t%s' \
+    "$id" "$(name_of "$b")" "$t" "$a" "$SELF" "$art")" 2>/dev/null | tr -dc 0-9)
+  [ -n "$id" ] && echo "$id" > "$NOTE_RUN/note"; }
+note_act() {  # note_act KEY ID: the now-playing card's buttons
+  local b; b=$(active) || return 0
+  case "$1" in prev) call "$b" Previous ;; toggle) call "$b" PlayPause ;; next) call "$b" Next ;; esac; }
+
 follow() {  # the module, then again after every burst of player changes; every 30 s a write
   # checks the bar is still there (a bar that went away leaves its followers behind otherwise)
   trap '' PIPE
   bar || exit 0
+  now_card quiet
   coproc MON { exec busctl --user monitor --json=short \
     --match "type='signal',interface='org.freedesktop.DBus.Properties',path='$OBJ'" \
     --match "type='signal',sender='org.freedesktop.DBus',member='NameOwnerChanged',arg0namespace='org.mpris.MediaPlayer2'" 2>/dev/null; }
@@ -115,6 +143,7 @@ follow() {  # the module, then again after every burst of player changes; every 
     [ "$rc" -gt 128 ] || [ "$rc" -eq 0 ] || exit 0   # the monitor ended: the bar starts us again
     [ "$rc" -eq 0 ] && while read -r -t 0.15 _ <&"${MON[0]}"; do :; done
     bar || exit 0
+    [ "$rc" -eq 0 ] && now_card
   done; }
 
 osd() {  # osd GLYPH TONE [SUB]: the track box (k4 --osd, track form)
@@ -124,6 +153,7 @@ osd() {  # osd GLYPH TONE [SUB]: the track box (k4 --osd, track form)
   a=$(jq -r '(.Metadata.data["xesam:artist"].data // []) | if type == "array" then join(", ") else . end' <<<"$j")
   art=$(cover "$(jq -r '.Metadata.data["mpris:artUrl"].data // ""' <<<"$j")")
   [ -n "$t" ] || t=$(name_of "$b")
+  mkdir -p "$NOTE_RUN"; : > "$NOTE_RUN/osd"   # the card stays away for a moment
   setsid -f k4 --osd "󰝚|-1||$1|$2||${t//|/ }||${3:-${a//|/ }}|$art" >/dev/null 2>&1 </dev/null; }
 ctl() {  # the media keys and the bar's clicks: Omarchy's own when the k4 bar is not running
   local b
@@ -150,6 +180,7 @@ case "${1:-window}" in
   act) shift; act "$@"; exit 0 ;;
   bar) if [ "${2:-}" = --follow ]; then follow; else bar; fi; exit 0 ;;
   ctl) ctl "${2:?play-pause|next|previous}"; exit 0 ;;
+  note-act) note_act "${2:?key}"; exit 0 ;;
   players) players; exit 0 ;;
   active) active; exit 0 ;;
 esac

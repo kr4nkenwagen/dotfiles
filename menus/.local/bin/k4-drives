@@ -173,7 +173,7 @@ copy_job() {  # copy_job DEV DIR FILE…: rsync's progress as "PERCENT<TAB>ETA<T
 eject_said() {  # eject_said DEV OUTPUT: a card for what eject said; a busy drive's card can close what holds it
   local nid
   if [[ $2 == "Can’t eject"* ]]; then
-    nid=$(k4 --notify-ctl "$(printf 'post\t0\tDrives\t%s\t%s\t1\t-1\t-1\t\t󰕓\t\tforce:Close them and eject,show:Show which\t%s note-act' \
+    nid=$(k4 --notify-ctl "$(printf 'post\t0\tDrives\t%s\t%s\twarn\t-1\t-1\t\t󰕓\t\tforce:Close them and eject,show:Show which\t%s note-act' \
       "$(printf '%s' "$2" | head -1 | sed 's/ · .*//')" "$(busy_note "$1")" "$SELF")" 2>/dev/null | tr -dc 0-9)
     [ -n "$nid" ] && printf '%s\n' "$1" > "$RUN/note-$nid" && return
   fi

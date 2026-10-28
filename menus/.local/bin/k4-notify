@@ -5,6 +5,7 @@
 #   k4-notify center            the centre at the top right (again: closes it; from a bar click: under it)
 #   k4-notify dnd [on|off|toggle]   do not disturb
 #   k4-notify dismiss | clear   the newest popup | everything
+#   k4-notify focus             the popups take the keyboard: ↑↓ ↵ 1–3 Del Space r Esc (Super+Alt+N)
 #   k4-notify status            "unread<TAB>dnd" (exit 1 when the service is not running)
 export PATH="$HOME/.local/bin:$PATH"
 case "${1:-center}" in
@@ -16,6 +17,7 @@ case "${1:-center}" in
           exec k4 --notify-center "${popup[@]}" ;;
   dnd) exec k4 --notify-ctl "dnd ${2:-toggle}" ;;
   dismiss) exec k4 --notify-ctl dismiss-popups ;;
+  focus) exec k4 --notify-ctl focus ;;
   clear) exec k4 --notify-ctl clear ;;
   status) exec k4 --notify-ctl status ;;
   *) echo "usage: k4-notify daemon|center|dnd [on|off|toggle]|dismiss|clear|status" >&2; exit 2 ;;
