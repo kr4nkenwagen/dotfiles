@@ -184,6 +184,7 @@ def first_user_token():
                              capture_output=True, text=True, timeout=20).stdout
     except (OSError, subprocess.TimeoutExpired):
         return ""
+    out = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", out)  # the log is coloured: the token comes wrapped in escape codes
     found = re.findall(r"using the registration token (\S+?) ?\.", out)
     return found[-1] if found else ""
 
