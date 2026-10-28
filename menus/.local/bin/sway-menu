@@ -120,6 +120,10 @@ tui() {  # floating terminal (matches the TUI.float window rule in the sway conf
 }
 tui_wait() { tui sh -c "$1; printf '\n[done] press enter to close'; read -r _"; }
 bg() { "$@" >/dev/null 2>&1 & disown; }
+reveal() {  # reveal FILE: the file manager at its folder with it picked (FileManager1), else the folder
+  local uri; uri="file://$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$1" 2>/dev/null)"
+  gdbus call --session --dest org.freedesktop.FileManager1 --object-path /org/freedesktop/FileManager1 \
+    --method org.freedesktop.FileManager1.ShowItems "['$uri']" "" >/dev/null 2>&1 || bg xdg-open "$(dirname "$1")"; }
 
 # ---------- lock / idle / wallpaper ----------
 wallpaper() {  # current wallpaper: the Omarchy-style symlink, else the default
@@ -896,6 +900,8 @@ k4_main() { local out popup=()   # k4_main [SECTION|PAGE]: open there (under a b
   out=$(k4_tree | k4 --menu ${1:+--open "$1"} "${popup[@]}") || return 0
   case "$out" in
     url:*) open_url "${out#url:}" ;;
+    file:*) bg xdg-open "${out#file:}" ;;                    # the search's Files group
+    reveal:*) reveal "${out#reveal:}" ;;                       # ⇧↵ on a file: its folder, the file picked
     paste:*) printf '%s' "${out#paste:}" | wl-copy; k4_gone; wtype -M ctrl v -m ctrl ;;   # the calculator's ⇧↵: into the window under the launcher
     launcher:*) unset K4_BAR_MX; k4_main "${out#launcher:}" ;;   # ⌃↵ in a popup: the same page in the launcher
     *) eval "$(printf '%s' "$out" | base64 -d)" ;;
