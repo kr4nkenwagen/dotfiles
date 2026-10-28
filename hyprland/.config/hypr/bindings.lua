@@ -88,3 +88,125 @@ o.bind("XF86AudioPlay", "Play", "playerctl play-pause", { locked = true })
 o.bind("XF86AudioPause", "Pause", "playerctl play-pause", { locked = true })
 o.bind("XF86AudioNext", "Next track", "playerctl next", { locked = true })
 o.bind("XF86AudioPrev", "Previous track", "playerctl previous", { locked = true })
+
+-- ---------------------------------------------------------------------------------------------
+-- The rest of Omarchy's keys, with plain tools in place of its omarchy-* commands
+-- ---------------------------------------------------------------------------------------------
+local menu = "sway-menu"
+
+-- Universal copy and paste: Ctrl+C/V, or Ctrl/Shift+Insert in a terminal. Sent through Hyprland
+-- (a virtual keyboard would merge the held Super into the chord), down then up.
+local function send_once(mods, key)
+  return function()
+    hl.dispatch(hl.dsp.send_key_state({ mods = mods, key = key, state = "down" }))
+    hl.timer(function() hl.dispatch(hl.dsp.send_key_state({ mods = mods, key = key, state = "up" })) end, { timeout = 50, type = "oneshot" })
+  end
+end
+local function in_terminal()
+  local w = hl.get_active_window()
+  local class = w and (w.class or w.initialClass or "") or ""
+  return class:find("ghostty") or class:find("kitty") or class:find("foot") or class:find("Alacritty") or class:find("TUI")
+end
+o.bind("SUPER + C", "Universal copy", function() if in_terminal() then send_once("CTRL", "Insert")() else send_once("CTRL", "C")() end end)
+o.bind("SUPER + V", "Universal paste", function() if in_terminal() then send_once("SHIFT", "Insert")() else send_once("CTRL", "V")() end end)
+
+-- Applications
+o.bind("SUPER + ALT + RETURN", "Tmux", terminal .. " -e tmux new-session -A -s main")
+o.bind("SUPER + SHIFT + RETURN", "Browser", browser)
+o.bind("SUPER + SHIFT + C", "Chronos", tui .. "chronos")
+o.bind("SUPER + SHIFT + O", "Obsidian", "obsidian")
+o.bind("SUPER + SHIFT + Z", "Spotify", "spotify")
+o.bind("SUPER + SHIFT + SLASH", "Passwords", "1password")
+o.bind("SUPER + CTRL + P", "Passwords (k4, pass)", "pass-menu")
+o.bind("SUPER + CTRL + T", "Activity", tui .. "btop")
+o.bind("SUPER + SHIFT + A", "Gemini", browser .. " https://gemini.google.com")
+o.bind("SUPER + SHIFT + ALT + A", "Grok", browser .. " https://grok.com")
+o.bind("SUPER + SHIFT + Y", "YouTube", browser .. " https://youtube.com/")
+o.bind("SUPER + SHIFT + P", "Google Photos", browser .. " https://photos.google.com/")
+o.bind("SUPER + SHIFT + X", "X", browser .. " https://x.com/")
+o.bind("SUPER + SHIFT + ALT + X", "X Post", browser .. " https://x.com/compose/post")
+o.bind("SUPER + SHIFT + ALT + G", "WhatsApp", browser .. " https://web.whatsapp.com/")
+o.bind("SUPER + SHIFT + CTRL + G", "Google Messages", browser .. " https://messages.google.com/web")
+
+-- The launcher's pages and toggles, where Omarchy has its own menus
+o.bind("SUPER + K", "Keybindings", menu .. " keybindings")
+o.bind("SUPER + CTRL + A", "Audio", menu .. " audio")
+o.bind("SUPER + CTRL + B", "Bluetooth", menu .. " bluetooth")
+o.bind("SUPER + CTRL + W", "Network", menu .. " network")
+o.bind("SUPER + CTRL + D", "Display", menu .. " display")
+o.bind("SUPER + CTRL + ALT + D", "Calendar", menu .. " calendar")
+o.bind("SUPER + CTRL + ALT + B", "Battery", menu .. " battery")
+o.bind("SUPER + CTRL + ALT + W", "Weather", menu .. " weather")
+o.bind("SUPER + CTRL + SPACE", "Background switcher", menu .. " wallpaper")
+o.bind("SUPER + SHIFT + SPACE", "Toggle the bar", menu .. " call toggle_bar")
+o.bind("SUPER + SHIFT + BACKSPACE", "Toggle window gaps", menu .. " call toggle_gaps")
+o.bind("SUPER + CTRL + L", "Lock", "loginctl lock-session")
+o.bind("SUPER + CTRL + N", "Night light", menu .. " call toggle_night")
+o.bind("SUPER + CTRL + I", "Idle lock", menu .. " call toggle_idle")
+o.bind("SUPER + ALT + COMMA", "Invoke last notification", "k4 --notify-ctl invoke-last")
+o.bind("SUPER + SHIFT + ALT + COMMA", "Notification history", "k4-notify center")
+o.bind("SUPER + PRINT", "Color picker", menu .. " call color_picker")
+o.bind("ALT + PRINT", "Screen recording", menu .. " call record_toggle")
+
+-- Windows: pop out, pseudo, transparency, tiled full screen
+o.bind("SUPER + O", "Pop window out (float & pin)", function()
+  hl.dispatch(hl.dsp.window.float({ action = "toggle" }))
+  hl.dispatch(hl.dsp.window.pin())
+end)
+o.bind("SUPER + P", "Pseudo window", hl.dsp.window.pseudo())
+o.bind("SUPER + L", "Toggle workspace layout", hl.dsp.layout("togglesplit"))
+o.bind("SUPER + BACKSPACE", "Toggle window transparency", hl.dsp.window.set_prop({ prop = "opaque", value = "toggle" }))
+o.bind("SUPER + CTRL + F", "Tiled full screen", hl.dsp.window.fullscreen({ mode = "maximized" }))
+o.bind("CTRL + ALT + DELETE", "Close all windows", function()
+  for _, w in ipairs(hl.get_windows() or {}) do hl.dispatch(hl.dsp.window.close({ window = "address:" .. w.address })) end
+end)
+
+-- Groups (Hyprland's tabs)
+o.bind("SUPER + G", "Toggle window grouping", hl.dsp.group.toggle())
+o.bind("SUPER + ALT + G", "Move window out of group", hl.dsp.window.move({ out_of_group = true }))
+for key, dir in pairs({ LEFT = "l", RIGHT = "r", UP = "u", DOWN = "d" }) do
+  o.bind("SUPER + ALT + " .. key, "Move window into group " .. dir, hl.dsp.window.move({ into_group = dir }))
+  o.bind("SUPER + SHIFT + ALT + " .. key, "Move workspace to monitor " .. dir, hl.dsp.workspace.move({ monitor = dir }))
+end
+o.bind("SUPER + ALT + TAB", "Next window in group", hl.dsp.group.next())
+o.bind("SUPER + ALT + SHIFT + TAB", "Previous window in group", hl.dsp.group.prev())
+o.bind("SUPER + CTRL + LEFT", "Group focus left", hl.dsp.group.prev())
+o.bind("SUPER + CTRL + RIGHT", "Group focus right", hl.dsp.group.next())
+o.bind("SUPER + ALT + mouse_down", "Next window in group", hl.dsp.group.next())
+o.bind("SUPER + ALT + mouse_up", "Previous window in group", hl.dsp.group.prev())
+for index = 1, 5 do
+  o.bind("SUPER + ALT + code:" .. tostring(index + 9), "Group window " .. index, hl.dsp.group.active({ index = index }))
+end
+
+-- Workspaces and monitors
+o.bind("SUPER + SHIFT + TAB", "Previous workspace", hl.dsp.focus({ workspace = "e-1" }))
+o.bind("CTRL + ALT + TAB", "Next monitor", hl.dsp.focus({ monitor = "+1" }))
+o.bind("CTRL + ALT + SHIFT + TAB", "Previous monitor", hl.dsp.focus({ monitor = "-1" }))
+o.bind("SUPER + CTRL + DELETE", "Toggle the laptop display", menu .. " call laptop_toggle")
+
+-- Finer and coarser resize
+o.bind("SUPER + ALT + code:20", "Narrower a little", hl.dsp.window.resize({ x = -25, y = 0, relative = true }))
+o.bind("SUPER + ALT + code:21", "Wider a little", hl.dsp.window.resize({ x = 25, y = 0, relative = true }))
+o.bind("SUPER + SHIFT + ALT + code:20", "Shorter a little", hl.dsp.window.resize({ x = 0, y = -25, relative = true }))
+o.bind("SUPER + SHIFT + ALT + code:21", "Taller a little", hl.dsp.window.resize({ x = 0, y = 25, relative = true }))
+o.bind("SUPER + CTRL + code:20", "Narrower a lot", hl.dsp.window.resize({ x = -300, y = 0, relative = true }))
+o.bind("SUPER + CTRL + code:21", "Wider a lot", hl.dsp.window.resize({ x = 300, y = 0, relative = true }))
+o.bind("SUPER + CTRL + SHIFT + code:20", "Shorter a lot", hl.dsp.window.resize({ x = 0, y = -300, relative = true }))
+o.bind("SUPER + CTRL + SHIFT + code:21", "Taller a lot", hl.dsp.window.resize({ x = 0, y = 300, relative = true }))
+
+-- Media, brightness and hardware keys
+o.bind("ALT + XF86AudioRaiseVolume", "Volume up precise", "wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 1%+", { locked = true, repeating = true })
+o.bind("ALT + XF86AudioLowerVolume", "Volume down precise", "wpctl set-volume @DEFAULT_AUDIO_SINK@ 1%-", { locked = true, repeating = true })
+o.bind("ALT + XF86MonBrightnessUp", "Brightness up precise", "brightnessctl set 1%+", { locked = true, repeating = true })
+o.bind("ALT + XF86MonBrightnessDown", "Brightness down precise", "brightnessctl set 1%-", { locked = true, repeating = true })
+o.bind("SHIFT + XF86MonBrightnessUp", "Brightness maximum", "brightnessctl set 100%", { locked = true })
+o.bind("SHIFT + XF86MonBrightnessDown", "Brightness minimum", "brightnessctl set 1%", { locked = true })
+o.bind("ALT + XF86AudioPlay", "Next track", "playerctl next", { locked = true })
+o.bind("ALT + SHIFT + XF86AudioPlay", "Previous track", "playerctl previous", { locked = true })
+o.bind("SHIFT + XF86AudioMute", "Switch audio output", menu .. " audio")
+o.bind("XF86KbdBrightnessUp", "Keyboard brightness up", "brightnessctl -d '*::kbd_backlight' set 10%+", { locked = true, repeating = true })
+o.bind("XF86KbdBrightnessDown", "Keyboard brightness down", "brightnessctl -d '*::kbd_backlight' set 10%-", { locked = true, repeating = true })
+o.bind("XF86PowerOff", "Power menu", "k4-power")
+o.bind("XF86Eject", "Eject media", "eject", { locked = true })
+o.bind("switch:on:Lid Switch", nil, menu .. " call laptop_off", { locked = true })
+o.bind("switch:off:Lid Switch", nil, menu .. " call laptop_on", { locked = true })

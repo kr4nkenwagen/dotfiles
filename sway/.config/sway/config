@@ -115,8 +115,9 @@ bindsym $mod+Ctrl+n exec $menu_sys call toggle_night
 bindsym $mod+Ctrl+i exec $menu_sys call toggle_idle
 bindsym $mod+Shift+BackSpace exec $menu_sys call toggle_gaps
 # Universal copy and paste (Super+C / Super+V work in terminals too, as on Omarchy)
-bindsym $mod+c exec wtype -M ctrl -k Insert -m ctrl
-bindsym $mod+v exec wtype -M shift -k Insert -m shift
+# on release, after a moment: the held Super would otherwise merge into the typed chord
+bindsym --release $mod+c exec sh -c 'sleep 0.15; wtype -M ctrl -k Insert -m ctrl'
+bindsym --release $mod+v exec sh -c 'sleep 0.15; wtype -M shift -k Insert -m shift'
 bindsym $mod+Ctrl+e exec ~/.local/bin/emoji-menu   # emoji picker (k4), as Omarchy's Super+Ctrl+E
 bindsym $mod+Ctrl+v exec ~/.local/bin/k4-clip  # clipboard history (k4 + clipse), as on Omarchy
 bindsym $mod+Ctrl+c exec ~/.local/bin/sway-menu capture   # k4's Capture menu, as on Omarchy
@@ -254,12 +255,12 @@ bindsym --locked XF86TouchpadOn input type:touchpad events enabled
 bindsym --locked XF86TouchpadOff input type:touchpad events disabled
 bindsym XF86PowerOff exec ~/.local/bin/k4-power
 bindsym Shift+XF86AudioMute exec $menu_sys audio      # switch the output
-bindsym $mod+Ctrl+Delete output eDP-1 toggle          # the laptop display
+bindsym $mod+Ctrl+Delete exec $menu_sys call laptop_toggle   # the laptop display
 bindsym Ctrl+Mod1+Delete [all] kill                   # close all windows, as Omarchy
 bindsym XF86Eject exec eject
 # the lid: the laptop display off while closed (as Omarchy)
-bindswitch --reload --locked lid:on output eDP-1 disable
-bindswitch --reload --locked lid:off output eDP-1 enable
+bindswitch --reload --locked lid:on exec ~/.local/bin/sway-menu call laptop_off   # only while another screen is on
+bindswitch --reload --locked lid:off exec ~/.local/bin/sway-menu call laptop_on
 bindsym --locked XF86AudioNext exec playerctl next
 bindsym --locked XF86AudioPrev exec playerctl previous
 

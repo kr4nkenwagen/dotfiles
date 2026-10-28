@@ -1420,6 +1420,12 @@ arrange_apply() {
   local mx=0 my=0 i   # no negative positions: the leftmost and topmost start at 0
   for i in "${!names[@]}"; do [ "${xs[$i]}" -lt "$mx" ] && mx=${xs[$i]}; [ "${ys[$i]}" -lt "$my" ] && my=${ys[$i]}; done
   for i in "${!names[@]}"; do output_pos "${names[$i]}" $(( xs[i] - mx )) $(( ys[i] - my )); done; }
+# The laptop's own screen (eDP/LVDS/DSI): Super+Ctrl+Delete and the lid. Closing the lid turns it
+# off only while another screen is on (output_toggle never turns off the last one).
+laptop_output() { outputs_tsv | awk -F'\t' '$1 ~ /^(eDP|LVDS|DSI)/ { print $1; exit }'; }
+laptop_on() { local l; l=$(laptop_output); [ -n "$l" ] || return; [ "$(outputs_tsv | awk -F'\t' -v o="$l" '$1 == o { print $2 }')" = true ] || output_toggle "$l"; }
+laptop_off() { local l; l=$(laptop_output); [ -n "$l" ] || return; [ "$(outputs_tsv | awk -F'\t' -v o="$l" '$1 == o { print $2 }')" = true ] && output_toggle "$l"; }
+laptop_toggle() { local l; l=$(laptop_output); [ -n "$l" ] && output_toggle "$l"; }
 external_outputs() { swaymsg -t get_outputs | jq -r '.[] | select(.name | test("^eDP|^LVDS|^DSI") | not) | "\(.name)\t\(.active)"'; }
 external_state() { external_outputs | awk -F'\t' '$2 == "true" { on = 1 } END { print on ? "on" : (NR ? "off" : "none") }'; }
 toggle_external() { local n a want; want=disable; [ "$(external_state)" = off ] && want=enable
@@ -2206,7 +2212,7 @@ case "${1:-}" in
   bar-start) bar_start ;;
   power) power_menu ;;   # the system menu (k4 --power; Super+Esc via k4-power)
   power-tiles) power_tiles ;;   # what k4 --power reads (dry runs: sway-menu power-tiles | k4 --power --dry-run x.png)
-  call) case "${2:-}" in toggle_night|toggle_idle|toggle_dnd|record_toggle|kb_cycle|toggle_bar|toggle_gaps|color_picker) "$2" ;; wifi_join) shift 2; wifi_join "$@" ;; *) echo "sway-menu call: not callable: ${2:-}" >&2; exit 2 ;; esac ;;   # the k4 bar's indicator clicks   # the status bar picked in Toggle › Status bar (Hyprland autostart runs it)
+  call) case "${2:-}" in toggle_night|toggle_idle|toggle_dnd|record_toggle|kb_cycle|toggle_bar|toggle_gaps|color_picker|laptop_on|laptop_off|laptop_toggle) "$2" ;; wifi_join) shift 2; wifi_join "$@" ;; *) echo "sway-menu call: not callable: ${2:-}" >&2; exit 2 ;; esac ;;   # the k4 bar's indicator clicks   # the status bar picked in Toggle › Status bar (Hyprland autostart runs it)
   idle) idle ;;
   pkg-install) pkg_install ;;
   pkg-remove) pkg_remove ;;
