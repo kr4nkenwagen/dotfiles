@@ -896,6 +896,7 @@ k4_main() { local out popup=()   # k4_main [SECTION|PAGE]: open there (under a b
   out=$(k4_tree | k4 --menu ${1:+--open "$1"} "${popup[@]}") || return 0
   case "$out" in
     url:*) open_url "${out#url:}" ;;
+    paste:*) printf '%s' "${out#paste:}" | wl-copy; k4_gone; wtype -M ctrl v -m ctrl ;;   # the calculator's ⇧↵: into the window under the launcher
     launcher:*) unset K4_BAR_MX; k4_main "${out#launcher:}" ;;   # ⌃↵ in a popup: the same page in the launcher
     *) eval "$(printf '%s' "$out" | base64 -d)" ;;
   esac
