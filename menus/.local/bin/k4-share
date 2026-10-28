@@ -11,7 +11,8 @@ export PATH="$HOME/.local/bin:$PATH"
 TMP="${XDG_RUNTIME_DIR:-/tmp}/k4-share"
 mkdir -p "$TMP"
 
-ctl() { k4-localsend ctl "$@" 2>/dev/null; }
+ctl() {  # k4's socket client (3 ms; the bar asks every second), else the service's own (Python, ~50 ms)
+  if command -v k4 >/dev/null; then local IFS=$'\t'; k4 --send-ctl "$*" 2>/dev/null; else k4-localsend ctl "$@" 2>/dev/null; fi; }
 running() { ctl status >/dev/null; }
 daemon() { running || setsid -f k4-localsend daemon >/dev/null 2>&1 </dev/null; }
 human() { awk -v b="${1:-0}" 'BEGIN { if (b >= 1e9) printf "%.2f GB", b / 1e9; else if (b >= 1e6) printf "%.1f MB", b / 1e6; else printf "%d KB", (b + 999) / 1e3 }'; }
@@ -85,7 +86,7 @@ case "${1:-send}" in
         esac ;;
   send-file) shift; t=files; case "${1##*/}" in screenshot-*|Screenshot*) t=screenshot ;; esac; page "$(src_paths "$t" "$@")" ;;
   send-text) page "$(src_text "${2:-}")" ;;
-  bar) running && ctl bar || echo '{}' ;;
+  bar) ctl bar || echo '{}' ;;   # (not running: ctl fails)
   bar-click) case "$(ctl bar)" in *'"icon": "󰁝"'*) "$0" send ;; *) k4-notify center ;; esac ;;   # sending: the page; receiving: the cards
   cancel) ctl cancel >/dev/null; ctl act card cancel >/dev/null ;;
   visible) r=$(ctl vis "${2:-toggle}"); command -v notify-send >/dev/null && notify-send -a LocalSend "Visible to nearby devices" "$([ "$r" = on ] && echo on || echo "off · you can still send")" ;;

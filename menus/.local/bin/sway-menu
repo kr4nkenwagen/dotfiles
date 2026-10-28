@@ -788,8 +788,9 @@ apps_scan() {
 # k4 reads the section tree below on stdin, loads each section's actions by running
 # `sway-menu k4-section NAME` in the background, and prints the chosen action's id: the
 # shell action base64-encoded (or url:<url> from its web search), which runs here.
-k4id() { printf '%s' "$1" | base64 -w0; }
-item() { printf 'A\t%s\t%s\t%s\t%s\t%s\n' "$(k4id "$2")" "$1" "${3:-}" "${4:-}" "${5:-}"; }   # item LABEL ACTION [META] [VIEW] [FLAGS]
+. "$HOME/.local/share/k4/b64.sh"   # k4b64v: no base64 process per row
+k4id() { local _k4d; k4b64v _k4d "$1"; printf '%s' "$_k4d"; }
+item() { local _k4id; k4b64v _k4id "$2"; printf 'A\t%s\t%s\t%s\t%s\t%s\n' "$_k4id" "$1" "${3:-}" "${4:-}" "${5:-}"; }   # item LABEL ACTION [META] [VIEW] [FLAGS]
 stay() { item "$1" "$2" "${3:-}" "" "stay${4:+;$4}"; }   # runs in place, the menu stays open (footer shows the result)
 hdr() { printf 'H\t%s\t%s\n' "$1" "${2:-}"; }   # hdr TEXT [COUNT]
 empty() { printf 'E\t%s\n' "$1"; }   # empty TEXT: a dim line where rows would be
@@ -1278,10 +1279,11 @@ bt_pair_page() {  # bt_pair_page MAC NAME: compare the code on both
   hints "y" "Codes match" "n" Cancel; }
 
 # LocalSend (k4-share over the k4-localsend service): the Share rows in Network, the trusted devices
-ls_visible() { [ "$(k4-localsend ctl status 2>/dev/null | cut -f2)" = 1 ]; }
+ls_ctl() { if command -v k4 >/dev/null; then local IFS=$'\t'; k4 --send-ctl "$*"; else k4-localsend ctl "$@"; fi; }   # k4's client: 3 ms against Python's ~50
+ls_visible() { [ "$(ls_ctl status 2>/dev/null | cut -f2)" = 1 ]; }
 share_rows() { local st dir n first
-  st=$(k4-localsend ctl status 2>/dev/null); dir=$(cut -f4 <<<"$st"); n=$(cut -f3 <<<"$st")
-  first=$(k4-localsend ctl trusted 2>/dev/null | head -1 | cut -f2)
+  st=$(ls_ctl status 2>/dev/null); dir=$(cut -f4 <<<"$st"); n=$(cut -f3 <<<"$st")
+  first=$(ls_ctl trusted 2>/dev/null | head -1 | cut -f2)
   hdr "Share · LocalSend"
   item "Send clipboard to…" 'k4-share send clipboard' "Super+Ctrl+S"
   item "Send file to…" 'k4-share send files'
@@ -1325,7 +1327,7 @@ k4_page() { local p="$1"; shift
     hdr "Trusted devices · they send without asking"
     while IFS=$'\t' read -r fp alias; do [ -n "$fp" ] || continue; n=$((n + 1))
       stay "$alias" "k4-share untrust $(printf %q "$fp"); notify Untrusted $(printf %q "$alias")" "Enter stops trusting" "confirm=Stop trusting $alias?|It will ask again next time."
-    done < <(k4-localsend ctl trusted 2>/dev/null)
+    done < <(ls_ctl trusted 2>/dev/null)
     [ "$n" -gt 0 ] || empty "None yet · Always accept on an incoming transfer adds one" ;;
   bt-dev) bt_dev_page "$@" ;;
   bt-pair) bt_pair_page "$@" ;;
@@ -1873,7 +1875,7 @@ K4_CONFIRM_LOGOUT="confirm=Log out?|Closes every window and ends the $WM_TITLE s
 K4_CONFIRM_REBOOT='confirm=Reboot now?|Unsaved work in open apps will be lost.'
 K4_CONFIRM_SHUTDOWN='confirm=Shut down now?|Unsaved work in open apps will be lost.'
 
-k4_section() { local s="$1" rec="Start"; recording && rec="Stop"
+k4_section() { local s="$1" rec="Start"; [ "$s" = capture ] && recording && rec="Stop"   # (only Capture asks: it scans /proc)
   case "$s" in
   apps) local n id title key sum inst miss=() count=0 keys=""; local -A integ=()
         # design: the integrations first (each a page, letters g r m x q p in shortcut mode),
@@ -2261,7 +2263,7 @@ if [ -n "$OMARCHY" ]; then
   shot() { omarchy-capture-screenshot fullscreen; }
   shot_region() { omarchy-capture-screenshot region; }
   shot_window() { omarchy-capture-screenshot windows; }
-  recording() { pgrep -f '^gpu-screen-recorder' >/dev/null; }
+  recording() { pidof -s gpu-screen-recorder >/dev/null; }
   record_toggle() { if recording; then omarchy-capture-screenrecording --stop-recording; elif [ "${1:-}" = region ]; then omarchy-capture-screenrecording; else omarchy-capture-screenrecording --fullscreen; fi; }
   qr_scan() { omarchy-capture-qr; }
   color_picker() { pkill hyprpicker || hyprpicker -a; }

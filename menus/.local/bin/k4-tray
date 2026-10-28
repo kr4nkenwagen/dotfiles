@@ -137,8 +137,8 @@ status() {  # the bar: chevron, count, a red count of apps that need you, the un
   local n=0 attn=0 unread=0 red="" it p id st c
   while IFS= read -r it; do
     [ -n "$it" ] || continue; p=$(props "$it") || continue; [ -n "$p" ] || continue
-    id=$(jq -r '.Id // ""' <<<"$p"); grep -qxF "$id" "$HIDDEN" 2>/dev/null && continue
-    st=$(jq -r '.Status // ""' <<<"$p")
+    IFS=$'\x1f' read -r id st < <(jq -r '[.Id // "", .Status // ""] | join("\u001f")' <<<"$p")   # (one jq, every 3 s; \x1f keeps an empty Id)
+    grep -qxF "$id" "$HIDDEN" 2>/dev/null && continue
     n=$((n + 1)); [ "$st" = NeedsAttention ] && attn=$((attn + 1))
     c=$(count "$id"); unread=$((unread + c)); [ "$c" -gt 0 ] && [ "$st" = NeedsAttention ] && red=1
   done < <(items)

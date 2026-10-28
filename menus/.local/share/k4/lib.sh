@@ -20,10 +20,14 @@ export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/snap/bin:$PATH"
 K4_STATE="$HOME/.local/state/k4"
 K4_CACHE="$HOME/.cache/k4"
 k4b64() { printf '%s' "$1" | base64 -w0; }
-k4id() { k4b64 "$K4_NAME run $(k4b64 "$1")"; }
-k4clean() { printf '%s' "$1" | tr '\t\n\r' '   '; }                                          # fields must stay on one line
-k4flag() { k4clean "$1" | tr ';' ','; }                                                      # flag values must not hold ';'
-item() { printf 'A\t%s\t%s\t%s\t%s\t%s\n' "$(k4id "$2")" "$(k4clean "$1")" "$(k4clean "${3:-}")" "${4:-}" "${5:-}"; }  # item LABEL ACTION [META] [VIEW] [FLAGS]
+. "${BASH_SOURCE[0]%/*}/b64.sh"   # k4b64v: base64 into a variable, no fork
+k4idv() { local _k4r; k4b64v _k4r "${2:-}"; k4b64v "$1" "$K4_NAME run $_k4r"; }                # k4idv VAR ACTION
+k4id() { local _k4d; k4idv _k4d "${1:-}"; printf '%s' "$_k4d"; }
+k4clean() { local _k4c=${1:-}; printf '%s' "${_k4c//[$'\t\n\r']/ }"; }                                           # fields must stay on one line
+k4flag() { local _k4f=${1:-}; _k4f=${_k4f//[$'\t\n\r']/ }; printf '%s' "${_k4f//;/,}"; }                    # flag values must not hold ';'
+item() {  # item LABEL ACTION [META] [VIEW] [FLAGS]
+  local _k4id _k4l=${1:-} _k4m=${3:-}; k4idv _k4id "${2:-}"   # (set -u callers: every argument defaulted)
+  printf 'A\t%s\t%s\t%s\t%s\t%s\n' "$_k4id" "${_k4l//[$'\t\n\r']/ }" "${_k4m//[$'\t\n\r']/ }" "${4:-}" "${5:-}"; }
 stay() { item "$1" "$2" "${3:-}" "" "stay${4:+;$4}"; }                                    # runs in place, menu stays open
 slider() { item "$1" "$2" "" "" "slider=${3:-0};step=${4:-5}"; }
 tog() { stay "$1" "$2" "${4:-}" "toggle=$3${5:+;$5}"; }   # tog LABEL ACTION on|off [META] [FLAGS]: a switch row (Space/Enter flips it)

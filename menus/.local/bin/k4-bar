@@ -27,11 +27,22 @@ out() { local args=() expr="" k v
     expr+="$k: \$$k, "
   done
   jq -cn "${args[@]}" "{${expr%, }}"; }
-follow() {  # follow CMD-THAT-PRINTS-EVENTS: print the module now and after every burst of events
+follow() {  # follow CMD-THAT-PRINTS-EVENTS: print the module now and after every burst of events.
+  # The event command and its children go when this does (a TERM from the bar too); every 30 s
+  # without one it checks that the bar ($PPID) is still there (rare events, a layout switch,
+  # would otherwise keep a follower of a long-gone bar alive for days).
+  local bar=$PPID rc
+  trap '' PIPE
   "$SELF" status "$MOD"
-  "$@" 2>/dev/null | while read -r -t 86400 _; do
-    while read -r -t 0.15 _; do :; done   # coalesce a burst
-    "$SELF" status "$MOD"
+  coproc EV { exec "$@" 2>/dev/null; }
+  trap 'pkill -P "$EV_PID" 2>/dev/null; kill "$EV_PID" 2>/dev/null' EXIT
+  trap 'exit 0' TERM INT HUP
+  while :; do
+    read -r -t 30 _ <&"${EV[0]}"; rc=$?
+    if [ "$rc" -gt 128 ]; then kill -0 "$bar" 2>/dev/null || exit 0; continue; fi
+    [ "$rc" -eq 0 ] || exit 0                                # the events ended: the bar starts us again
+    while read -r -t 0.15 _ <&"${EV[0]}"; do :; done        # coalesce a burst
+    "$SELF" status "$MOD" || exit 0
   done; }
 vol_icon() { if [ "$1" -ge 66 ]; then echo 󰕾; elif [ "$1" -ge 33 ]; then echo 󰖀; else echo 󰕿; fi; }
 
@@ -65,7 +76,7 @@ status() {
     out icon 󰖔 tooltip "Night light · click turns it off" ;;
   rec)  # counts up while recording
     local pid=""
-    if [ -n "$OMARCHY" ]; then pid=$(pgrep -f '^gpu-screen-recorder' | head -1)
+    if [ -n "$OMARCHY" ]; then pid=$(pidof -s gpu-screen-recorder)   # (pidof: half pgrep -f's /proc scan)
     elif [ -f "$HOME/.cache/sway-menu/recording.pid" ]; then pid=$(cat "$HOME/.cache/sway-menu/recording.pid"); kill -0 "$pid" 2>/dev/null || pid=""; fi
     [ -n "$pid" ] || { out; return; }
     local s; s=$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' '); s=${s:-0}
@@ -215,6 +226,13 @@ follow_status() {  # status, then again on every change of what it shows
            status media; exec sleep infinity ;;   # blocks: the bar restarts a follower that ends
     microphone|audio) follow sh -c 'pactl subscribe | grep --line-buffered -E "sink|source|server"' ;;
     network) follow nmcli monitor ;;
+    rec)  # every 3 s while nothing records (each look scans /proc), every second while it counts
+      local bar=$PPID o last=""
+      trap '' PIPE
+      while kill -0 "$bar" 2>/dev/null; do
+        o=$(status rec); [ "$o" = "$last" ] || { printf '%s\n' "$o" || exit 0; last=$o; }
+        if [ "$o" = '{}' ]; then sleep 3; else sleep 1; fi
+      done ;;
     updates)  # "…" while checking, then the count; every hour, or at once on SIGUSR1 (the right click)
       local w=""; trap '[ -n "$w" ] && kill "$w" 2>/dev/null' USR1
       while :; do
@@ -240,7 +258,7 @@ spec() {
   m media center exec "$SELF status media --follow" 0 - "$p media" - "$mc play-pause" "$mc previous" "$mc next" "maxw=200;maxw2=140;compact"
   m dnd right exec "$SELF status dnd" 1 - "k4-notify center" "$c toggle_dnd" - - - - "px=5"
   m night right exec "$SELF status night" 3 - "$c toggle_night" - - - - "px=5"
-  m rec right exec "$SELF status rec" 1 - "$c record_toggle" - - - - "px=5"
+  m rec right exec "$SELF status rec --follow" 0 - "$c record_toggle" - - - - "px=5"
   m awake right exec "$SELF status awake" 3 - "$c toggle_idle" - - - - "px=5"
   m reminder right exec "$SELF status reminder" 30 - "$p calendar" - - - - "px=5"
   m calsync right exec "$SELF status calsync" 300 - - - - - - -

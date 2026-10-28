@@ -94,10 +94,18 @@ bar() {  # CPU since the last call (a sample kept in $XDG_RUNTIME_DIR), memory i
   read -r _ a b c d e g h _ < /proc/stat; t=$((a + b + c + d + e + g + h)); i=$((d + e))
   { read -r pt pi < "$f"; } 2>/dev/null; echo "$t $i" > "$f"
   cpu=0; [ -n "$pt" ] && [ "$t" -gt "$pt" ] && cpu=$(( 100 * ((t - pt) - (i - pi)) / (t - pt) ))
-  read -r mt ma < <(awk '/^MemTotal/ { t = $2 } /^MemAvailable/ { a = $2 } END { print t, a }' /proc/meminfo)
-  mem=$(awk -v t="$mt" -v a="$ma" 'BEGIN { printf "%.1fG", (t - a) / 1048576 }'); pct=$(( 100 * (mt - ma) / mt ))
-  temp=""; for h in /sys/class/hwmon/hwmon*; do case "$(cat "$h/name" 2>/dev/null)" in k10temp|coretemp|zenpower) temp=$(( $(cat "$h/temp1_input") / 1000 )) ;; esac; done
-  top=$(ps -eo comm,%cpu --sort=-%cpu --no-headers 2>/dev/null | head -1 | awk '{ printf "%s %s%%", $1, $2 }')
+  # every 2 s from the bar: builtins only, except the busiest process (a scan of every
+  # process) at most every 10 s
+  local k v _
+  while read -r k v _; do case "$k" in MemTotal:) mt=$v ;; MemAvailable:) ma=$v; break ;; esac; done < /proc/meminfo
+  pct=$(( 100 * (mt - ma) / mt )); v=$(( ((mt - ma) * 10 + 524288) / 1048576 )); mem="$((v / 10)).$((v % 10))G"
+  local tf="$RUN/k4-perf.temp" tp=""; { read -r tp < "$tf"; } 2>/dev/null
+  if [ -z "$tp" ]; then for h in /sys/class/hwmon/hwmon*; do read -r v < "$h/name" 2>/dev/null; case "$v" in k10temp|coretemp|zenpower) tp="$h/temp1_input" ;; esac; done; echo "${tp:--}" > "$tf"; fi
+  temp=""; [ "$tp" != - ] && [ -r "$tp" ] && { read -r v < "$tp"; temp=$(( v / 1000 )); }
+  local bf="$RUN/k4-perf.busiest"
+  if [ ! -s "$bf" ] || [ $(( $(printf '%(%s)T' -1) - $(stat -c %Y "$bf") )) -ge 10 ]; then
+    ps -eo comm,%cpu --sort=-%cpu --no-headers 2>/dev/null | head -1 | awk '{ printf "%s %s%%", $1, $2 }' > "$bf"; fi
+  top=$(<"$bf")
   [ "$cpu" -ge 70 ] && tone=yellow; [ "$pct" -ge 90 ] && tone2=red
   [ -n "$temp" ] && [ "$temp" -ge 90 ] && class=critical
   tip="load $(cut -d' ' -f1-3 /proc/loadavg)${temp:+ · ${temp}°C} · busiest $top"
