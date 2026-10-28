@@ -24,8 +24,9 @@ Messages never leave this machine except through the bridge to Messenger; Messen
 handed to the bridge (which keeps them in its database), never stored by k4. Meta may ask to
 confirm the account after a bridge logs in; keep the browser session you took the cookies from.
 """
-import hashlib, http.client, json, os, re, secrets, shlex, socket, subprocess, sys, threading, time
+import hashlib, json, os, re, secrets, shlex, socket, subprocess, sys, threading, time
 import urllib.error, urllib.parse, urllib.request
+import http.client as httplib  # (the module: "http" below is the request helper)
 
 HOME = os.path.expanduser("~")
 RUN = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
@@ -135,7 +136,7 @@ def wait_for(url, what, seconds=60, token=None):
         try:
             st, _ = http("GET", url, token=token, timeout=5)
             if st < 500 and st != 404: return True
-        except (urllib.error.URLError, OSError, http.client.HTTPException):
+        except (urllib.error.URLError, OSError, httplib.HTTPException):
             pass
         time.sleep(1)
     raise SystemExit("k4-messengerd: %s did not answer (journalctl --user -u %s)" % (what, "k4-matrix" if "client" in url else "k4-meta-bridge"))
@@ -350,7 +351,7 @@ class Service:
     def check_login(self):
         try:
             st, r = prov("GET", "/v3/whoami")
-        except (urllib.error.URLError, OSError, http.client.HTTPException):
+        except (urllib.error.URLError, OSError, httplib.HTTPException):
             self.set_state("down", "The bridge is not running"); return
         if st != 200: self.set_state("error", r.get("error", "The bridge said %s" % st)); return
         logins = r.get("logins") or []
@@ -381,7 +382,7 @@ class Service:
             if self.since: url += "&since=" + q(self.since)
             try:
                 st, r = http("GET", url, token=self.token, timeout=45)
-            except (urllib.error.URLError, OSError, http.client.HTTPException):
+            except (urllib.error.URLError, OSError, httplib.HTTPException):
                 if self.state != "setup": self.set_state("down", "The homeserver is not running")
                 time.sleep(5); continue
             if st != 200:
