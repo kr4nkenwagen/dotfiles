@@ -6,7 +6,7 @@
 #   k4-apps pages      the integrations as pages (P records), for the Sway menu's Apps section
 #   k4-apps summaries  id<TAB>title<TAB>key<TAB>summary<TAB>installed|missing, one per integration
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/snap/bin:$PATH"
-INTEGRATIONS=(steam-menu gh-menu spotify-menu media-menu pass-menu docker-menu ollama-menu clipse-menu)
+INTEGRATIONS=(steam-menu gh-menu spotify-menu media-menu pass-menu k4-messenger docker-menu ollama-menu clipse-menu)
 HIDDEN="$HOME/.local/state/k4/hidden-apps"
 shown() { local s; for s in "${INTEGRATIONS[@]}"; do command -v "$s" >/dev/null && ! grep -qxF "$s" "$HIDDEN" 2>/dev/null && echo "$s"; done; }
 split() { local s; INST=(); MISS=(); while read -r s; do if "$s" available; then INST+=("$s"); else MISS+=("$s"); fi; done < <(shown); }

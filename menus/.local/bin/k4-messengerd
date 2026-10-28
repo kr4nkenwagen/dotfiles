@@ -1,0 +1,654 @@
+#!/usr/bin/env python3
+"""k4-messengerd: Facebook Messenger for k4, through a Matrix bridge that runs on this machine.
+
+  k4-messengerd setup        install and start it all (idempotent: again repairs or upgrades):
+                             continuwuity (a Matrix homeserver, 127.0.0.1 only, no federation),
+                             mautrix-meta (the Messenger bridge) and this daemon, as systemd --user
+                             units; one line per step
+  k4-messengerd daemon       the service: follows the homeserver (/sync), keeps the conversations,
+                             posts a card per new message (inline reply), writes the unread count
+  k4-messengerd ctl CMD …    one command to the service (tab-separated), its reply printed:
+      status                 S state unread account note   (state: setup down login relogin error ok)
+      data                   the k4 --messenger window's data (S, C per conversation, O and M for
+                             the open one, R and L)
+      rooms                  C lines only
+      open ROOM | close      the conversation the window shows (its cards stay away; read on open)
+      more                   older messages in the open conversation
+      send ROOM TEXT         a message (TEXT may also come in $K4_INPUT)
+      read ROOM              mark it read
+      login-start            the cookie login's instructions
+      login-cookies          the cookies ($K4_INPUT: JSON, "name=value; …" or a "Copy as cURL")
+      note KEY ID            a card's button (reply: the text in $K4_INPUT)
+
+Messages never leave this machine except through the bridge to Messenger; Messenger's cookies are
+handed to the bridge (which keeps them in its database), never stored by k4. Meta may ask to
+confirm the account after a bridge logs in; keep the browser session you took the cookies from.
+"""
+import hashlib, http.client, json, os, re, secrets, shlex, socket, subprocess, sys, threading, time
+import urllib.error, urllib.parse, urllib.request
+
+HOME = os.path.expanduser("~")
+RUN = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+CONF = os.path.join(HOME, ".config/k4-messenger")
+DATA = os.path.join(HOME, ".local/share/k4-messenger")
+LIB = os.path.join(HOME, ".local/lib/k4-messenger")
+UNITS = os.path.join(HOME, ".config/systemd/user")
+CACHE = os.path.join(HOME, ".cache/k4/messenger")
+SOCK = os.environ.get("K4_MESSENGER_SOCK") or os.path.join(RUN, "k4-messenger.sock")
+STATUS = os.environ.get("K4_MESSENGER_STATUS") or os.path.join(RUN, "k4-messenger.status")
+SERVER = "k4.local"
+ME = "@me:" + SERVER
+HS_PORT, BRIDGE_PORT = 46108, 46119
+HS = os.environ.get("K4_MESSENGER_HS") or "http://127.0.0.1:%d" % HS_PORT
+PROV = os.environ.get("K4_MESSENGER_PROV") or "http://127.0.0.1:%d/_matrix/provision" % BRIDGE_PORT
+SELF = os.path.abspath(sys.argv[0])
+GHOST = re.compile(r"^@meta_(\d+):" + re.escape(SERVER) + "$")
+BOT = "@metabot:" + SERVER
+
+# The pinned releases (sha256 of the static amd64 builds; continuwuity publishes none, so ours)
+BINS = {
+    "mautrix-meta": ("v0.2610.0", "https://github.com/mautrix/meta/releases/download/v0.2610.0/mautrix-meta-amd64",
+                     "17b8fd89ee8bb71796b9406aad37fd871110efbb22ace26801034dab9c5a3843"),
+    "conduwuit": ("v26.9.1", "https://forgejo.ellis.link/continuwuation/continuwuity/releases/download/v26.9.1/conduwuit-linux-static-amd64",
+                  "7beff208482cf9c7bb35c4a393cb7a7b2f241d2e2c0c7fe3c0b6a8d4add6b2d7"),
+}
+
+
+def field(v):  # a tab-separated field: no tabs or new lines
+    return str(v).replace("\t", " ").replace("\r", " ").replace("\n", " ")
+
+
+def say(*a):
+    print(*a, flush=True)
+
+
+# ---------- HTTP ----------
+
+def http(method, url, body=None, token=None, timeout=40):
+    data = None if body is None else json.dumps(body).encode()
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("Content-Type", "application/json")
+    if token: req.add_header("Authorization", "Bearer " + token)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
+            return r.status, (json.loads(raw) if raw else {})
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        try: return e.code, json.loads(raw)
+        except ValueError: return e.code, {"error": raw.decode(errors="replace")[:200]}
+
+
+def q(s):
+    return urllib.parse.quote(s, safe="")
+
+
+# ---------- secrets (k4-secret: the keyring; tests: the environment) ----------
+
+def secret_get(kind):
+    if os.environ.get("K4_MESSENGER_TOKEN") and kind == "matrix": return os.environ["K4_MESSENGER_TOKEN"]
+    try:
+        r = subprocess.run(["k4-secret", "lookup", kind, ME], capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def secret_put(kind, value):
+    r = subprocess.run(["k4-secret", "store", kind, ME], input=value, text=True, capture_output=True, timeout=20)
+    if r.returncode != 0: raise SystemExit("k4-messengerd: could not store the %s secret (keyring locked?)" % kind)
+
+
+def bridge_secret():
+    try:
+        with open(os.path.join(CONF, "meta.yaml")) as f: return json.load(f)["provisioning"]["shared_secret"]
+    except (OSError, ValueError, KeyError): return os.environ.get("K4_MESSENGER_PROV_SECRET", "")
+
+
+def prov(method, path, body=None):
+    sep = "&" if "?" in path else "?"
+    return http(method, PROV + path + sep + "user_id=" + q(ME), body, bridge_secret(), timeout=60)
+
+
+# ---------- setup ----------
+
+def systemctl(*args):
+    return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
+
+
+def unit(name, desc, exe, after=""):
+    os.makedirs(UNITS, exist_ok=True)
+    text = ("[Unit]\nDescription=%s (k4 Messenger)\n%s\n[Service]\nExecStart=%s\nWorkingDirectory=%s\n"
+            "Restart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n") % (
+        desc, ("After=%s\nRequires=%s\n" % (after, after)) if after else "", exe, DATA)
+    path = os.path.join(UNITS, name)
+    old = open(path).read() if os.path.exists(path) else ""
+    if old != text:
+        with open(path, "w") as f: f.write(text)
+        return True
+    return False
+
+
+def wait_for(url, what, seconds=60, token=None):
+    end = time.time() + seconds
+    while time.time() < end:
+        try:
+            st, _ = http("GET", url, token=token, timeout=5)
+            if st < 500 and st != 404: return True
+        except (urllib.error.URLError, OSError, http.client.HTTPException):
+            pass
+        time.sleep(1)
+    raise SystemExit("k4-messengerd: %s did not answer (journalctl --user -u %s)" % (what, "k4-matrix" if "client" in url else "k4-meta-bridge"))
+
+
+def fetch_bins():
+    os.makedirs(LIB, exist_ok=True)
+    for name, (ver, url, sha) in BINS.items():
+        path = os.path.join(LIB, name)
+        if os.path.exists(path) and hashlib.sha256(open(path, "rb").read()).hexdigest() == sha:
+            continue
+        say("Downloading %s %s…" % (name, ver))
+        tmp = path + ".part"
+        urllib.request.urlretrieve(url, tmp)
+        got = hashlib.sha256(open(tmp, "rb").read()).hexdigest()
+        if got != sha:
+            os.remove(tmp)
+            raise SystemExit("k4-messengerd: %s's checksum is wrong (%s), not installed" % (name, got[:12]))
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, path)
+
+
+def hs_config(registration):
+    path = os.path.join(CONF, "continuwuity.toml")
+    tok = ""
+    if os.path.exists(path):
+        m = re.search(r'registration_token = "([^"]+)"', open(path).read())
+        tok = m.group(1) if m else ""
+    tok = tok or secrets.token_urlsafe(24)
+    text = ('[global]\nserver_name = "%s"\ndatabase_path = "%s"\naddress = ["127.0.0.1"]\nport = %d\n'
+            'allow_federation = false\nallow_registration = %s\nregistration_token = "%s"\n'
+            'new_user_displayname_suffix = ""\n') % (SERVER, os.path.join(DATA, "db"), HS_PORT, "true" if registration else "false", tok)
+    old = open(path).read() if os.path.exists(path) else ""
+    if old != text:
+        with open(path, "w") as f: f.write(text)
+        os.chmod(path, 0o600)
+    return tok, old != text
+
+
+def register(tok):
+    password = secrets.token_urlsafe(24)
+    body = {"username": "me", "password": password, "inhibit_login": False, "initial_device_display_name": "k4"}
+    st, r = http("POST", HS + "/_matrix/client/v3/register", body)
+    if st == 401 and "session" in r:  # user-interactive auth: the registration token
+        body["auth"] = {"type": "m.login.registration_token", "token": tok, "session": r["session"]}
+        st, r = http("POST", HS + "/_matrix/client/v3/register", body)
+        if st == 401 and "session" in r:  # some servers want m.login.dummy after the token
+            body["auth"] = {"type": "m.login.dummy", "session": r["session"]}
+            st, r = http("POST", HS + "/_matrix/client/v3/register", body)
+    if st != 200 or "access_token" not in r:
+        raise SystemExit("k4-messengerd: registering %s failed: %s" % (ME, r.get("error", st)))
+    secret_put("matrix", r["access_token"])
+    secret_put("matrix-password", password)
+    return r["access_token"]
+
+
+def admin_command(token, text):
+    st, r = http("GET", HS + "/_matrix/client/v3/directory/room/" + q("#admins:" + SERVER), token=token)
+    room = r.get("room_id")
+    if not room: raise SystemExit("k4-messengerd: no admin room (#admins:%s)" % SERVER)
+    http("POST", HS + "/_matrix/client/v3/join/" + q(room), {}, token)
+    http("PUT", HS + "/_matrix/client/v3/rooms/%s/send/m.room.message/%s" % (q(room), secrets.token_hex(8)),
+         {"msgtype": "m.text", "body": text}, token)
+    time.sleep(2)
+    st, r = http("GET", HS + "/_matrix/client/v3/rooms/%s/messages?dir=b&limit=5" % q(room), token=token)
+    for ev in r.get("chunk", []):
+        if ev.get("sender") != ME and ev.get("type") == "m.room.message": return ev["content"].get("body", "")
+    return ""
+
+
+def bridge_files():
+    cfg_path, reg_path = os.path.join(CONF, "meta.yaml"), os.path.join(CONF, "meta-registration.yaml")
+    if os.path.exists(cfg_path) and os.path.exists(reg_path): return reg_path, False
+    as_token, hs_token, shared = secrets.token_urlsafe(48), secrets.token_urlsafe(48), secrets.token_urlsafe(32)
+    url = "http://127.0.0.1:%d" % BRIDGE_PORT
+    # JSON is YAML: the bridge reads it, and fills in every key left out from its own defaults
+    cfg = {
+        "homeserver": {"address": HS, "domain": SERVER, "software": "standard"},
+        "appservice": {"address": url, "hostname": "127.0.0.1", "port": BRIDGE_PORT, "id": "meta",
+                       "bot": {"username": "metabot", "displayname": "Messenger bridge"},
+                       "as_token": as_token, "hs_token": hs_token, "username_template": "meta_{{.}}"},
+        "database": {"type": "sqlite3-fk-wal", "uri": "file:%s?_txlock=immediate" % os.path.join(DATA, "meta.db")},
+        "bridge": {"permissions": {ME: "admin"}},
+        "provisioning": {"shared_secret": shared, "allow_matrix_auth": True},
+        "encryption": {"allow": False},
+        "logging": {"min_level": "info", "writers": [{"type": "stdout", "format": "pretty"}]},
+    }
+    reg = {"id": "meta", "url": url, "as_token": as_token, "hs_token": hs_token, "sender_localpart": secrets.token_hex(16),
+           "rate_limited": False, "receive_ephemeral": True, "de.sorunome.msc2409.push_ephemeral": True,
+           "namespaces": {"users": [{"regex": "^@metabot:%s$" % re.escape(SERVER), "exclusive": True},
+                                    {"regex": "^@meta_.*:%s$" % re.escape(SERVER), "exclusive": True}],
+                          "aliases": [], "rooms": []}}
+    for path, obj in ((cfg_path, cfg), (reg_path, reg)):
+        with open(path, "w") as f: json.dump(obj, f, indent=2)
+        os.chmod(path, 0o600)
+    return reg_path, True
+
+
+def setup():
+    for d in (CONF, DATA, CACHE): os.makedirs(d, exist_ok=True)
+    say("Step 1/5 · the programs (continuwuity, mautrix-meta)")
+    fetch_bins()
+    say("Step 2/5 · the homeserver (k4.local, 127.0.0.1:%d, no federation)" % HS_PORT)
+    token = secret_get("matrix")
+    tok, changed = hs_config(registration=not token)
+    if unit("k4-matrix.service", "Matrix homeserver", "%s -c %s" % (os.path.join(LIB, "conduwuit"), os.path.join(CONF, "continuwuity.toml"))) or changed:
+        systemctl("daemon-reload")
+        systemctl("restart", "k4-matrix.service")
+    systemctl("enable", "--now", "k4-matrix.service")
+    wait_for(HS + "/_matrix/client/versions", "the homeserver")
+    if not token:
+        say("Step 3/5 · your account (%s)" % ME)
+        token = register(tok)
+        hs_config(registration=False)  # nobody else signs up
+        systemctl("restart", "k4-matrix.service")
+        wait_for(HS + "/_matrix/client/versions", "the homeserver")
+    else:
+        say("Step 3/5 · your account (%s, already there)" % ME)
+    say("Step 4/5 · the Messenger bridge")
+    reg_path, fresh = bridge_files()
+    listed = admin_command(token, "!admin appservices list")
+    if fresh or "meta" not in listed:
+        reply = admin_command(token, "!admin appservices register\n```\n%s\n```" % open(reg_path).read())
+        if "meta" not in admin_command(token, "!admin appservices list"):
+            raise SystemExit("k4-messengerd: the homeserver did not take the bridge: %s" % reply[:200])
+    exe = "%s -c %s -r %s" % (os.path.join(LIB, "mautrix-meta"), os.path.join(CONF, "meta.yaml"), reg_path)
+    if unit("k4-meta-bridge.service", "Messenger bridge", exe, after="k4-matrix.service"):
+        systemctl("daemon-reload")
+        systemctl("restart", "k4-meta-bridge.service")
+    systemctl("enable", "--now", "k4-meta-bridge.service")
+    wait_for(PROV + "/v3/login/flows?user_id=" + q(ME), "the bridge", token=bridge_secret())
+    say("Step 5/5 · k4's service")
+    if unit("k4-messenger.service", "k4's Messenger service", "%s daemon" % SELF, after="k4-meta-bridge.service"):
+        systemctl("daemon-reload")
+        systemctl("restart", "k4-messenger.service")
+    systemctl("enable", "--now", "k4-messenger.service")
+    say("Ready · log in to Messenger next")
+
+
+# ---------- cookies ----------
+
+def parse_cookies(text):
+    """The cookies from JSON, a "name=value; …" header, or a devtools "Copy as cURL"."""
+    text = text.strip()
+    want = ("xs", "c_user", "datr", "sb")
+    if text.startswith("{"):
+        try:
+            d = json.loads(text)
+            return {k: str(v) for k, v in d.items() if k in want and v}
+        except ValueError: pass
+    m = re.search(r"""(?:-b|--cookie|-H\s+['"]?cookie:)\s*['"]?([^'"]+)""", text, re.I)
+    header = m.group(1) if m else text
+    out = {}
+    for part in re.split(r";\s*", header):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            k = k.strip()
+            if k in want and v.strip(): out[k] = urllib.parse.unquote(v.strip())
+    return out
+
+
+# ---------- the service ----------
+
+class Service:
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.token = secret_get("matrix")
+        self.rooms = {}  # id -> {name, group, unread, ts, last, last_sender, last_mine, names}
+        self.me = {ME}
+        self.state, self.account, self.note = "down", "", ""
+        self.open_room, self.open_seen, self.limit = None, 0, 40
+        self.cards = {}  # room -> card id
+        self.notes = {}  # card id -> room
+        self.since = None
+        self.synced = False
+        self._status = None
+        self.load_cache()
+
+    # the conversations survive a restart (the list shows at once)
+    def load_cache(self):
+        try:
+            with open(os.path.join(CACHE, "state.json")) as f: c = json.load(f)
+            self.rooms, self.account = c.get("rooms", {}), c.get("account", "")
+            self.me |= set(c.get("me", []))
+        except (OSError, ValueError): pass
+
+    def save_cache(self):
+        try:
+            os.makedirs(CACHE, exist_ok=True)
+            tmp = os.path.join(CACHE, "state.json.part")
+            with open(tmp, "w") as f: json.dump({"rooms": self.rooms, "account": self.account, "me": sorted(self.me)}, f)
+            os.replace(tmp, os.path.join(CACHE, "state.json"))
+        except OSError: pass
+
+    def unread(self):
+        return sum(r["unread"] for r in self.rooms.values())
+
+    def write_status(self):
+        s = "\t".join(map(field, [self.state, self.unread(), self.account, self.note]))
+        if s == self._status: return
+        self._status = s
+        tmp = STATUS + ".part"
+        with open(tmp, "w") as f: f.write(s + "\n")
+        os.replace(tmp, STATUS)
+
+    def set_state(self, st, note=""):
+        with self.lock:
+            self.state, self.note = st, note
+            self.write_status()
+
+    # --- the bridge's login state, every minute ---
+    def check_login(self):
+        try:
+            st, r = prov("GET", "/v3/whoami")
+        except (urllib.error.URLError, OSError, http.client.HTTPException):
+            self.set_state("down", "The bridge is not running"); return
+        if st != 200: self.set_state("error", r.get("error", "The bridge said %s" % st)); return
+        logins = r.get("logins") or []
+        if not logins: self.set_state("login"); return
+        lg = logins[0]
+        ev = (lg.get("state") or {}).get("state_event", "")
+        with self.lock:
+            self.account = lg.get("name") or lg.get("id") or ""
+            if lg.get("id"): self.me.add("@meta_%s:%s" % (lg["id"], SERVER))
+        if ev in ("BAD_CREDENTIALS", "LOGGED_OUT"): self.set_state("relogin", (lg.get("state") or {}).get("message", "Messenger logged the bridge out"))
+        elif ev in ("UNKNOWN_ERROR", "TRANSIENT_DISCONNECT"): self.set_state("error", (lg.get("state") or {}).get("message", "Messenger is not answering"))
+        else: self.set_state("ok")
+
+    def login_loop(self):
+        while True:
+            self.check_login()
+            time.sleep(60)
+
+    # --- /sync ---
+    def sync_loop(self):
+        flt = json.dumps({"room": {"state": {"lazy_load_members": True}, "timeline": {"limit": 20, "lazy_load_members": True},
+                                   "ephemeral": {"types": []}, "account_data": {"types": []}},
+                          "presence": {"types": []}, "account_data": {"types": []}}, separators=(",", ":"))
+        while True:
+            if not self.token:
+                self.set_state("setup", "Not set up yet"); time.sleep(10); self.token = secret_get("matrix"); continue
+            url = HS + "/_matrix/client/v3/sync?timeout=%d&filter=%s" % (30000 if self.synced else 0, q(flt))
+            if self.since: url += "&since=" + q(self.since)
+            try:
+                st, r = http("GET", url, token=self.token, timeout=45)
+            except (urllib.error.URLError, OSError, http.client.HTTPException):
+                if self.state != "setup": self.set_state("down", "The homeserver is not running")
+                time.sleep(5); continue
+            if st != 200:
+                self.set_state("error", r.get("error", "sync: %s" % st)); time.sleep(10); continue
+            first = not self.synced
+            self.apply(r, first)
+            self.since, self.synced = r.get("next_batch"), True
+            if self.state == "down": self.check_login()
+
+    def apply(self, r, first):
+        rooms = r.get("rooms", {})
+        for rid, inv in rooms.get("invite", {}).items():  # the bridge's portals: join them
+            inviter = ""
+            for ev in inv.get("invite_state", {}).get("events", []):
+                if ev.get("type") == "m.room.member" and ev.get("state_key") == ME: inviter = ev.get("sender", "")
+            if GHOST.match(inviter) or inviter == BOT:
+                http("POST", HS + "/_matrix/client/v3/join/" + q(rid), {}, self.token)
+        new = []
+        with self.lock:
+            for rid, jr in rooms.get("join", {}).items():
+                room = self.rooms.get(rid)
+                state = jr.get("state", {}).get("events", []) + jr.get("timeline", {}).get("events", [])
+                portal = room is not None or any(e.get("type") in ("m.bridge", "uk.half-shot.bridge") for e in state)
+                if not portal: continue
+                if room is None:
+                    room = self.rooms[rid] = {"name": "", "group": False, "unread": 0, "ts": 0, "last": "", "last_sender": "", "last_mine": False, "names": {}}
+                for e in state:
+                    t, c = e.get("type"), e.get("content", {})
+                    if t == "m.room.name": room["name"] = c.get("name", "") or room["name"]
+                    if t == "m.room.member" and c.get("displayname"): room["names"][e.get("state_key", "")] = c["displayname"]
+                summ = jr.get("summary", {})
+                if "m.joined_member_count" in summ: room["group"] = summ["m.joined_member_count"] > 3
+                un = jr.get("unread_notifications", {})
+                if "notification_count" in un: room["unread"] = un["notification_count"]
+                for e in jr.get("timeline", {}).get("events", []):
+                    if e.get("type") not in ("m.room.message", "m.sticker") or "body" not in e.get("content", {}): continue
+                    mine = e.get("sender") in self.me
+                    room.update(ts=e.get("origin_server_ts", 0) // 1000, last=msg_text(e), last_sender=e.get("sender", ""), last_mine=mine)
+                    if not first and not mine: new.append((rid, e))
+                if not room["name"]:
+                    others = [n for u, n in room["names"].items() if u not in self.me and u != BOT]
+                    room["name"] = ", ".join(others[:3]) or "Conversation"
+            if self.open_room and time.time() - self.open_seen < 8 and self.open_room in self.rooms:
+                self.rooms[self.open_room]["unread"] = 0  # the window shows it: read
+            self.save_cache()
+            self.write_status()
+        for rid, e in new: self.card(rid, e)
+        if self.open_room and any(rid == self.open_room for rid, _ in new) and time.time() - self.open_seen < 8:
+            self.mark_read(self.open_room)
+
+    # --- cards ---
+    def card(self, rid, e):
+        with self.lock:
+            room = self.rooms.get(rid)
+            if not room: return
+            if rid == self.open_room and time.time() - self.open_seen < 8: return  # the window shows it
+            who = room["names"].get(e.get("sender", ""), "") or room["name"]
+            title = "%s · %s" % (who, room["name"]) if room["group"] and who != room["name"] else who
+            body = msg_text(e)
+            if room["unread"] > 1: body = "%s  (%d new)" % (body, room["unread"])
+            old = self.cards.get(rid, 0)
+        line = "\t".join(["post", str(old), "Messenger", field(title), field(body), "1", "-1", "-1", "", "󰍦", "",
+                          "inline-reply:Reply,read:Mark read,default:", "%s note" % shlex.quote(SELF.replace("k4-messengerd", "k4-messenger"))])
+        try:
+            out = subprocess.run(["k4", "--notify-ctl", line], capture_output=True, text=True, timeout=5).stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            return
+        if out.isdigit():
+            with self.lock:
+                self.cards[rid] = int(out)
+                self.notes[int(out)] = rid
+
+    def drop_card(self, rid):
+        cid = self.cards.pop(rid, 0)
+        if cid:
+            self.notes.pop(cid, None)
+            subprocess.run(["k4", "--notify-ctl", "close %d" % cid], capture_output=True, timeout=5)
+
+    # --- actions ---
+    def send(self, rid, text):
+        st, r = http("PUT", HS + "/_matrix/client/v3/rooms/%s/send/m.room.message/k4-%s" % (q(rid), secrets.token_hex(8)),
+                     {"msgtype": "m.text", "body": text}, self.token)
+        if st != 200: return "Could not send: %s" % r.get("error", st)
+        with self.lock:
+            if rid in self.rooms: self.rooms[rid].update(ts=int(time.time()), last=text, last_sender=ME, last_mine=True)
+        self.mark_read(rid)
+        return "Sent"
+
+    def mark_read(self, rid):
+        st, r = http("GET", HS + "/_matrix/client/v3/rooms/%s/messages?dir=b&limit=1" % q(rid), token=self.token)
+        ev = (r.get("chunk") or [{}])[0].get("event_id")
+        if ev: http("POST", HS + "/_matrix/client/v3/rooms/%s/read_markers" % q(rid), {"m.fully_read": ev, "m.read": ev}, self.token)
+        with self.lock:
+            if rid in self.rooms: self.rooms[rid]["unread"] = 0
+            self.drop_card(rid)
+            self.write_status()
+
+    def messages(self, rid, limit):
+        st, r = http("GET", HS + "/_matrix/client/v3/rooms/%s/messages?dir=b&limit=%d&filter=%s" % (
+            q(rid), limit, q('{"lazy_load_members":true}')), token=self.token)
+        if st != 200: return []
+        names = dict(self.rooms.get(rid, {}).get("names", {}))
+        for e in r.get("state", []):
+            if e.get("type") == "m.room.member" and e.get("content", {}).get("displayname"): names[e["state_key"]] = e["content"]["displayname"]
+        out = []
+        for e in reversed(r.get("chunk", [])):
+            if e.get("type") not in ("m.room.message", "m.sticker") or "body" not in e.get("content", {}): continue
+            s = e.get("sender", "")
+            out.append(["M", e.get("event_id", ""), e.get("origin_server_ts", 0) // 1000, names.get(s, s.split(":")[0].lstrip("@")),
+                        1 if s in self.me else 0, kind_of(e), msg_text(e)])
+        return out
+
+    def room_lines(self):
+        with self.lock:
+            order = sorted(self.rooms.items(), key=lambda kv: (-(kv[1]["unread"] > 0), -kv[1]["ts"]))
+            return ["\t".join(map(field, ["C", rid, r["name"], r["unread"], r["ts"], r["names"].get(r["last_sender"], "") if r["group"] and not r["last_mine"] else "",
+                                          r["last"], 1 if r["group"] else 0, 1 if r["last_mine"] else 0])) for rid, r in order]
+
+    def command(self, line, inp=""):
+        p = line.rstrip("\n").split("\t")
+        c, args = p[0], p[1:]
+        if c == "status": return "\t".join(map(field, ["S", self.state, self.unread(), self.account, self.note])) + "\n"
+        if c == "rooms": return "\n".join(self.room_lines()) + "\n"
+        if c == "data":
+            with self.lock:
+                self.open_seen = time.time() if self.open_room else self.open_seen
+                rid, limit = self.open_room, self.limit
+            out = ["\t".join(map(field, ["S", self.state, self.unread(), self.account, self.note]))] + self.room_lines()
+            if rid:
+                out.append("O\t" + rid)
+                out += ["\t".join(map(field, m)) for m in self.messages(rid, limit)]
+            return "\n".join(out) + "\n"
+        if c == "open" and args:
+            with self.lock:
+                if args[0] != self.open_room: self.limit = 40
+                self.open_room, self.open_seen = args[0], time.time()
+            if self.rooms.get(args[0], {}).get("unread") or args[0] in self.cards: self.mark_read(args[0])
+            return "ok\n"
+        if c == "close":
+            with self.lock: self.open_room = None
+            return "ok\n"
+        if c == "more":
+            with self.lock: self.limit = min(self.limit + 40, 400)
+            return "ok\n"
+        if c == "send" and args:
+            text = "\t".join(args[1:]) or inp
+            return (self.send(args[0], text) if text.strip() else "Nothing to send") + "\n"
+        if c == "read" and args: self.mark_read(args[0]); return "Marked read\n"
+        if c == "note" and len(args) >= 2:
+            key, cid = args[0], int(args[1]) if args[1].isdigit() else 0
+            with self.lock: rid = self.notes.pop(cid, None)
+            if not rid: return "gone\n"
+            self.cards.pop(rid, None)
+            if key == "reply": return self.send(rid, inp) + "\n" if inp.strip() else "Nothing to send\n"
+            if key == "read": self.mark_read(rid); return "ok\n"
+            if key == "default":
+                with self.lock: self.open_room, self.open_seen = rid, time.time()
+                subprocess.Popen(["setsid", "-f", SELF.replace("k4-messengerd", "k4-messenger"), "window"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return "ok\n"
+            return "ok\n"
+        if c == "login-start":
+            st, r = prov("POST", "/v3/login/start/messenger", {})
+            if st != 200: return "error\t%s\n" % field(r.get("error", st))
+            self.login = r
+            return "ok\t%s\n" % field(r.get("instructions", ""))
+        if c == "login-cookies":
+            cookies = parse_cookies(inp or "\t".join(args))
+            missing = [k for k in ("xs", "c_user", "datr") if k not in cookies]
+            if missing: return "error\tMissing cookie%s: %s\n" % ("s" if len(missing) > 1 else "", ", ".join(missing))
+            st, r = prov("POST", "/v3/login/start/messenger", {})
+            if st != 200: return "error\t%s\n" % field(r.get("error", st))
+            lid, step = r.get("login_id", ""), r.get("step_id", "")
+            st, r = prov("POST", "/v3/login/step/%s/%s/cookies" % (q(lid), q(step)), cookies)
+            if st != 200 or r.get("type") != "complete":
+                return "error\t%s\n" % field(r.get("error") or r.get("instructions") or "Messenger did not take the cookies (%s)" % st)
+            self.check_login()
+            return "ok\tLogged in%s\n" % (" as " + self.account if self.account else "")
+        return "unknown command\n"
+
+    def serve(self):
+        try: os.unlink(SOCK)
+        except FileNotFoundError: pass
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.bind(SOCK)
+        os.chmod(SOCK, 0o600)
+        s.listen(8)
+        while True:
+            conn, _ = s.accept()
+            threading.Thread(target=self.handle, args=(conn,), daemon=True).start()
+
+    def handle(self, conn):
+        with conn:
+            buf = b""
+            while not buf.endswith(b"\n"):
+                b = conn.recv(65536)
+                if not b: break
+                buf += b
+            try:
+                # an action's typed text comes as the line's last field "\x1eK4_INPUT=…" (the client's $K4_INPUT)
+                line, inp = buf.decode(errors="replace"), ""
+                if "\x1e" in line:
+                    line, extra = line.split("\x1e", 1)
+                    if extra.startswith("K4_INPUT="): inp = extra[9:].rstrip("\n").replace("\r", "\n")
+                reply = self.command(line, inp)
+            except Exception as e:  # one bad command never takes the service down
+                reply = "error\t%s\n" % field(e)
+            conn.sendall(reply.encode())
+
+
+def msg_text(e):
+    c = e.get("content", {})
+    t = c.get("msgtype", "")
+    body = c.get("body", "")
+    if e.get("type") == "m.sticker": return "[sticker]"
+    if t == "m.image": return "[photo]"
+    if t == "m.video": return "[video]"
+    if t == "m.audio": return "[voice message]"
+    if t == "m.file": return "[file %s]" % body
+    if t == "m.location": return "[location]"
+    return re.sub(r"^> .*\n\n", "", body, flags=re.S) if body.startswith("> ") else body  # a reply's quote goes
+
+
+def kind_of(e):
+    t = e.get("content", {}).get("msgtype", "")
+    return {"m.image": "image", "m.video": "video", "m.audio": "audio", "m.file": "file", "m.emote": "emote"}.get(t, "text")
+
+
+def daemon():
+    svc = Service()
+    svc.set_state("setup" if not svc.token else "down")
+    for target in (svc.sync_loop, svc.login_loop):
+        threading.Thread(target=target, daemon=True).start()
+    svc.serve()
+
+
+def ctl(args):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try: s.connect(SOCK)
+    except OSError:
+        sys.stderr.write("k4-messengerd: the service is not running\n"); sys.exit(1)
+    line = "\t".join(args)
+    if os.environ.get("K4_INPUT"): line += "\x1eK4_INPUT=" + os.environ["K4_INPUT"].replace("\n", "\r")
+    s.sendall((line + "\n").encode())
+    s.shutdown(socket.SHUT_WR)
+    out = b""
+    while True:
+        b = s.recv(65536)
+        if not b: break
+        out += b
+    sys.stdout.write(out.decode(errors="replace"))
+
+
+def main():
+    a = sys.argv[1:]
+    if not a or a[0] in ("-h", "--help"): print(__doc__.strip()); return
+    if a[0] == "setup":
+        try: setup()
+        except SystemExit as e:
+            say(str(e)); sys.exit(1)
+        except (OSError, urllib.error.URLError) as e:
+            say("k4-messengerd: %s" % e); sys.exit(1)
+        return
+    if a[0] == "daemon": return daemon()
+    if a[0] == "ctl": return ctl(a[1:])
+    if a[0] == "parse-cookies": print(json.dumps(parse_cookies(sys.stdin.read()))); return  # tests
+    print(__doc__.strip(), file=sys.stderr); sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

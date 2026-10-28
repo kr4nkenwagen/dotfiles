@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+K4_NAME=k4-messenger K4_ID=messenger K4_TITLE=Messenger K4_KEY=E K4_ICON=󰍦 K4_DESC="Facebook Messenger, through a bridge on this machine"
+# k4-messenger: Facebook Messenger in k4 (k4 --messenger: the conversations, the open one's
+# messages, a line to write), the bar's unread tag, the launcher's Apps row and the cards' buttons,
+# over k4-messengerd (a Matrix homeserver and the mautrix-meta bridge on this machine).
+#   k4-messenger window [ROOM]   the window (again: closes it; from a bar click: under it)
+#   k4-messenger data            its data (k4-messengerd ctl data)
+#   k4-messenger act VERB [ARG]  open ROOM, close, more, send ROOM ($K4_INPUT), read ROOM,
+#                                setup (its steps in $XDG_RUNTIME_DIR/k4-messenger-setup.log),
+#                                login ($K4_INPUT: the cookies)
+#   k4-messenger bar             the bar module (the unread count; hidden until set up)
+#   k4-messenger note KEY ID     a card's buttons (reply: $K4_INPUT)
+. "$HOME/.local/share/k4/lib.sh"
+SELF=$(command -v k4-messenger || echo "$0")
+D=$(command -v k4-messengerd || echo "${0%/*}/k4-messengerd")
+STATUS_FILE="${K4_MESSENGER_STATUS:-${XDG_RUNTIME_DIR:-/tmp}/k4-messenger.status}"
+ctl() { "$D" ctl "$@" 2>/dev/null; }
+set_up() { [ -f "$HOME/.config/k4-messenger/meta.yaml" ]; }
+
+available() { return 0; }   # nothing to install by hand: the window sets it up
+summary() { local st n; IFS=$'\t' read -r st n _ 2>/dev/null < "$STATUS_FILE"
+  case "${st:-}" in
+    ok) [ "${n:-0}" -gt 0 ] && echo "$n unread" || echo "no unread" ;;
+    login|relogin) echo "log in" ;;
+    "") set_up && echo "not running" || echo "not set up" ;;
+    *) echo "$st" ;;
+  esac; }
+section() {
+  desc "Facebook Messenger, through a bridge on this machine" "$(summary)" "Search conversations…"
+  if ! set_up; then item "Set up Messenger" "bg $(printf %q "$SELF") window" "a Matrix server and bridge on this machine"; return; fi
+  item "Open Messenger" "bg $(printf %q "$SELF") window" "Super+Alt+M"
+  local f id name un ts who last _g mine n=0
+  hdr "Conversations"
+  while IFS=$'\t' read -r f id name un ts who last _g mine; do
+    [ "$f" = C ] || continue; n=$((n + 1)); [ "$n" -le 8 ] || break
+    item "$name" "bg $(printf %q "$SELF") window $(printf %q "$id")" "$([ "${un:-0}" -gt 0 ] && echo "$un new · ")$([ "$mine" = 1 ] && echo "you: ")$last" "" "$([ "${un:-0}" -gt 0 ] && echo "chip=$un")"
+  done < <(ctl rooms)
+  [ "$n" -gt 0 ] || empty "No conversations yet"; }
+
+data() { ctl data || printf 'S\t%s\t0\t\t%s\n' "$(set_up && echo down || echo setup)" "$(set_up && echo "k4's Messenger service is not running" || echo "Not set up yet")"
+  printf 'R\t%s act\nL\t%s data\n' "$SELF" "$SELF"; }
+
+act() {
+  local verb="$1"; shift
+  case "$verb" in
+    open|read|close|more) ctl "$verb" "$@" >/dev/null; echo k4:noreload; [ "$verb" = read ] && echo "Marked read" ;;
+    send) ctl send "$1" | tail -1 ;;
+    setup) local log="${XDG_RUNTIME_DIR:-/tmp}/k4-messenger-setup.log"   # the window reads the steps while it runs
+           "$D" setup > "$log" 2>&1; tail -1 "$log"
+           if systemctl --user is-active -q k4-messenger.service; then echo k4:tone green; else echo k4:tone red; fi ;;
+    login) local r; r=$(ctl login-cookies); case "$r" in ok*) echo "${r#ok	}"; echo k4:tone green ;; *) echo "${r#error	}"; echo k4:tone red ;; esac ;;
+  esac; }
+
+bar() {
+  local st n acct note; IFS=$'\t' read -r st n acct note 2>/dev/null < "$STATUS_FILE" || { echo '{}'; return; }
+  case "$st" in
+    ok) [ "${n:-0}" -gt 0 ] || { echo '{}'; return; }
+        jq -cn --argjson n "$n" '{icon: "󰍦", badge: $n, tooltip: "Messenger · \($n) unread · Super+Alt+M"}' ;;
+    login|relogin) jq -cn --arg t "$note" '{icon: "󰍦", icon_tone: "yellow", text: "!", text_tone: "yellow", tooltip: ("Messenger · log in again" + (if $t != "" then " · " + $t else "" end))}' ;;
+    error) jq -cn --arg t "$note" '{icon: "󰍦", icon_tone: "yellow", tooltip: "Messenger · \($t)"}' ;;
+    *) echo '{}' ;;
+  esac; }
+
+window() {
+  pkill -f '^k4 --messenge[r]' && exit 0
+  [ -n "${1:-}" ] && ctl open "$1" >/dev/null
+  local pop=()
+  [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,${K4_BAR_SIDE:-right},${K4_BAR_POS:-top}")
+  data | k4 --messenger "${pop[@]}" >/dev/null
+  ctl close >/dev/null; }
+
+case "${1:-}" in
+  window) window "${2:-}"; exit 0 ;;
+  data) data; exit 0 ;;
+  act) shift; act "$@"; exit 0 ;;
+  bar) bar; exit 0 ;;
+  note) shift; ctl note "$@" >/dev/null; exit 0 ;;
+esac
+k4_dispatch "$@"
