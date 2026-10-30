@@ -9,7 +9,7 @@ K4_NAME=k4-messenger K4_ID=messenger K4_TITLE=Messenger K4_KEY=J K4_ICON=󰍦 K4
 #   k4-messenger act VERB [ARG]  open ROOM, close, more, send ROOM ($K4_INPUT), read ROOM,
 #                                search QUERY (k4:person ID NAME lines), start ID NAME (k4:open ROOM),
 #                                setup (its steps in $XDG_RUNTIME_DIR/k4-messenger-setup.log),
-#                                login ($K4_INPUT: the cookies), media EVENT (opens a photo or video),
+#                                login ($K4_INPUT: the cookies), media EVENT (opens a photo or video), url URL (the browser),
 #                                unlock (the keyring), retry (asks the bridge again), web (messenger.com),
 #                                log (setup's), journal (the services')
 #   k4-messenger bar             the bar module (the unread count; hidden until set up)
@@ -17,6 +17,8 @@ K4_NAME=k4-messenger K4_ID=messenger K4_TITLE=Messenger K4_KEY=J K4_ICON=󰍦 K4
 #   k4-messenger find            every conversation as a row only the launcher's search shows (the
 #                                Kestrel design's SearchMessenger boards); not set up or logged
 #                                out: one row saying so, shown for any search
+#   k4-messenger restore-login   the login k4-vault brought from another machine
+#                                (~/.local/state/k4/messenger-restore.json), once set up; also after setup
 . "$HOME/.local/share/k4/lib.sh"
 SELF=$(command -v k4-messenger || echo "$0")
 D=$(command -v k4-messengerd || echo "${0%/*}/k4-messengerd")
@@ -119,7 +121,9 @@ act() {
            case "$r" in ok*) printf 'k4:open\t%s\n' "${r#ok	}"; echo "${2:-The chat} · say hi" ;; *) echo "${r#error	}"; echo k4:tone red ;; esac ;;
     setup) local log="${XDG_RUNTIME_DIR:-/tmp}/k4-messenger-setup.log"   # the window reads the steps while it runs
            "$D" setup > "$log" 2>&1; tail -1 "$log"
+           restore_login && echo "Logged in with the login k4-vault saved"
            if systemctl --user is-active -q k4-messenger.service; then echo k4:tone green; else echo k4:tone red; fi ;;
+    url) case "$1" in http://*|https://*) open_url "$1"; echo k4:noreload; echo "Opened in the browser" ;; *) echo "Not a link"; echo k4:tone red ;; esac ;;
     media) local r; r=$(ctl media "$1"); echo k4:noreload   # the file, fetched once, in its app (imv, mpv…)
            case "$r" in ok*) bg xdg-open "${r#ok	}"; echo "Opening it" ;; *) echo "${r#error	}"; echo k4:tone red ;; esac ;;
     unlock) echo k4:noreload; if k4-secret unlock >/dev/null 2>&1; then echo "Keyring open · Messenger starts in a few seconds"; else echo "The keyring stayed locked"; echo k4:tone yellow; fi ;;
@@ -138,6 +142,15 @@ find_rows() {  # the launcher's Apps section: typing a name finds the chat
     starting) item "Unlock the keyring to search your chats" "$w" "Messenger waits for it after a reboot" "" "search;always;tag=Messenger;icon=󰍦"; return ;;
   esac
   chat_rows 1 all 1; }
+
+RESTORE="$HOME/.local/state/k4/messenger-restore.json"
+restore_login() {  # the cookies k4-vault restored, handed to the bridge (then gone); logged in already: just gone
+  [ -s "$RESTORE" ] && set_up || return 1
+  local i r
+  for i in $(seq 20); do [ "$(state)" = starting ] || [ -z "$(state)" ] || break; sleep 1; done
+  case "$(state)" in ok) rm -f "$RESTORE"; return 1 ;; esac
+  r=$(K4_INPUT=$(cat "$RESTORE") ctl login-cookies)
+  case "$r" in ok*) rm -f "$RESTORE"; return 0 ;; *) return 1 ;; esac; }
 
 bar() {
   local st n acct note; IFS=$'\t' read -r st n acct note 2>/dev/null < "$STATUS_FILE" || { echo '{}'; return; }
@@ -165,5 +178,6 @@ case "${1:-}" in
   bar) bar; exit 0 ;;
   note) shift; ctl note "$@" >/dev/null; exit 0 ;;
   find) find_rows; exit 0 ;;
+  restore-login) restore_login; exit ;;
 esac
 k4_dispatch "$@"

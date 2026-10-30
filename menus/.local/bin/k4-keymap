@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+K4_NAME=k4-keymap K4_ID=keymap K4_TITLE=Keymap K4_KEY=K K4_ICON=󰌌 K4_DESC="Your keyboard's QMK layout, layer by layer"
+# k4-keymap: your QMK keyboard's layout on screen (k4 --keymap: full screen, both halves, a layer at
+# a time, following the layer the keyboard is on when its firmware reports it). The keymap comes
+# from a git repo (~/.config/k4/keymap: its URL; cloned to ~/.cache/k4/keymap/repo and pulled each
+# time the window opens) and is read by keymap.py (no qmk CLI needed).
+#   k4-keymap [window]          the window (again: closes it); Super+Alt+L, the bar's keyboard module (right click)
+#   k4-keymap data              its data: S, B, G, Y, K lines, R and L (src/keymap.odin)
+#   k4-keymap act VERB          pull (the repo again), github (open it), watch (streamed: "layer N"
+#                               lines as the keyboard changes layer, else "nolive REASON"),
+#                               peek [on|off|toggle] (the peek: below)
+#   k4-keymap peekd             while the peek is on: a layer key shows the keyboard small, bottom
+#                               middle, for 5 s (k4 --keymap --peek); started at login (autostart.lua)
+#   k4-keymap peek N            that small overlay, on layer N (peekd starts it)
+# The live layer needs the firmware to send it: QMK raw HID (RAW_ENABLE = yes) sending 'K' '4' LAYER
+# from layer_state_set_user (and answering "K4" with it), and read access to the keyboard's hidraw
+# node (a udev rule with TAG+="uaccess").
+. "$HOME/.local/share/k4/lib.sh"
+launch_row() { :; }
+SELF=$(command -v k4-keymap || echo "$0")
+PY="$HOME/.local/share/k4/keymap.py"
+URL=$(cat "$HOME/.config/k4/keymap" 2>/dev/null || echo https://github.com/kr4nkenwagen/keyboard_config)
+C="$HOME/.cache/k4/keymap"
+REPO="$C/repo"
+PEEK="$HOME/.local/state/k4/keymap-peek"   # on: a layer key shows the keyboard for 5 s (peekd)
+mkdir -p "$C"
+
+name() { local n=${URL%/}; n=${n%.git}; echo "${n##*/}"; }
+board() {  # the keyboard's USB name, when it is plugged in (else the layout table's)
+  local d; for d in /sys/bus/usb/devices/*; do
+    [ -r "$d/idVendor" ] || continue
+    [ "$(cat "$d/idVendor")" = 4653 ] && [ "$(cat "$d/idProduct")" = 0004 ] && { cat "$d/product" 2>/dev/null; return; }
+  done; }
+
+fetch() {  # the repo: cloned the first time, pulled after (a failed pull keeps what is there)
+  if [ -d "$REPO/.git" ]; then
+    git -C "$REPO" remote set-url origin "$URL" 2>/dev/null
+    timeout 30 git -C "$REPO" pull --ff-only -q 2>"$C/pull.err"
+  else
+    rm -rf "$REPO.part"
+    timeout 60 git clone -q --depth 50 "$URL" "$REPO.part" 2>"$C/pull.err" && mv "$REPO.part" "$REPO"
+  fi; }
+
+data() {
+  if [ ! -d "$REPO/.git" ]; then
+    if [ -e "$C/cloning" ]; then printf 'S\tcloning\t%s\n' "$(name)"   # (the Corne's positions meanwhile: grey caps where the keys will be)
+      python3 -c 'import json,sys; [print(f"G\t{i}\t{x}\t{y}\t{w}\t{h}") for i,(x,y,w,h) in enumerate(json.load(open(sys.argv[1]))["boards"]["crkbd"]["layouts"]["LAYOUT_split_3x6_3_ex2"])]' "${PY%/*}/keymap-layouts.json"
+    else printf 'S\terror\t%s\n' "$(head -c 200 "$C/pull.err" 2>/dev/null | tr '\t\n' '  ' || echo "Could not clone $URL")"; fi
+  else
+    python3 -I "$PY" data "$REPO" "$(board)" "$(name)"
+  fi
+  printf 'U\t%s\n' "$URL"
+  printf 'R\t%s act\nL\t%s data\n' "$SELF" "$SELF"; }
+
+act() {
+  case "${1:-}" in
+    pull) if fetch; then echo "Pulled · $(git -C "$REPO" log -1 --format='%h %s' | cut -c1-60)"; else echo "Could not pull · $(head -c 80 "$C/pull.err")"; echo k4:tone yellow; fi ;;
+    github) open_url "$URL"; echo k4:noreload; echo "Opened $(name) in the browser" ;;
+    watch) exec python3 -I "$PY" watch ;;
+    peek) local now; now=$(cat "$PEEK" 2>/dev/null || echo off)
+          case "${2:-toggle}" in on) now=on ;; off) now=off ;; *) [ "$now" = on ] && now=off || now=on ;; esac
+          mkdir -p "${PEEK%/*}"; echo "$now" > "$PEEK"
+          if [ "$now" = on ]; then setsid -f "$SELF" peekd >/dev/null 2>&1 </dev/null; echo "Peek on · a layer key shows the keyboard for 5 s"
+          else pkill -f 'keymap.py peek[d]'; echo "Peek off"; fi ;;
+  esac; }
+
+window() {  # window [LAYER]: opened on that layer
+  pkill -f '^k4 --keyma[p]' && exit 0
+  [ -n "${1:-}" ] && export K4_KEYMAP_LAYER="$1"
+  if [ -d "$REPO/.git" ]; then (fetch &) >/dev/null 2>&1   # pulled while it opens; the next load has it
+  else touch "$C/cloning"; ( fetch; rm -f "$C/cloning" ) >/dev/null 2>&1 & fi
+  data | k4 --keymap >/dev/null; }
+
+# ---------- the Apps section ----------
+available() { command -v git >/dev/null && command -v python3 >/dev/null; }
+summary() { [ -d "$REPO/.git" ] && echo "$(name) · $(python3 -I "$PY" data "$REPO" | awk -F'\t' '$1 == "Y" && $4 != "missing"' | wc -l) layers" || echo "not fetched yet"; }
+section() {  # the Integrations board's Keymap: open, the layers, where it comes from
+  local d live=""; d=$([ -d "$REPO/.git" ] && python3 -I "$PY" data "$REPO" "$(board)" "$(name)")
+  local bd; bd=$(awk -F'\t' '$1 == "B" { print $2; exit }' <<<"$d")
+  local raw; raw=$(timeout 1 python3 -I "$PY" watch 2>/dev/null | head -1)   # (the first line: the layer, or why not live; a keyboard that answers keeps it running, so a timeout)
+  case "$raw" in layer*) live=${raw#layer	} ;; esac
+  desc "↵ on a layer opens the overlay on it" "${bd:-keyboard} · $([ -n "$live" ] && echo live || echo "not live")" "Find a layer…"
+  hints "↑↓" Move "↵" Open "⌫" Back
+  case "$raw" in nolive*no\ raw\ hid*) notice "Not live" "This firmware sends no layer report, so the overlay can’t follow the keyboard. Add the k4 report (about 15 lines in keymap.c) and flash once." muted ;; esac
+  item "Open keymap" "bg $(printf %q "$SELF") window" "Super+Alt+L" "" "mark=⌨;markc=accent"
+  tog "Peek on layer keys" "$(printf %q "$SELF") act peek toggle" "$(cat "$PEEK" 2>/dev/null || echo off)" "the keyboard, bottom middle, 5 s"
+  if [ -n "$d" ]; then
+    local f n nm miss
+    hdr "Layers" "$(awk -F'\t' '$1 == "Y" && $4 != "missing"' <<<"$d" | wc -l)"
+    while IFS=$'\037' read -r f n nm miss _; do   # (\037: a tab would let read merge the empty field)
+      [ "$f" = Y ] || continue
+      if [ "$miss" = missing ]; then item "$n · missing" "bg $(printf %q "$SELF") window" "held by a key, not in keymap.c" "" "mark=!;markc=red;metac=red"
+      else item "$n · $nm" "bg $(printf %q "$SELF") window $n" "$([ "$n" = "$live" ] && echo "● live now")" "" "mark=▸$([ "$n" = "$live" ] && echo ";markc=accent;metac=accent")"; fi
+    done < <(tr '\t' '\037' <<<"$d")
+  fi
+  hdr "Source"
+  stay "Pull" "$(printf %q "$SELF") act pull" "$(name)$([ -d "$REPO/.git" ] && echo " @ $(git -C "$REPO" log -1 --format='%h · %cr')")" "" "mark=↻"
+  item "Open on GitHub" "open_url $(printf %q "$URL")" "keymap.c" "" "mark=↗"; }
+
+case "${1:-}" in
+  ""|window) shift; window "${1:-}"; exit 0 ;;
+  peekd) [ "$(cat "$PEEK" 2>/dev/null)" = on ] || exit 0; exec python3 -I "$PY" peekd "$SELF" ;;
+  peek) [ -d "$REPO/.git" ] || exit 0
+        pgrep -f '^k4 --keymap --pee[k]' >/dev/null && exit 0
+        data | K4_KEYMAP_LAYER="${2:-1}" k4 --keymap --peek >/dev/null; exit 0 ;;
+  data) data; exit 0 ;;
+  act) shift; act "$@"; exit 0 ;;
+esac
+k4_dispatch "$@"

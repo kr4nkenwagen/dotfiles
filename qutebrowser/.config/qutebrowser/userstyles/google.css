@@ -1,0 +1,112 @@
+/* Gmail and Google Calendar: less clutter, compact and wide. user_stylesheets reach every site,
+   so each rule sits under html[data-qb-site], which only the sites' own userscripts set
+   (greasemonkey/google_mail.user.js, google_calendar.user.js); colours come from theme-*.css.
+   Google's class names change: these lean on aria-label, role, gh= and data-tooltip, and the
+   scripts mark what those can't reach (data-qb-hide, data-qb-weekend, data-qb-now). */
+
+/* ---------- both ---------- */
+html[data-qb-site] [data-qb-hide],
+html[data-qb-site] [aria-label*="Gemini" i],
+html[data-qb-site] [data-tooltip*="Gemini" i],
+html[data-qb-site] [aria-label="Side panel"],
+html[data-qb-site] [aria-label="Hide side panel"],
+html[data-qb-site] [aria-label="Show side panel"],
+html[data-qb-site] [aria-label="Get add-ons" i],
+html[data-qb-site] [aria-label="More add-ons" i],
+html[data-qb-site] [aria-label*="manage storage" i],
+html[data-qb-site] [aria-label*="Upgrade" i]:not(input),
+html[data-qb-site] a[href*="one.google.com"] {
+  display: none !important;
+}
+
+/* ---------- Gmail ---------- */
+/* the right side panel: its column and the strip of app icons beside it */
+html[data-qb-site="gmail"] div[role="complementary"],
+html[data-qb-site="gmail"] .bq9,
+html[data-qb-site="gmail"] .brC-aMv-auO,
+/* Chat and Meet in the left rail, and their sections in the folder list */
+html[data-qb-site="gmail"] [role="navigation"] [aria-label^="Chat" i],
+html[data-qb-site="gmail"] [role="navigation"] [aria-label^="Meet" i],
+html[data-qb-site="gmail"] [role="navigation"] [aria-label^="Spaces" i],
+/* the footer: storage, terms, last account activity */
+html[data-qb-site="gmail"] .aeG,
+html[data-qb-site="gmail"] .pfiaof,
+/* "Get the Gmail app" and other banners above the list */
+html[data-qb-site="gmail"] [role="alert"] [href*="gmail_app" i] {
+  display: none !important;
+}
+
+/* compact: the list's rows (zA: a conversation; zE unread, yO read), the cells tighter */
+html[data-qb-site="gmail"] tr.zA {
+  height: 28px !important;
+  padding-top: 2px !important;  /* (the rows are flex boxes with 10px above and below) */
+  padding-bottom: 2px !important;
+}
+html[data-qb-site="gmail"] tr.zA > td {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+html[data-qb-site="gmail"] tr.zA .yX,
+html[data-qb-site="gmail"] tr.zA .xY {
+  padding-right: 6px !important;
+}
+/* the snippet after the subject, dimmed */
+html[data-qb-site="gmail"] tr.zA .y2 {
+  color: var(--t-fg-subtlest) !important;
+}
+/* the toolbar above the list and the search bar, slimmer */
+html[data-qb-site="gmail"] div[gh="tm"],
+html[data-qb-site="gmail"] div[gh="mtb"] {
+  min-height: 36px !important;
+  height: auto !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+html[data-qb-site="gmail"] form[role="search"] {
+  height: 40px !important;
+}
+
+/* wide: the main column takes the room the side panel left; a message's body stays readable */
+html[data-qb-site="gmail"] div[role="main"] {
+  max-width: none !important;
+  margin-right: 0 !important;
+}
+html[data-qb-site="gmail"] .nH.bkK,
+html[data-qb-site="gmail"] .nH.bkK > .nH {
+  width: auto !important;
+  max-width: none !important;
+}
+html[data-qb-site="gmail"] .a3s {
+  max-width: 110ch !important;
+}
+
+/* ---------- Calendar ---------- */
+html[data-qb-site="gcal"] div[role="complementary"],
+html[data-qb-site="gcal"] [aria-label*="Booking page" i],
+html[data-qb-site="gcal"] [aria-label="Search for people" i],
+html[data-qb-site="gcal"] input[aria-label="Search for people" i] {
+  display: none !important;
+}
+
+/* compact: the top bar slimmer (the hour rows stay: Calendar places events by their height in
+   pixels; its own Settings › Density › Compact makes them lower) */
+html[data-qb-site="gcal"] header[role="banner"] {
+  height: 52px !important;
+  min-height: 52px !important;
+}
+
+/* weekends dimmed (the script marks Saturday and Sunday columns and headers) */
+html[data-qb-site="gcal"] [data-qb-weekend] {
+  background-color: var(--t-sunken) !important;
+}
+html[data-qb-site="gcal"] [data-qb-weekend][role="columnheader"] {
+  opacity: 0.6;
+}
+
+/* the line at the current time, in the theme's accent */
+html[data-qb-site="gcal"] [data-qb-now],
+html[data-qb-site="gcal"] [data-qb-now]::before,
+html[data-qb-site="gcal"] [data-qb-now]::after {
+  background-color: var(--t-accent) !important;
+  border-color: var(--t-accent) !important;
+}

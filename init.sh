@@ -111,6 +111,7 @@ arch_packages=(
   python-adblock uv ollama nodejs python-pip libffi openssl platformio-core mise clang
   rtorrent adw-gtk-theme mpv steam clipse ranger aerc gdb tenere mcfly
   discordo-git yq python-libtmux ripgrep yt-dlp go git neovim
+  github-cli pass gnupg sqlite python-secretstorage
 )
 
 # Plain Arch desktop (Omarchy brings its own): what the Sway and Hyprland profiles share,
@@ -155,7 +156,7 @@ case "$OS" in
   ubuntu)  stow_dirs+=(ghostty qutebrowser wayland sway) ;;
 esac
 
-personal_repos=(CherryScript2 kr4nkengine pass astrokr4nk ai-docstring.nvim)
+personal_repos=(CherryScript2 kr4nkengine astrokr4nk ai-docstring.nvim)   # (pass: ~/.password-store, by k4-vault)
 
 ensure_yay() {
   have yay && return
@@ -628,6 +629,15 @@ fi
 if [ "$OS" = ubuntu ]; then
   info "Skipping personal repos on the work profile"
 else
+  # Logins and keys (k4-vault: the pass store, the GPG key behind a passphrase, the SSH key, gh,
+  # k4's keyring, Messenger, YouTube): first, so the SSH clones below work. Needs a terminal for
+  # the GitHub login and the passphrase; NO_VAULT=1 skips it.
+  if [ -z "${NO_VAULT:-}" ] && have k4-vault && { [ ! -d ~/.password-store/.git ] || ! gpg --list-secret-keys "$(cat ~/.password-store/.gpg-id 2>/dev/null)" >/dev/null 2>&1; }; then
+    if [ -r /dev/tty ]; then
+      info "Restoring logins and keys (k4-vault)"
+      k4-vault restore </dev/tty || warn "k4-vault restore stopped · run it again later"
+    else warn "No terminal: run k4-vault restore later for your logins and keys"; fi
+  fi
   info "Cloning personal repos"
   for repo in "${personal_repos[@]}"; do
     if [ -d ~/repos/$repo ]; then

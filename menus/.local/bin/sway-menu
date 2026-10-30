@@ -1877,19 +1877,32 @@ K4_CONFIRM_LOGOUT="confirm=Log out?|Closes every window and ends the $WM_TITLE s
 K4_CONFIRM_REBOOT='confirm=Reboot now?|Unsaved work in open apps will be lost.'
 K4_CONFIRM_SHUTDOWN='confirm=Shut down now?|Unsaved work in open apps will be lost.'
 
+# fresh NAME SECS CMD…: CMD's output from the cache at once (search must not wait on Gmail or
+# YouTube), made again in the background when older than SECS; the first time it waits.
+fresh() { local f="$HOME/.cache/k4/find/$1" ttl=$2; shift 2
+  mkdir -p "${f%/*}"
+  if [ -s "$f" ]; then
+    cat "$f"
+    [ $(( $(date +%s) - $(stat -c %Y "$f") )) -ge "$ttl" ] && \
+      bg sh -c 'f=$1; shift; "$@" > "$f.$$" 2>/dev/null && [ -s "$f.$$" ] && mv "$f.$$" "$f" || rm -f "$f.$$"' _ "$f" "$@"
+  else "$@" | tee "$f.$$" && [ -s "$f.$$" ] && mv "$f.$$" "$f" || rm -f "$f.$$"; fi; }
+
 k4_section() { local s="$1" rec="Start"; [ "$s" = capture ] && recording && rec="Stop"   # (only Capture asks: it scans /proc)
   case "$s" in
   apps) local n id title key sum inst miss=() count=0 keys=""; local -A integ=()
         # design: the integrations first (each a page, letters g r m x q p in shortcut mode),
         # then the installed applications; the main menu keeps its 17 rows
-        command -v k4-messenger >/dev/null && k4-messenger find   # conversations: search finds them, the list shows none
-        command -v k4-youtube >/dev/null && k4-youtube find   # what you watched: search plays it again
+        command -v k4-messenger >/dev/null && fresh messenger 30 k4-messenger find   # conversations: search finds them, the list shows none
+        command -v k4-mail >/dev/null && fresh mail 120 k4-mail find   # mail threads by sender or subject, and Compose mail
+        command -v k4-wow >/dev/null && k4-wow find   # WoW characters by name
+        command -v k4-clock >/dev/null && k4-clock find   # cities (their time; ↵ adds one to Clock) and the Clock's tabs
+        command -v k4-youtube >/dev/null && fresh youtube 300 k4-youtube find   # what you watched: search plays it again
         if command -v k4-apps >/dev/null; then
           hdr "Integrations"
           while IFS=$'\t' read -r id title key sum inst; do
             if [ "$inst" = installed ]; then item "$title" : "$sum" "$id" "key=$key"; count=$((count + 1)); keys+=" ${key,,}"; integ[${title,,}]=1
             else miss+=("$id"$'\t'"$title"$'\t'"$key"); fi
-          done < <(k4-apps summaries)
+          done < <(fresh apps-summaries 30 k4-apps summaries)
           desc "Integrations first, then installed applications" "$count integrations" "Search Apps…"
           hints "↑↓" Move "↵" Open Esc "Shortcuts: a, then${keys}"
         fi
@@ -1933,7 +1946,9 @@ k4_section() { local s="$1" rec="Start"; [ "$s" = capture ] && recording && rec=
           tog "Starfield" 'starfield-toggle >/dev/null; notify Starfield "$(starfield-toggle status)"' "$(starfield-toggle status 2>/dev/null || echo on)"
           tog "Launcher" toggle_launcher "$([ "$LAUNCHER" = k4 ] && echo on || echo off)"
           tog "Idle lock" toggle_idle "$(onoff idle_on)"
-          tog "Do not disturb" 'toggle_dnd; sleep 0.2; notify "Do not disturb" "$(onoff dnd_on)"' "$(onoff dnd_on)" ;;
+          tog "Do not disturb" 'toggle_dnd; sleep 0.2; notify "Do not disturb" "$(onoff dnd_on)"' "$(onoff dnd_on)"
+          command -v k4 >/dev/null && k4 --notify-ctl status >/dev/null 2>&1 && tog "Immersive notifications" 'k4-notify immersive toggle >/dev/null' "$(k4 --notify-ctl 'immersive status' 2>/dev/null | grep -qx on && echo on || echo off)" "the newest in the middle, until dismissed"
+          command -v k4-keymap >/dev/null && tog "Keyboard peek" 'notify Keymap "$(k4-keymap act peek toggle)"' "$(cat "$HOME/.local/state/k4/keymap-peek" 2>/dev/null || echo off)" "layer keys show the keyboard for 5 s" ;;
   style) local w; w=$(wallpaper)
          hdr "Theme"
          item "Theme" : "$(theme_pretty "$(theme_name)")" theme

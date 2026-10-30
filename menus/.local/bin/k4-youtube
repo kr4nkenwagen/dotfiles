@@ -8,7 +8,9 @@ K4_NAME=k4-youtube K4_ID=youtube K4_TITLE=YouTube K4_KEY=Y K4_ICON=󰗃 K4_DESC=
 # the history (where each video stopped), this script talks to it over its socket.
 #   k4-youtube window [--popup]     the window (again: closes it; from a bar click: under it)
 #   k4-youtube data                 its data: S, Q, V, N, P, H lines, R and L (src/youtube.odin)
-#   k4-youtube act VERB [ARG]       search QUERY, clear (back to the home page), home (fetch it again),
+#   k4-youtube act VERB [ARG]       search QUERY (a channel named so: first, C), channel ID (its videos in
+#                                   place of the search), back (the search again), clear (back to the
+#                                   home page, fetched again each time the window opens), home (fetch it again),
 #                                   home-more (24 more under it: the window's endless scroll),
 #                                   play ID [resume], queue ID, jump N, pause, next, prev, remove N,
 #                                   browser ID, pip, close, forget, install
@@ -18,7 +20,8 @@ K4_NAME=k4-youtube K4_ID=youtube K4_TITLE=YouTube K4_KEY=Y K4_ICON=󰗃 K4_DESC=
 #   k4-youtube play URL|ID          play a link (youtube.com/watch?v=…, youtu.be/…) or an id now
 #   k4-youtube toggle               hide or show the player (Super+Alt+Y); nothing playing: the window
 #   k4-youtube close                stop it
-#   k4-youtube find                 what you watched, as rows only the launcher's search shows
+#   k4-youtube find                 what you watched and the channels you subscribe to (subs.tsv, fetched
+#                                   again after 6 hours), as rows only the launcher's search shows
 . "$HOME/.local/share/k4/lib.sh"
 launch_row() { :; }   # (Omarchy's YouTube web app has the same name: not this)
 SELF=$(command -v k4-youtube || echo "$0")
@@ -43,12 +46,43 @@ nth() { case "$1" in 1) echo 1st ;; 2) echo 2nd ;; 3) echo 3rd ;; *) echo "${1}t
 
 # ---------- mpv over its socket ----------
 
-ipc() { printf '%s\n' "$@" | socat -t0.3 - "UNIX-CONNECT:$SOCK" 2>/dev/null; }   # one JSON command a line
-running() { [ -S "$SOCK" ] && ipc '{"command":["get_property","pid"]}' | grep -q '"error":"success"' || { rm -f "$SOCK"; return 1; }; }
+ipc() {  # ipc JSON…: one command each; their replies, one a line, as soon as all came (2 s at most;
+  # mpv's events in between are skipped)
+  python3 -c '
+import json, socket, sys, time
+s = socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect(sys.argv[1])
+s.sendall(("\n".join(sys.argv[2:]) + "\n").encode())
+need, buf, out, end = len(sys.argv) - 2, b"", [], time.time() + 2
+while need and time.time() < end:
+    try: d = s.recv(65536)
+    except socket.timeout: break
+    if not d: break
+    buf += d
+    while b"\n" in buf:
+        line, buf = buf.split(b"\n", 1)
+        try: j = json.loads(line)
+        except ValueError: continue
+        if "error" in j: out.append(line.decode()); need -= 1
+print("\n".join(out))' "$SOCK" "$@" 2>/dev/null; }
+PIP_RE='^mpv --wayland-app-id=k4-pi[p]'   # the player's own processes (the bracket: never this script's)
+running() {  # the player answers (any other one, lost from it, is stopped); none does: all go
+  local pid p
+  pid=$([ -S "$SOCK" ] && ipc '{"command":["get_property","pid"]}' | jq -r 'select(.error == "success") | .data' 2>/dev/null)
+  if [ -n "$pid" ]; then
+    for p in $(pgrep -f "$PIP_RE"); do [ "$p" = "$pid" ] || kill "$p" 2>/dev/null; done
+    return 0
+  fi
+  stop_all; return 1; }
+stop_all() {  # every player, gone (it said nothing, or a new one starts): at most one plays
+  pkill -f "$PIP_RE" 2>/dev/null
+  local n=0; while [ $n -lt 20 ] && pgrep -f "$PIP_RE" >/dev/null; do sleep 0.1; n=$((n + 1)); done
+  pkill -9 -f "$PIP_RE" 2>/dev/null
+  rm -f "$SOCK"; }
 cmd() { local a=() x; for x in "$@"; do a+=("$(jq -Rn --arg x "$x" '$x')"); done; local IFS=,; ipc "{\"command\":[${a[*]}]}" >/dev/null; }
 prop() { ipc "{\"command\":[\"get_property\",\"$1\"]}" | jq -r 'select(.error == "success") | .data // empty' 2>/dev/null | head -1; }
 
-start() {  # start URL [SECONDS]: the player, in its corner (the window rule), not focused
+start() {  # start URL [SECONDS]: the player, in its corner (the window rule), not focused; any old one goes first
+  stop_all
   bg mpv --wayland-app-id=k4-pip --title='${media-title}' --input-ipc-server="$SOCK" \
     --force-window=immediate --geometry=600x338 --idle=no --keep-open=no --no-terminal \
     --ytdl-format='bestvideo[height<=720]+bestaudio/best[height<=720]' --hwdec=auto-safe \
@@ -111,10 +145,24 @@ cookies_from() {  # what yt-dlp is told: Chromium's kind keep their key in the k
   # wrong outside GNOME and KDE (it then decrypts none of the newer cookies, the sign-in among them)
   local b; b=$(browser)
   case "$b" in *+*|firefox) echo "$b" ;; *) busctl --user status org.freedesktop.secrets >/dev/null 2>&1 && echo "$b+gnomekeyring" || echo "$b" ;; esac; }
-home_fetch() {  # the first 24 of the home page into home.tsv; home.state: ok, signedout or error, why
-  local out err n
+JAR="$ST/cookies.txt"   # a sign-in k4-vault brought from another machine: used while the browser has none
+yt_auth() { if [ -e "$C/auth-jar" ] && [ -s "$JAR" ]; then printf '%s\n' --cookies "$JAR"; else printf '%s\n' --cookies-from-browser "$(cookies_from)"; fi; }
+export_cookies() {  # export_cookies FILE: the browser's YouTube and Google cookies as a cookies.txt (k4-vault backup)
+  local all; all=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/k4-yt.XXXXXX"); chmod 600 "$all"
+  timeout 60 yt-dlp --cookies-from-browser "$(cookies_from)" --cookies "$all" --flat-playlist --playlist-end 1 --skip-download -q --no-warnings ":ytrec" >/dev/null 2>&1
+  ( umask 077; awk -F'\t' 'NF >= 7 { d = $1; sub(/^#HttpOnly_/, "", d); if (d ~ /(^|\.)(youtube|google)\.com$/) print }' "$all" > "$1.part" )   # (#HttpOnly_: the sign-in's own)
+  shred -u "$all" 2>/dev/null || rm -f "$all"
+  grep -q $'\tSAPISID\t\|\t__Secure-3PSID\t' "$1.part" || { rm -f "$1.part"; return 1; }   # (not signed in: nothing worth keeping)
+  { echo "# Netscape HTTP Cookie File"; cat "$1.part"; } > "$1"; rm -f "$1.part"; }
+home_fetch() {  # the browser's sign-in first; when it has none and k4-vault left one, that one
+  rm -f "$C/auth-jar"; home_fetch_once
+  local hs; IFS=$'\t' read -r hs _ < "$C/home.state" 2>/dev/null
+  [ "$hs" != ok ] && [ -s "$JAR" ] && { touch "$C/auth-jar"; home_fetch_once; IFS=$'\t' read -r hs _ < "$C/home.state"; [ "$hs" = ok ] || rm -f "$C/auth-jar"; }
+  return 0; }
+home_fetch_once() {  # the first 24 of the home page into home.tsv; home.state: ok, signedout or error, why
+  local out err n auth; mapfile -t auth < <(yt_auth)
   err=$(mktemp)
-  out=$(timeout 90 yt-dlp --cookies-from-browser "$(cookies_from)" --flat-playlist -J --no-warnings --playlist-end 24 ":ytrec" 2>"$err")
+  out=$(timeout 90 yt-dlp "${auth[@]}" --flat-playlist -J --no-warnings --playlist-end 24 ":ytrec" 2>"$err")
   if grep -q "secretstorage not available" "$err"; then   # the key is in the keyring: yt-dlp needs a module to ask it
     printf 'error\t%s\n' "yt-dlp needs python-secretstorage to read $(browser)'s sign-in (sudo pacman -S python-secretstorage)" > "$C/home.state"; rm -f "$err"; return
   fi
@@ -129,21 +177,33 @@ home_fetch() {  # the first 24 of the home page into home.tsv; home.state: ok, s
   printf 'ok\t\n' > "$C/home.state"; }
 home_more() {  # the next 24 after the ones listed (the scroll reached the end); only ones not listed
   # yet: the feed is new each time it is asked for, so this is "more", not "the next page"
-  local n out new
+  local n out new auth; mapfile -t auth < <(yt_auth)
   n=$(wc -l < "$C/home.tsv" 2>/dev/null || echo 0)
-  out=$(timeout 90 yt-dlp --cookies-from-browser "$(cookies_from)" --flat-playlist -J --no-warnings --playlist-start $((n + 1)) --playlist-end $((n + 24)) ":ytrec" 2>/dev/null)
+  out=$(timeout 90 yt-dlp "${auth[@]}" --flat-playlist -J --no-warnings --playlist-start $((n + 1)) --playlist-end $((n + 24)) ":ytrec" 2>/dev/null)
   new=$(jq -r '.entries[]? | select(.id != null) | [.id, (.title // ""), (.channel // .uploader // ""), ((.duration // 0) | floor), (.view_count // 0)] | map(tostring | gsub("[\t\n\r]"; " ")) | @tsv' <<<"$out" 2>/dev/null \
     | awk -F'\t' 'NR == FNR { seen[$1] = 1; next } !seen[$1]++' "$C/home.tsv" -)
   [ -n "$new" ] || { echo "No more right now · ^R fetches a new home page"; return; }
   printf '%s\n' "$new" >> "$C/home.tsv"; printf '%s\n' "$new" | cut -f1-4 >> "$ST/meta.tsv"
   while IFS=$'\t' read -r id _; do thumb "$id" >/dev/null; done <<<"$new"
   echo "$(wc -l <<<"$new") more"; }
-home_maybe() {  # fetch it in the background when it is older than 30 minutes (once at a time)
+home_maybe() {  # home_maybe [force]: fetch it in the background (force: now; else when older than 30 minutes; once at a time)
   local f="$C/home.state"
   [ -e "$C/home.lock" ] && [ $(( $(date +%s) - $(stat -c %Y "$C/home.lock") )) -lt 120 ] && return
-  [ -e "$f" ] && [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 1800 ] && return
+  [ "${1:-}" != force ] && [ -e "$f" ] && [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 1800 ] && return
   touch "$C/home.lock"
   setsid -f bash -c '"$0" home-fetch; rm -f "$1"' "$SELF" "$C/home.lock" >/dev/null 2>&1 </dev/null; }
+
+subs_fetch() {  # the channels you subscribe to into subs.tsv (id name @handle subscribers), signed in as for the home page
+  local out auth; mapfile -t auth < <(yt_auth)
+  out=$(timeout 90 yt-dlp "${auth[@]}" --flat-playlist -J --no-warnings "https://www.youtube.com/feed/channels" 2>/dev/null)
+  jq -r '.entries[]? | select(.id != null) | [.id, (.title // .channel // ""), (.uploader_id // ""), (.channel_follower_count // 0)] | map(tostring | gsub("[\t\n\r]"; " ")) | @tsv' <<<"$out" > "$C/subs.tsv.part" 2>/dev/null
+  if [ -s "$C/subs.tsv.part" ]; then mv "$C/subs.tsv.part" "$C/subs.tsv"; else rm -f "$C/subs.tsv.part"; touch "$C/subs.tsv"; fi; }
+subs_maybe() {  # in the background when older than 6 hours (once at a time)
+  [ -e "$C/subs.lock" ] && [ $(( $(date +%s) - $(stat -c %Y "$C/subs.lock") )) -lt 120 ] && return
+  [ -e "$C/subs.tsv" ] && [ $(( $(date +%s) - $(stat -c %Y "$C/subs.tsv") )) -lt 21600 ] && return
+  touch "$C/subs.lock"
+  setsid -f bash -c '"$0" subs-fetch; rm -f "$1"' "$SELF" "$C/subs.lock" >/dev/null 2>&1 </dev/null; }
+count_short() { awk -v n="${1:-0}" 'BEGIN { if (n >= 1e6) printf "%.1fM", n / 1e6; else if (n >= 1e3) printf "%dK", n / 1e3; else printf "%d", n }' | sed 's/\.0M/M/'; }
 
 versions() { printf '%s\t%s' "$(yt-dlp --version 2>/dev/null)" "$(mpv --version 2>/dev/null | awk 'NR == 1 { print $2 }')"; }
 data() {
@@ -153,7 +213,13 @@ data() {
   elif [ -s "$C/error" ]; then ok=$(head -1 "$C/error"); note=$(clean "$(sed -n 2p "$C/error" | head -c 300)"); fi
   v=$(versions)
   printf 'S\t%s\t%s\t%s\n' "$ok" "$note" "$v"
-  [ -s "$C/query" ] && printf 'Q\t%s\t%s\t%s\n' "$(clean "$(cat "$C/query")")" "$(wc -l < "$C/results.tsv" 2>/dev/null || echo 0)" "$(cat "$C/took" 2>/dev/null)"
+  local vk vid vname   # the view: a search, or a channel's videos (opened from it)
+  IFS=$'\t' read -r vk vid vname < "$C/view" 2>/dev/null
+  [ -s "$C/query" ] && printf 'Q\t%s\t%s\t%s\t%s\t%s\n' "$(clean "$(cat "$C/query")")" "$(wc -l < "$C/results.tsv" 2>/dev/null || echo 0)" "$(cat "$C/took" 2>/dev/null)" "${vk:-search}" "$vname"
+  if [ -s "$C/query" ] && [ "${vk:-search}" = search ] && [ -s "$C/channel.tsv" ]; then   # the search was a channel's name: it, first
+    local cid cname chandle cfol; IFS=$'\t' read -r cid cname chandle cfol _ < "$C/channel.tsv"
+    printf 'C\t%s\t%s\t%s\t%s\t%s\n' "$cid" "$cname" "$chandle" "${cfol:-0}" "$([ -s "$C/thumbs/ch-$cid.img" ] && echo "$C/thumbs/ch-$cid.img")"
+  fi
   local id t ch d views
   while IFS=$'\037' read -r id t ch d views; do
     printf 'V\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$t" "$ch" "$d" "$views" "$(thumb "$id")"
@@ -197,9 +263,40 @@ data() {
 
 # ---------- actions ----------
 
-search() {  # search QUERY: yt-dlp's first 24 (no key, no account), their thumbnails fetched meanwhile
+norm() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]'; }
+channel_match() {  # channel_match QUERY: the channel the search names (its name or @handle, as typed) into channel.tsv
+  local q; q=$(norm "$1")
+  [ ${#q} -ge 3 ] || { : > "$C/channel.tsv"; return; }
+  local sid sname shandle sfol
+  while IFS=$'\t' read -r sid sname shandle sfol; do   # one you subscribe to: no search needed
+    if [ "$(norm "$sname")" = "$q" ] || [ "$(norm "${shandle#@}")" = "$q" ]; then
+      printf '%s\t%s\t%s\t%s\t\n' "$sid" "$sname" "$shandle" "$sfol" > "$C/channel.tsv"; channel_avatar "$sid"; return 0; fi
+  done < "$C/subs.tsv" 2>/dev/null
+  timeout 20 yt-dlp --flat-playlist -J --no-warnings --playlist-end 5 "https://www.youtube.com/results?search_query=$(jq -rn --arg q "$1" '$q | @uri')&sp=EgIQAg%253D%253D" 2>/dev/null \
+    | jq -r '.entries[]? | select(.id != null) | [.id, (.title // .channel // ""), (.uploader_id // ""), (.channel_follower_count // 0), ((.thumbnails // []) | last | .url // "")] | map(tostring | gsub("[\t\n\r]"; " ")) | @tsv' \
+    | while IFS=$'\t' read -r id name handle fol av; do
+        if [ "$(norm "$name")" = "$q" ] || [ "$(norm "${handle#@}")" = "$q" ]; then printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$handle" "$fol" "$av"; break; fi
+      done > "$C/channel.tsv"
+  local id av; IFS=$'\t' read -r id _ _ _ av < "$C/channel.tsv" 2>/dev/null
+  [ -n "$id" ] && channel_avatar "$id" "$av"
+  return 0; }
+channel_avatar() {  # channel_avatar ID [URL]: its picture into thumbs/ch-ID.img (no URL: asked of the channel's page)
+  local id="$1" av="${2:-}"
+  [ -s "$C/thumbs/ch-$id.img" ] && return 0
+  [ -n "$av" ] || av=$(curl -fsSL --max-time 8 "https://www.youtube.com/channel/$id" 2>/dev/null | grep -o '<meta property="og:image" content="[^"]*"' | head -1 | sed 's/.*content="//; s/"$//')
+  [ -n "$av" ] && {   # its picture (a WebP made a PNG: k4 reads no WebP)
+    case "$av" in //*) av="https:$av" ;; esac
+    curl -fsSL --max-time 8 "$av" -o "$C/thumbs/ch-$id.part" 2>/dev/null &&
+      if head -c 4 "$C/thumbs/ch-$id.part" | grep -q 'RIFF'; then ffmpeg -v quiet -y -i "$C/thumbs/ch-$id.part" "$C/thumbs/ch-$id.png" && mv "$C/thumbs/ch-$id.png" "$C/thumbs/ch-$id.img"; rm -f "$C/thumbs/ch-$id.part"
+      else mv "$C/thumbs/ch-$id.part" "$C/thumbs/ch-$id.img"; fi
+  }
+  return 0; }
+
+search() {  # search QUERY: yt-dlp's first 24 (no key, no account), their thumbnails fetched meanwhile; a channel named so, besides
   local q="$*" out err t0
   printf '%s' "$q" > "$C/query"; t0=$(date +%s%N)
+  rm -f "$C/view" "$C/results.search.tsv"
+  channel_match "$q" & local cpid=$!   # (at the same time: a second second at most)
   err=$(mktemp)
   if ! out=$(yt-dlp --flat-playlist -J --no-warnings "ytsearch24:$q" 2>"$err"); then
     local why; why=$(grep -m1 -i 'error' "$err" | sed 's/^ERROR: //'); rm -f "$err"
@@ -210,11 +307,25 @@ search() {  # search QUERY: yt-dlp's first 24 (no key, no account), their thumbn
   fi
   rm -f "$err" "$C/error"
   jq -r '.entries[]? | select(.id != null) | [.id, (.title // ""), (.channel // .uploader // ""), ((.duration // 0) | floor), (.view_count // 0)] | map(tostring | gsub("[\t\n\r]"; " ")) | @tsv' <<<"$out" > "$C/results.tsv"
+  wait "$cpid" 2>/dev/null
   cut -f1-4 "$C/results.tsv" >> "$ST/meta.tsv"
   local n took; n=$(wc -l < "$C/results.tsv"); took=$(awk -v d="$(( $(date +%s%N) - t0 ))" 'BEGIN { printf "%.1f", d / 1e9 }')
   printf '%s' "$took" > "$C/took"
   while IFS=$'\t' read -r id _; do thumb "$id" >/dev/null; done < "$C/results.tsv"
-  [ "$n" -gt 0 ] && echo "$n results · $took s" || echo "Nothing for “$q”"; }
+  local cn; IFS=$'\t' read -r _ cn _ < "$C/channel.tsv" 2>/dev/null
+  [ "$n" -gt 0 ] && echo "$n results · $took s${cn:+ · the channel $cn first}" || echo "Nothing for “$q”"; }
+
+channel() {  # channel ID: its newest 30 videos in place of the search (back: the search again)
+  local id="$1" name="${2:-}" out
+  [ -n "$name" ] || IFS=$'\t' read -r _ name _ 2>/dev/null < "$C/channel.tsv"
+  out=$(timeout 30 yt-dlp --flat-playlist -J --no-warnings --playlist-end 30 "https://www.youtube.com/channel/$id/videos" 2>/dev/null)
+  [ -n "$out" ] || { echo "Could not open the channel"; echo k4:tone yellow; return; }
+  [ -s "$C/results.search.tsv" ] || cp "$C/results.tsv" "$C/results.search.tsv"
+  jq -r --arg ch "$name" '.entries[]? | select(.id != null) | [.id, (.title // ""), (.channel // $ch), ((.duration // 0) | floor), (.view_count // 0)] | map(tostring | gsub("[\t\n\r]"; " ")) | @tsv' <<<"$out" > "$C/results.tsv"
+  cut -f1-4 "$C/results.tsv" >> "$ST/meta.tsv"
+  printf 'channel\t%s\t%s\n' "$id" "$name" > "$C/view"
+  while IFS=$'\t' read -r v _; do thumb "$v" >/dev/null; done < "$C/results.tsv"
+  echo "$name · $(wc -l < "$C/results.tsv") newest videos · Esc goes back"; }
 
 play() {  # play ID [resume]: now, from where it stopped when asked; the player started when it is not running
   local id at=""; id=$(id_of "$1")
@@ -247,7 +358,10 @@ act() {
   case "$verb" in
     search) search "$@" ;;
     home-more) home_more ;;
-    clear) rm -f "$C/query" "$C/results.tsv" "$C/error" "$C/took"; echo "Your home page" ;;
+    channel) channel "$1" "${2:-}" ;;
+    back) if [ -e "$C/from-launcher" ]; then rm -f "$C/query" "$C/results.tsv" "$C/error" "$C/took" "$C/view" "$C/channel.tsv" "$C/results.search.tsv" "$C/from-launcher"; echo "Your home page"; return; fi
+          [ -s "$C/results.search.tsv" ] && mv "$C/results.search.tsv" "$C/results.tsv"; rm -f "$C/view"; echo "Back to “$(cat "$C/query")”" ;;
+    clear) rm -f "$C/query" "$C/results.tsv" "$C/error" "$C/took" "$C/view" "$C/channel.tsv" "$C/results.search.tsv" "$C/from-launcher"; echo "Your home page" ;;
     home) rm -f "$C/home.state"; home_fetch; IFS=$'\t' read -r hs _ < "$C/home.state"
           case "$hs" in ok) echo "Home page · $(wc -l < "$C/home.tsv") videos" ;; signedout) echo "Not signed in to YouTube in $(browser)"; echo k4:tone yellow ;; *) echo "Could not fetch the home page"; echo k4:tone yellow ;; esac ;;
     play) play "$1" "${2:-}"; echo k4:close ;;   # a video starts: the window goes (the player is the corner one)
@@ -263,7 +377,8 @@ act() {
           else cmd playlist-prev; echo "Previous video"; fi ;;
     jump) running && cmd playlist-play-index "$1"; echo k4:close ;;
     remove) running && cmd playlist-remove "$1"; echo "Removed from the queue" ;;
-    browser) open_url "$(url_of "$1")"; running && cmd set pause yes; echo "Opened in the browser · the player pauses" ;;
+    browser) case "$1" in UC*) open_url "https://www.youtube.com/channel/$1"; echo k4:noreload; echo "Opened the channel in the browser" ;;   # (a channel)
+             *) open_url "$(url_of "$1")"; running && cmd set pause yes; echo "Opened in the browser · the player pauses" ;; esac ;;
     pip) pip_toggle || echo "The player opens when something plays" ;;
     close) running && cmd quit; echo "Stopped" ;;
     forget) : > "$ST/history.log"; echo "History cleared" ;;
@@ -332,19 +447,34 @@ find_rows() {  # what you watched: typing 3 letters of its title (or channel) pl
     [ "${d:-0}" -gt 0 ] || d=${md:-0}
     w="watched"; [ -n "$(resume_at "$id")" ] && w="watched $(( ${p%.*} * 100 / (${d:-1} > 0 ? ${d:-1} : 1) ))%"
     item "$t" "$(printf %q "$SELF") act play $(printf %q "$id") resume" "$ch · $(mmss "${d:-0}") · $w" "" "search;words;min=3;rank=90;tag=YouTube;icon=󰗃;find=$(k4flag "$ch")"
-  done < <(watched 100); }
+  done < <(watched 100)
+  local sid sname shandle sfol   # the channels you subscribe to: their name (or @handle) opens their videos
+  while IFS=$'\t' read -r sid sname shandle sfol; do
+    [ -n "$sname" ] || continue
+    item "$sname" "bg $(printf %q "$SELF") window channel $(printf %q "$sid") $(printf %q "$sname")" "channel · subscribed${sfol:+ · $(count_short "$sfol") subscribers}" "" "search;words;min=2;rank=95;tag=YouTube;icon=󰗃;find=$(k4flag "$shandle")"
+  done < "$C/subs.tsv" 2>/dev/null
+  subs_maybe; }
 
-window() {
-  pkill -f '^k4 --youtub[e]' && exit 0
+window() {  # window [channel ID NAME]: on that channel's videos (the launcher's search: a channel you subscribe to)
+  if [ "${1:-}" = channel ]; then
+    pkill -f '^k4 --youtub[e]'
+    rm -f "$C/error" "$C/took" "$C/channel.tsv" "$C/results.search.tsv"
+    printf '%s' "$3" > "$C/query"; : > "$C/results.tsv"; touch "$C/from-launcher"
+    channel "$2" "$3" >/dev/null || { notify YouTube "Could not open $3"; return; }
+  else
+    pkill -f '^k4 --youtub[e]' && exit 0
+    rm -f "$C/query" "$C/results.tsv" "$C/error" "$C/took" "$C/view" "$C/channel.tsv" "$C/results.search.tsv" "$C/from-launcher"   # each time it opens: the home page,
+  fi
   compact
-  rm -f "$C/query" "$C/results.tsv" "$C/error" "$C/took"   # each time it opens: the home page
-  home_maybe
+  home_maybe force                                                                                          # fetched again (the last one shows meanwhile)
   local pop=()
   [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,${K4_BAR_SIDE:-right},${K4_BAR_POS:-top}")
   data | k4 --youtube "${pop[@]}" >/dev/null; }
 
 case "${1:-}" in
-  window) window; exit 0 ;;
+  window) shift; window "$@"; exit 0 ;;
+  subs-fetch) subs_fetch; exit 0 ;;
+  export-cookies) export_cookies "${2:?file}"; exit ;;
   data) data; exit 0 ;;
   act) shift; act "$@"; exit 0 ;;
   play) play "${2:?url or id}"; exit 0 ;;

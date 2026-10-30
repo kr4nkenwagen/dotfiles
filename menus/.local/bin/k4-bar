@@ -173,7 +173,7 @@ status() {
       IFS=$'\t' read -r name idx n < <(swaymsg -t get_inputs 2>/dev/null | jq -r '[.[] | select(.type == "keyboard" and .xkb_active_layout_name)] | first // {} | [.xkb_active_layout_name // "", (.xkb_active_layout_index // 0), ((.xkb_layout_names // []) | length)] | @tsv')
     fi
     [ -n "${name:-}" ] || { out; return; }
-    out text "$(printf '%s' "$name" | cut -c1-2 | tr '[:upper:]' '[:lower:]')" class dim text2 "$([ "${n:-0}" -gt 2 ] && echo "$((idx + 1))/$n")" tooltip "$name · click for the next layout" ;;
+    out text "$(printf '%s' "$name" | cut -c1-2 | tr '[:upper:]' '[:lower:]')" class dim text2 "$([ "${n:-0}" -gt 2 ] && echo "$((idx + 1))/$n")" tooltip "$name · click: next layout · right click: the keyboard's layout" ;;
   battery)  # the glyph and percentage; yellow at 25%, a red block at 10%; hidden without one
     local b; b=$(ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -1)
     [ -n "$b" ] || { out; return; }
@@ -254,9 +254,11 @@ spec() {
   m menu left icon 󰕰 0 accent "$p menu" "${TERMINAL:-ghostty}" - - - "px=9;tip=k4 menu · Super+Space"
   m workspaces left workspaces - 0 - - - - - - -
   m window left window - 0 - - - - - - -
-  m clock center clock "%H:%M;%a %d %b|%Y-%m-%d %H:%M:%S;w%V" 0 - "$p calendar" - - - - "px=10;next=~/.cache/k4/cal/today.tsv"
+  local cl="$p calendar" cr="-"; command -v k4-clock >/dev/null && cl="k4-clock click left" cr="k4-clock click right"   # (a timer done or an alarm ringing: left stops or snoozes it, right stops it)
+  m clock center clock "%H:%M;%a %d %b|%Y-%m-%d %H:%M:%S;w%V" 0 - "$cl" "$cr" - - - "px=10;next=~/.cache/k4/cal/today.tsv;timers=~/.local/state/k4/clock/bar.tsv"
   local mc="media-menu ctl"; command -v media-menu >/dev/null || mc="playerctl"
-  m media center exec "$SELF status media --follow" 0 - "$p media" - "$mc play-pause" "$mc previous" "$mc next" "maxw=200;maxw2=140;compact"
+  local mp="media-menu ctl pip"; command -v media-menu >/dev/null || mp="-"
+  m media center exec "$SELF status media --follow" 0 - "$p media" "$mp" "$mc play-pause" "$mc previous" "$mc next" "maxw=200;maxw2=140;compact"   # right click: YouTube's player hides or shows
   m dnd right exec "$SELF status dnd" 1 - "k4-notify center" "$c toggle_dnd" - - - - "px=5"
   m night right exec "$SELF status night" 3 - "$c toggle_night" - - - - "px=5"
   m rec right exec "$SELF status rec --follow" 0 - "$c record_toggle" - - - - "px=5"
@@ -269,6 +271,8 @@ spec() {
   m pin1 right exec "k4-tray pinned 1" 3 - "k4-tray pin-click 1" "k4-tray pin-click 1 menu" - - - "px=4"
   m pin2 right exec "k4-tray pinned 2" 3 - "k4-tray pin-click 2" "k4-tray pin-click 2 menu" - - - "px=4"
   command -v k4-messenger >/dev/null && m messenger right exec "k4-messenger bar" 3 - "$p messenger" "k4-messenger window" - - - "px=6"   # Messenger: the unread tag (hidden until set up)
+  command -v k4-mail >/dev/null && m mail right exec "k4-mail bar" 10 - "$p mail" "k4-mail window" - - - "px=6"
+  command -v k4-wow >/dev/null && m wow right exec "k4-wow bar" 30 - "$p wow" "k4-wow play" - - - "px=6"   # WoW: total gold, cooldowns ready, the realm (hidden until the companion addon has a character)   # Gmail: the Inbox's unread tag (hidden until connected; it syncs every minute)
   m tray right exec "k4-tray status" 3 - "k4-tray popup" "k4-tray needs-menu" - - - "px=6"   # the tray: chevron, count, red count needing you
   m updates right exec "$SELF status updates --follow" 0 - "sway-menu run-update" "pkill -USR1 -f 'k4-ba[r] status updates --follow'" - - - -
   m perf right exec "k4-perf bar" 2 - "k4-perf popup" "k4-perf util btop" - - - "px=7;wide"   # CPU and memory in use; the System popup
@@ -284,13 +288,13 @@ spec() {
   m bluetooth right exec "$SELF status bluetooth" 5 - "$p bt" "bluetoothctl power \"\$(bluetoothctl show | grep -q 'Powered: yes' && echo off || echo on)\"" - - - -
   m brightness right exec "$SELF status brightness" 2 - "$p display" - - "brightnessctl set 5%+" "brightnessctl set 5%-" "flash"
   m battery right exec "$SELF status battery" 30 - "$p battery" - - - - -
-  m keyboard right exec "$SELF status keyboard --follow" 0 - "$c kb_cycle" - - - - -
+  m keyboard right exec "$SELF status keyboard --follow" 0 - "$c kb_cycle" "k4-keymap" - - - -   # right click: the QMK layout (k4-keymap)
 }
 
 popup() {  # popup PAGE: the k4 page under the clicked module; a second click closes it, another
   # module's click swaps it for that one
   local cur="${XDG_RUNTIME_DIR:-/tmp}/k4-popup" pat='^k4 --(menu|media|drives|keyring|bus|claude)'
-  pat="${pat%)}|messenger)"   # (Messenger's popup too)
+  pat="${pat%)}|messenger|mail|wow|clock)"   # (Messenger's and Mail's popups too)
   if pgrep -f "$pat" >/dev/null; then
     pkill -f "$pat"
     [ "$(cat "$cur" 2>/dev/null)" = "$1" ] && { rm -f "$cur"; exit 0; }
@@ -304,6 +308,9 @@ popup() {  # popup PAGE: the k4 page under the clicked module; a second click cl
     keyring) exec k4-secret window ;;
     bus) exec k4-bus window ;;
     messenger) exec k4-messenger window ;;
+    mail) exec k4-mail window ;;
+    wow) exec k4-wow window ;;
+    clock) exec k4-clock window ;;
     claude) exec k4-claude window sessions ;;
     *) exec sway-menu "$1" ;;
   esac; }

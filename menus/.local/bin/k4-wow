@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+K4_NAME=k4-wow K4_ID=wow K4_TITLE="World of Warcraft" K4_KEY=W K4_ICON=󰺵 K4_DESC="Forever: your characters, addons, the reset, raid nights"
+# k4-wow: k4 around World of Warcraft Forever (wow.py in ~/.local/share/k4 does the work): the
+# characters window (k4 --wow, the KWow board once it comes), the Apps page (play, time played, the
+# characters, the reset, realm and token, addons, raid nights), screenshots as cards, reminders,
+# the bar module. The characters come from k4's companion addon (K4Companion, installed from here).
+#   k4-wow window | play          the window (Super+Alt+W) | the game (Super+Shift+Alt+W)
+#   k4-wow data | act VERB …      the window's data and actions (wow.py)
+#   k4-wow watch | tick           while the game runs (sessions, screenshots) | every minute (k4-wow.timer)
+#   k4-wow bar | find | note …    the bar module, the launcher's rows, the cards' buttons
+#   k4-wow reset                  "2 d 4 h" to the weekly reset (k4-cal's popup shows it)
+. "$HOME/.local/share/k4/lib.sh"
+launch_row() { :; }
+SELF=$(command -v k4-wow || echo "$0")
+PY="$HOME/.local/share/k4/wow.py"
+export K4_WOW_FRONT="$SELF"
+w() { python3 -I "$PY" "$@"; }
+
+timer() {  # the minute timer (reminders, realm and token), once
+  local d="$HOME/.config/systemd/user"
+  [ -e "$d/k4-wow.timer" ] && return
+  mkdir -p "$d"
+  printf '[Unit]\nDescription=k4 WoW: reminders, realm and token\n\n[Service]\nType=oneshot\nExecStart=%s tick\n' "$SELF" > "$d/k4-wow.service"
+  printf '[Unit]\nDescription=k4 WoW every minute\n\n[Timer]\nOnCalendar=*:*:00\nPersistent=false\n\n[Install]\nWantedBy=timers.target\n' > "$d/k4-wow.timer"
+  systemctl --user daemon-reload && systemctl --user enable --now k4-wow.timer >/dev/null 2>&1; }
+
+window() {
+  pkill -f '^k4 --wo[w]' && exit 0
+  timer
+  local pop=()
+  [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,${K4_BAR_SIDE:-right},${K4_BAR_POS:-top}")
+  w data | k4 --wow "${pop[@]}" >/dev/null; }
+
+find_rows() {  # the launcher: a character by name
+  local name realm cls lvl gold
+  while IFS=$'\t' read -r name realm cls lvl gold; do
+    item "$name" "bg $(printf %q "$SELF") window" "$cls $lvl · $realm · $gold" "" "search;words;min=3;rank=70;tag=WoW;icon=󰺵;find=$(k4flag "$realm")"
+  done < <(w find); }
+
+hm() { local s=${1:-0}; [ "$s" -ge 3600 ] && echo "$((s / 3600)) h $((s / 60 % 60)) m" || echo "$((s / 60)) m"; }
+span() { local s=${1:-0}; [ "$s" -ge 86400 ] && echo "$((s / 86400)) d $((s / 3600 % 24)) h" || hm "$s"; }
+
+# ---------- the Apps page ----------
+available() { [ -d "$HOME/Games/battlenet" ] || [ -n "${K4_WOW_DIR:-}" ]; }
+summary() { local st n; IFS=$'\t' read -r _ st _ _ _ _ _ < <(w info | head -1); n=$(w info | grep -c '^C'); [ "$st" = ok ] && echo "$n character$([ "$n" = 1 ] || echo s) · reset in $(w reset --short)" || echo "not installed"; }
+section() {
+  local kind f1 f2 f3 f4 f5 f6 st today week reset comp run
+  local -a cs=() ws=() as=() ds=() hs=()
+  while IFS=$'\t' read -r kind f1 f2 f3 f4 f5 f6; do
+    case "$kind" in
+      S) st=$f1; today=$f2; week=$f3; reset=$f4; comp=$f5; run=$f6 ;;
+      C) cs+=("$f1"$'\t'"$f2"$'\t'"$f3"$'\t'"$f4"$'\t'"$f5"$'\t'"$f6") ;;
+      W) ws+=("$f1"$'\t'"$f2"$'\t'"$f3"$'\t'"$f4") ;;
+      A) as+=("$f1"$'\t'"$f2"$'\t'"$f3"$'\t'"$f4"$'\t'"$f5") ;;
+      D) ds+=("$f1"$'\t'"$f2"$'\t'"$f3"$'\t'"$f4") ;;
+      H) hs+=("$f1"$'\t'"$f2"$'\t'"$f3"$'\t'"$f4"$'\t'"$f5") ;;
+    esac
+  done < <(w info)
+  if [ "$st" != ok ]; then
+    desc "World of Warcraft through Battle.net" "not installed" ""
+    notice "Forever is not installed" "Install it from Battle.net (omarchy-launch-battlenet), then come back." muted
+    stay "Open Battle.net" "bg omarchy-launch-battlenet" "" "" "mark=→;markc=accent"; return
+  fi
+  desc "↵ on a row does it · typing searches addons (Wago or CurseForge)" "$([ "$run" = 1 ] && echo "playing · ")today $(hm "$today") · week $(hm "$week")" "Search addons…"
+  query "$(printf %q "$SELF") act search"   # (typing: the text is the search, in $K4_INPUT)
+  hints "↑↓" Move "↵" Open "type" "Search addons" "⌫" Back
+  if [ "$run" = 1 ]; then item "Playing" "bg $(printf %q "$SELF") window" "Super+Alt+W" "" "mark=▶;markc=green"
+  else item "Play Forever" "bg $(printf %q "$SELF") play" "Super+Shift+Alt+W" "" "mark=▶;markc=accent"; fi
+  item "Characters" "bg $(printf %q "$SELF") window" "Super+Alt+W" "" "mark=󰺵"
+  [ "$comp" = 1 ] || stay "Install k4's companion addon" "$(printf %q "$SELF") act install-companion" "your characters in k4" "" "mark=+;markc=accent"
+  if [ ${#cs[@]} -gt 0 ]; then
+    hdr "Characters" "${#cs[@]}"
+    local l name realm cls lvl gold seen
+    for l in "${cs[@]}"; do
+      IFS=$'\t' read -r name realm cls lvl gold seen <<<"$l"
+      item "$name · $cls $lvl" "bg $(printf %q "$SELF") window" "$gold · $realm · $(ago "$seen")" "" "mark=●"
+    done
+  elif [ "$comp" = 1 ]; then empty "Log in once (or /reload) with the companion addon"; fi
+  hdr "This week"
+  item "Weekly reset" ":" "in $(span "$reset")" "" "mark=↻"
+  local l kind_ a b c
+  for l in "${ws[@]}"; do
+    IFS=$'\t' read -r kind_ a b c <<<"$l"
+    case "$kind_" in
+      realm) item "$a" ":" "$(echo "$b" | tr '[:upper:]' '[:lower:]')$([ "$c" = 1 ] && echo " · queue")" "" "mark=◉;markc=$([ "$b" = UP ] && echo green || echo red)" ;;
+      token) item "WoW Token" ":" "$a" "" "mark=◈" ;;
+      why) case "$a" in
+             noclient) stay "Realm & token: add a Blizzard API client" "bg xdg-open https://develop.battle.net/access/clients" "develop.battle.net · then k4-wow act client ID" "" "mark=?" ;;
+             notinapi) item "Realm & token" ":" "Forever is not in Blizzard's API yet" "" "mark=○;metac=dim" ;;
+             offline) item "Realm & token" ":" "Blizzard did not answer" "" "mark=○;metac=yellow" ;;
+           esac ;;
+    esac
+  done
+  [ ${#ws[@]} -eq 0 ] && stay "Realm & token" "$(printf %q "$SELF") act world" "↵ asks Blizzard" "" "mark=◈"
+  hdr "Raid nights" "${#ds[@]}"
+  local i day tm rn
+  for l in "${ds[@]}"; do
+    IFS=$'\t' read -r i day tm rn <<<"$l"
+    stay "$rn" "$(printf %q "$SELF") act raid remove $i" "${day^} $tm · ↵ removes" "" "mark=⚔"
+  done
+  item "Add a raid night" "$(printf %q "$SELF") raid-add" "Wed 20:00 Molten Core · asks" "" "mark=+"
+  local nup=0
+  for l in "${as[@]}"; do IFS=$'\t' read -r _ _ _ _ c <<<"$l"; [ -n "$c" ] && nup=$((nup + 1)); done
+  hdr "Addons" "${#as[@]}$([ "$nup" -gt 0 ] && echo " · $nup updates")"
+  if [ "$run" = 1 ]; then notice "Close WoW first" "Addons change only while the game is closed: it keeps them in memory." muted; fi
+  [ "$nup" -gt 0 ] && stay "Update all" "$(printf %q "$SELF") act update all" "$nup" "" "mark=↓;markc=accent"
+  stay "Check for updates" "$(printf %q "$SELF") act check" "" "" "mark=↻"
+  stay "Undo the last update" "$(printf %q "$SELF") act undo" "" "" "mark=↶"
+  local folder title ver src up
+  for l in "${as[@]}"; do
+    IFS=$'\t' read -r folder title ver src up <<<"$l"
+    if [ -n "$up" ]; then stay "$title" "$(printf %q "$SELF") act update $(printf %q "$folder")" "$ver → $up" "" "mark=↓;markc=accent;metac=accent"
+    else item "$title" ":" "$ver${src:+ · $src}" "" "mark=▪"; fi
+  done
+  if [ ${#hs[@]} -gt 0 ]; then
+    IFS=$'\t' read -r _ _ _ _ c <<<"${hs[0]}"
+    hdr "Found for “$c”" "${#hs[@]}"
+    local hsrc hid hname hsum
+    for l in "${hs[@]}"; do
+      IFS=$'\t' read -r hsrc hid hname hsum _ <<<"$l"
+      stay "$hname" "$(printf %q "$SELF") act add $hsrc $(printf %q "$hid")" "$hsrc · ↵ installs" "" "mark=+;sub=$(k4flag "$hsum")"
+    done
+  fi
+  hdr "Folders"
+  stay "Screenshots" "$(printf %q "$SELF") act open-screens" "" "" "mark=↗"
+  stay "Logs" "$(printf %q "$SELF") act open-logs" "" "" "mark=↗"; }
+
+raid_add() {  # asked in a small prompt: Wed 20:00 Molten Core
+  local a; a=$(ask "Raid night: day time name (Wed 20:00 Molten Core)") || return
+  # shellcheck disable=SC2086
+  [ -n "$a" ] && notify "Raid nights" "$(w act raid add $a | head -1)"; }
+
+case "${1:-}" in
+  window) window; exit 0 ;;
+  play) w play; exit 0 ;;
+  data) w data; exit 0 ;;
+  act) shift
+       if [ "${1:-}" = search ]; then shift; w act search "${K4_INPUT:-$*}"; exit 0; fi
+       w act "$@"; exit 0 ;;
+  watch) w watch; exit 0 ;;
+  tick) w tick; exit 0 ;;
+  bar) w bar; exit 0 ;;
+  find) find_rows; exit 0 ;;
+  note) shift; w note "$@"; exit 0 ;;
+  reset) w reset --short; exit 0 ;;
+  raid-add) raid_add; exit 0 ;;
+esac
+k4_dispatch "$@"

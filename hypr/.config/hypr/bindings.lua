@@ -36,7 +36,8 @@ local browser = "qutebrowser"
 -- Syntax: o.bind("MOD + KEY", "Description", "command")
 
 hl.unbind("SUPER + RETURN")
-o.bind("SUPER + RETURN", "Terminal", terminal .. ' --working-directory="$(omarchy-cmd-terminal-cwd)"')
+-- (an immersive notification up: these keys are its own first; k4-notify key … says so, else the usual job)
+o.bind("SUPER + RETURN", "Terminal · or the notification's action", "k4-notify key enter || " .. terminal .. ' --working-directory="$(omarchy-cmd-terminal-cwd)"')
 
 hl.unbind("SUPER + SHIFT + B")
 o.bind("SUPER + SHIFT + B", "Browser", browser)
@@ -161,7 +162,7 @@ o.bind("SUPER + TAB", "Overview (k4)", "k4-overview")
 -- Super+Esc: k4's system menu (lock, suspend, hibernate, log out, reboot, shut down) in place of
 -- Omarchy's; Super+Esc again closes it.
 hl.unbind("SUPER + ESCAPE")
-o.bind("SUPER + ESCAPE", "System menu (k4)", "k4-power")
+o.bind("SUPER + ESCAPE", "System menu (k4) · or dismiss the notification", "k4-notify key esc || k4-power")
 
 -- Super+Ctrl+V: the clipboard history (clipse) in k4's Clipboard window; Super+Ctrl+C: k4's Capture menu (screenshots,
 -- recordings, the color picker), both in place of Omarchy's.
@@ -172,8 +173,16 @@ o.bind("SUPER + CTRL + C", "Capture (k4)", "sway-menu capture")
 
 -- Notifications through k4 (k4-notify; it replaces Omarchy's notification service): Super+N the
 -- centre, and Omarchy's comma keys on k4's service.
-o.bind("SUPER + N", "Notifications (k4)", "k4-notify center")
+o.bind("SUPER + N", "Notifications (k4) · or the notification takes the keys", "k4-notify key keys || k4-notify center")
+hl.unbind("SUPER + LEFT")
+o.bind("SUPER + LEFT", "Focus on left window · or the previous notification", "k4-notify key prev || hyprctl dispatch movefocus l")
+hl.unbind("SUPER + RIGHT")
+o.bind("SUPER + RIGHT", "Focus on right window · or the next notification", "k4-notify key next || hyprctl dispatch movefocus r")
 o.bind("SUPER + ALT + M", "Messenger (k4)", "k4-messenger window")
+o.bind("SUPER + ALT + E", "Mail: Gmail (k4)", "k4-mail window")
+o.bind("SUPER + ALT + W", "World of Warcraft: characters (k4)", "k4-wow window")
+o.bind("SUPER + ALT + C", "Clock: world, timers, alarms, stopwatch (k4)", "k4-clock window")
+o.bind("SUPER + SHIFT + ALT + W", "World of Warcraft: play Forever (k4)", "k4-wow play")
 o.bind("SUPER + ALT + N", "Notifications: keyboard", "k4-notify focus") -- ↑↓ ↵ 1–3 Del Space r(eply) Esc on the popups
 o.bind("SUPER + period", "Tray (k4)", "k4-tray popup")
 o.bind("SUPER + SHIFT + ESCAPE", "System performance (k4)", "k4-perf popup")
@@ -184,6 +193,7 @@ o.bind("SUPER + CTRL + P", "Passwords (k4, pass)", "pass-menu")
 o.bind("SUPER + ALT + A", "Ask Claude (k4)", "k4-claude window ask")
 o.bind("SUPER + ALT + Y", "YouTube player: hide / show (k4)", "k4-youtube toggle")
 o.bind("SUPER + SHIFT + ALT + Y", "YouTube (k4)", "k4-youtube window")
+o.bind("SUPER + ALT + L", "Keyboard layout: the Corne's QMK keymap (k4)", "k4-keymap")
 hl.unbind("SUPER + SHIFT + S") -- Omarchy's Google Maps web app
 o.bind("SUPER + SHIFT + S", "SSH hosts, server and keys (k4)", "k4-ssh open")
 hl.unbind("SUPER + comma")

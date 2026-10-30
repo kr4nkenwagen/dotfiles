@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+K4_NAME=k4-clock K4_ID=clock K4_TITLE="Clock" K4_KEY=O K4_ICON=󰥔 K4_DESC="World clocks, timers, alarms, a stopwatch"
+# k4-clock: k4's Clock (clock.py in ~/.local/share/k4 does the work): the window (k4 --clock, the
+# KClock board: World, Timers, Alarms, Stopwatch), timers and alarms that ring with no window
+# open (systemd user timers), their cards, the bar clock's states, the launcher's rows.
+#   k4-clock window [world|timers|alarms|watch]    the window (Super+Alt+C, the bar clock's right click)
+#   k4-clock data | act VERB …                     the window's data and actions (clock.py)
+#   k4-clock timer 10m tea | alarm 7:30 gym        from anywhere (the launcher's rows)
+#   k4-clock click left|right                      the bar clock: what rings first, else the calendar | this window
+#   k4-clock fire | note | find | resync | sound   systemd's timers, the cards' buttons, the launcher, login
+. "$HOME/.local/share/k4/lib.sh"
+launch_row() { :; }
+SELF=$(command -v k4-clock || echo "$0")
+PY="$HOME/.local/share/k4/clock.py"
+export K4_CLOCK_FRONT="$SELF"
+c() { python3 -I "$PY" "$@"; }
+
+window() {
+  pkill -f '^k4 --cloc[k]' && exit 0
+  local pop=()
+  [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,${K4_BAR_SIDE:-right},${K4_BAR_POS:-top}")
+  c data | K4_CLOCK_TAB="${1:-}" k4 --clock "${pop[@]}" >/dev/null; }
+
+click() {  # the bar clock: left stops a done timer or snoozes an alarm, else the calendar; right stops, else this window
+  local r; r=$(c ringing)
+  case "$1:$r" in
+    left:timer|right:timer|right:alarm) c act stop >/dev/null ;;
+    left:alarm) c act snooze >/dev/null ;;
+    left:*) exec k4-bar popup calendar ;;
+    right:*) exec k4-bar popup clock ;;
+  esac; }
+
+case "${1:-}" in
+  window) shift; window "${1:-}"; exit 0 ;;
+  data) c data; exit 0 ;;
+  act) shift; c act "$@"; exit 0 ;;
+  timer|alarm) c "$@"; exit 0 ;;
+  click) shift; click "${1:-left}"; exit 0 ;;
+  fire|note|ringing|resync|sound|find) c "$@"; exit 0 ;;
+esac
+k4_dispatch "$@"

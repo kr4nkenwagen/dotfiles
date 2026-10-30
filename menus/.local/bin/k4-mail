@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+K4_NAME=k4-mail K4_ID=mail K4_TITLE=Mail K4_KEY=E K4_ICON=󰊫 K4_DESC="Gmail: your inbox, threads, replies"
+# k4-mail: Gmail in k4 (k4 --mail: the labels, the threads, the open one and a line to reply, a
+# card to write; the Kestrel design's KMail boards), the bar's unread badge (BarModMail), new mail
+# as cards (MailNotify), the launcher's search (SearchMail) and the Apps page (AppsMail). The work
+# is gmail.py (~/.local/share/k4): the Gmail API, signed in with your own Google OAuth client
+# (google.py, shared with k4-cal), the mail cached in ~/.cache/k4/mail.
+#   k4-mail window [THREAD]      the window (again: closes it; from a bar click: under it); Super+Alt+E
+#   k4-mail window --label ID    on that label
+#   k4-mail window --compose [TO]  on a new mail (to that address)
+#   k4-mail data | act VERB …    its data and actions (gmail.py)
+#   k4-mail sync                 what changed (the bar runs it every minute; the window every 10 s)
+#   k4-mail bar                  the bar module (the Inbox's unread count; hidden until connected)
+#   k4-mail note KEY CARD        a card's buttons (reply: $K4_INPUT)
+#   k4-mail find                 the newest threads as rows only the launcher's search shows
+. "$HOME/.local/share/k4/lib.sh"
+launch_row() { :; }
+SELF=$(command -v k4-mail || echo "$0")
+PY="$HOME/.local/share/k4/gmail.py"
+export K4_MAIL_FRONT="$SELF"
+C="${K4_MAIL_DIR:-$HOME/.cache/k4/mail}"
+g() { python3 -I "$PY" "$@"; }
+
+sync_maybe() {  # in the background when the last sync is older than $1 seconds (gmail.py takes a lock)
+  local st="$C/state.json"
+  [ -e "$st" ] && [ $(( $(date +%s) - $(stat -c %Y "$st") )) -lt "${1:-60}" ] && return
+  bg python3 -I "$PY" sync --quiet; }
+
+when_() {  # when_ EPOCH: 08:12 today, Yesterday, Tue this week, else 26 Oct
+  local d=$(( ($(date +%s) - $1) / 86400 )) today; today=$(date +%F)
+  if [ "$(date -d "@$1" +%F)" = "$today" ]; then date -d "@$1" +%H:%M
+  elif [ "$(date -d "@$1" +%F)" = "$(date -d yesterday +%F)" ]; then echo Yesterday
+  elif [ "$d" -lt 7 ]; then date -d "@$1" +%a
+  else date -d "@$1" '+%-d %b'; fi; }
+
+window() {  # window [THREAD] | --label ID | --compose [TO]
+  local compose=""
+  case "${1:-}" in
+    --label) pkill -f '^k4 --mai[l]'; g act label "${2:-INBOX}" >/dev/null ;;
+    --compose) pkill -f '^k4 --mai[l]'; compose=1; export K4_MAIL_COMPOSE="${2:- }" ;;
+    "") pkill -f '^k4 --mai[l]' && exit 0; g act home >/dev/null ;;   # (every account: All inboxes)
+    *) pkill -f '^k4 --mai[l]'; g act open "$1" >/dev/null ;;
+  esac
+  sync_maybe 30
+  local pop=()
+  [ -z "$compose" ] && [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,${K4_BAR_SIDE:-right},${K4_BAR_POS:-top}")
+  g data | k4 --mail "${pop[@]}" >/dev/null; }
+
+find_rows() {  # the launcher (SearchMail): a thread by its sender or subject opens it (2 letters);
+  # "Compose mail to <them>" after it when a sender was typed; "Compose mail" for compose, mail…
+  case "$(g state)" in noclient|connect) return ;; esac
+  local id from subj ts unread n addr first; local -A seen=()
+  while IFS=$'\t' read -r id from subj ts unread n addr; do
+    item "$subj" "bg $(printf %q "$SELF") window $(printf %q "$id")" "$from$([ "${n:-1}" -gt 1 ] && echo " · $n") · $(when_ "$ts")" "" \
+      "search;words;min=2;rank=85;tag=Gmail;icon=󰊫;find=$(k4flag "$from gmail mail")$([ "$unread" = 1 ] && echo ';chip=•;chipc=accent')"
+    first=${from%%,*}
+    case "${addr,,}" in *noreply*|*no-reply*|*donotreply*|*do-not-reply*|*mailer-daemon*) addr="" ;; esac   # (nobody to write to)
+    if [ -n "$addr" ] && [ "$first" != me ] && [ -z "${seen[$addr]:-}" ]; then
+      seen[$addr]=1
+      item "Compose mail to $first" "bg $(printf %q "$SELF") window --compose $(printf %q "$addr")" "^N in Mail · ↵ opens a new mail" "" "search;words;min=2;rank=84;tag=Gmail;icon=✎;find=$(k4flag "$first")"
+    fi
+  done < <(g find)
+  item "Compose mail" "bg $(printf %q "$SELF") window --compose" "^N in Mail · ↵ opens a new mail" "" "search;words;min=3;rank=84;tag=Gmail;icon=✎;find=compose,mail,gmail,new mail,write"; }
+
+# ---------- the Apps section (AppsMail, AppsMailConnect, AppsMailRelogin) ----------
+available() { command -v python3 >/dev/null; }
+summary() {
+  case "$(g state)" in noclient|connect) echo "not connected" ;; signin) echo "signed out by Google" ;;
+    *) local n; n=$(g count); [ "$n" -gt 0 ] && echo "$n unread" || echo "nothing unread" ;; esac; }
+section() {
+  local st n acct synced kind f1 f2 f3 f4 f5 ago_=""
+  IFS=$'\t' read -r kind st n acct synced < <(g info | head -1)
+  [ "${synced:-0}" -gt 0 ] && ago_=" · synced $(ago "$synced")"
+  case "$st" in
+    noclient|connect)
+      desc "Gmail inside k4 · the bar badge appears once connected" "not connected" "Search mail…"
+      hints "↵" Connect "⌫" Back
+      notice "Connect Gmail" "Signs in with Google in your browser. k4 reads, sends and labels mail, nothing else, and keeps the token in the keyring. Uses the Google client you set up for Calendar."
+      stay "Sign in with Google" "bg $(printf %q "$SELF") act connect" "↵ · opens the browser" "" "mark=→;markc=accent"
+      item "No Google client yet?" "bg $(printf %q "$SELF") window" "3 steps · Cloud Console" "" "mark=?"; return ;;
+    signin)
+      desc "your mail on this computer is still here" "signed out by Google" "Search mail…"
+      hints "↵" "Sign in" "⌫" Back
+      notice "Sign in to Gmail again" "Google ends the sign-in every 7 days while your client is in Testing. Set it to In production to stop this." yellow
+      stay "Sign in again" "bg $(printf %q "$SELF") act connect" "↵" "" "mark=→;markc=accent"
+      item "Open Mail anyway" "bg $(printf %q "$SELF") window" "cached · read-only" "" "mark=✉"
+      stay "How to set In production" "$(printf %q "$SELF") act howto" "" "" "mark=?"; return ;;
+  esac
+  desc "↵ opens Mail on the label · ^N composes" "${n:-0} unread$ago_" "Search mail…"
+  hints "↑↓" Move "↵" Open "^N" Compose "⌫" Back
+  item "Open Mail" "bg $(printf %q "$SELF") window" "Super+Alt+E" "" "mark=✉;markc=accent"
+  item "Compose" "bg $(printf %q "$SELF") window --compose" "^N" "" "mark=✎"
+  local inbox=() labels=()
+  while IFS=$'\t' read -r kind f1 f2 f3 f4 f5; do
+    case "$kind" in I) inbox+=("$f1"$'\t'"$f2"$'\t'"$f3"$'\t'"$f4") ;; G) labels+=("$f1"$'\t'"$f2"$'\t'"$f3"$'\t'"$f4") ;; esac
+  done < <(g info | tail -n +2)
+  if [ ${#inbox[@]} -gt 0 ]; then
+    hdr "Inbox" "${#inbox[@]}"
+    local l id from subj ts
+    for l in "${inbox[@]:0:6}"; do
+      IFS=$'\t' read -r id from subj ts <<<"$l"
+      item "$from · $subj" "bg $(printf %q "$SELF") window $(printf %q "$id")" "$(when_ "$ts")" "" "mark=•;markc=accent"
+    done
+  fi
+  hdr "Labels"
+  local lid name un lk mark
+  for l in "${labels[@]}"; do
+    IFS=$'\t' read -r lid name un lk <<<"$l"
+    case "$lid" in INBOX) mark=▣ ;; STARRED) mark=★ ;; SNOOZED) mark=◷ ;; SENT) mark=↗ ;; DRAFT) mark=✎ ;; *) mark=● ;; esac
+    item "$name" "bg $(printf %q "$SELF") window --label $(printf %q "$lid")" "$([ "${un:-0}" -gt 0 ] && echo "$un")" "" "mark=$mark$([ "${un:-0}" -gt 0 ] && echo ';metac=accent')"
+  done
+  hdr "Account"
+  stay "${acct:-Gmail}" "$(printf %q "$SELF") act disconnect" "Sign out" "" "mark="; }
+
+case "${1:-}" in
+  window) shift; window "$@"; exit 0 ;;
+  data) sync_maybe 10; g data; exit 0 ;;
+  act) shift; g act "$@"; exit 0 ;;
+  sync) shift; g sync "$@"; exit 0 ;;
+  bar) sync_maybe 60; g bar; exit 0 ;;
+  note) shift; g note "$@"; exit 0 ;;
+  find) find_rows; exit 0 ;;
+esac
+k4_dispatch "$@"

@@ -102,10 +102,11 @@ bar() {  # the module: note, title · artist; paused dims; nothing playing hides
   t=$(jq -r '.Metadata.data["xesam:title"].data // ""' <<<"$j")
   a=$(jq -r '(.Metadata.data["xesam:artist"].data // []) | if type == "array" then join(", ") else . end' <<<"$j")
   [ -n "$t" ] && [ "$st" != Stopped ] || { echo '{}'; return; }
-  local box=""   # k4-youtube's corner player hidden: a PiP HIDDEN box (the YouTubePip board)
+  local box="" tip=""   # k4-youtube's corner player hidden: a PiP HIDDEN box (the YouTubePip board)
+  is_pip "$b" && tip=" · right click: show or hide the player"
   is_pip "$b" && hyprctl -j clients 2>/dev/null | jq -e '.[] | select(.class == "k4-pip" and (.workspace.name | startswith("special:")))' >/dev/null && box="PiP HIDDEN"
-  if [ "$st" = Playing ]; then jq -cn --arg t "$t" --arg a "$a" --arg p "$(name_of "$b")" --arg box "$box" '{icon: "󰝚", icon_tone: "accent", text: $t, text2: $a, tooltip: "\($t) — \($a) · \($p)"} + (if $box != "" then {box: $box, box_tone: "yellow"} else {} end)'
-  else jq -cn --arg t "$t" --arg a "$a" --arg p "$(name_of "$b")" --arg box "$box" '{icon: "󰏤", text: $t, text2: $a, class: "dim", tooltip: "Paused · \($t) — \($a) · \($p)"} + (if $box != "" then {box: $box, box_tone: "yellow"} else {} end)'; fi; }
+  if [ "$st" = Playing ]; then jq -cn --arg t "$t" --arg a "$a" --arg p "$(name_of "$b")" --arg box "$box" --arg tip "$tip" '{icon: "󰝚", icon_tone: "accent", text: $t, text2: $a, tooltip: "\($t) — \($a) · \($p)\($tip)"} + (if $box != "" then {box: $box, box_tone: "yellow"} else {} end)'
+  else jq -cn --arg t "$t" --arg a "$a" --arg p "$(name_of "$b")" --arg box "$box" --arg tip "$tip" '{icon: "󰏤", text: $t, text2: $a, class: "dim", tooltip: "Paused · \($t) — \($a) · \($p)\($tip)"} + (if $box != "" then {box: $box, box_tone: "yellow"} else {} end)'; fi; }
 NOTE_RUN="${XDG_RUNTIME_DIR:-/tmp}/k4-media"
 is_pip() {  # is_pip BUS: the player is k4-youtube's mpv in the corner
   local pid; pid=$(busctl --user status "$1" 2>/dev/null | sed -n 's/^PID=//p')
@@ -181,6 +182,8 @@ ctl() {  # the media keys and the bar's clicks: Omarchy's own when the k4 bar is
                 if [ "$(status "$b")" = Playing ]; then osd play; else osd pause; fi ;;
     next) call "$b" Next; sleep 0.35; osd next ;;
     previous) call "$b" Previous; sleep 0.35; osd prev ;;
+    pip) if is_pip "$b"; then k4-youtube toggle   # the bar's right click: YouTube's corner player hides or shows
+         else busctl --user call "$b" "$OBJ" org.mpris.MediaPlayer2 Raise >/dev/null 2>&1; fi ;;   # (another player: its window comes forward)
   esac; }
 
 window() {
@@ -194,7 +197,7 @@ case "${1:-window}" in
   data) data; exit 0 ;;
   act) shift; act "$@"; exit 0 ;;
   bar) if [ "${2:-}" = --follow ]; then follow; else bar; fi; exit 0 ;;
-  ctl) ctl "${2:?play-pause|next|previous}"; exit 0 ;;
+  ctl) ctl "${2:?play-pause|next|previous|pip}"; exit 0 ;;
   note-act) note_act "${2:?key}"; exit 0 ;;
   players) players; exit 0 ;;
   active) active; exit 0 ;;

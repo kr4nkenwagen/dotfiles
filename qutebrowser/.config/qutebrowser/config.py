@@ -322,6 +322,7 @@ c.tabs.show = 'never'
 c.content.user_stylesheets = [
     '~/.config/qutebrowser/userstyles/all.css',
     '~/.config/qutebrowser/userstyles/atlassian.css',  # Jira, Confluence: Atlassian's design tokens
+    '~/.config/qutebrowser/userstyles/google.css',  # Gmail, Calendar: under html[data-qb-site], set by their userscripts
 ]
 # starfield-toggle: the stylesheet sets --qb-starfield, which the userscript polls.
 if not Path("~/.local/state/omarchy/current/starfield.off").expanduser().exists():
@@ -376,7 +377,7 @@ config.bind(';', 'cmd-set-text :')
 # ==========================================
 # THE THEME FOR PAGES: userstyles/theme.css
 # ==========================================
-# Every stylesheet (all.css, atlassian.css, starfield.css) reads its colours from the variables
+# Every stylesheet (all.css, atlassian.css, google.css, starfield.css) reads its colours from the variables
 # written here on each config load, so a theme switch (theme-sync-qutebrowser re-sources this
 # file) recolours pages. The file is generated: it is not tracked.
 def _rgb(h):

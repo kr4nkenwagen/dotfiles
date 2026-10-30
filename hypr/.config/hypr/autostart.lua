@@ -8,6 +8,10 @@ o.launch_on_start("~/.local/bin/k4-clip watch")
 o.launch_on_start("~/.local/bin/k4-notify daemon")
 -- LocalSend for k4: receives from phones and computers nearby, sends from Super+Ctrl+S
 o.launch_on_start("~/.local/bin/k4-share daemon")
+-- k4's Clock: timers and alarms ring through systemd user timers, made again at login
+o.exec_on_start("~/.local/bin/k4-clock resync")
+-- The keymap's peek: a layer key on the Corne shows its layout for 5 s (when on: Apps › Keymap)
+o.launch_on_start("~/.local/bin/k4-keymap peekd")
 -- Each set of screens gets the layout it had last time (Display › Arrangement)
 o.launch_on_start("~/.local/bin/sway-menu displays-watch")
 -- The status bar: k4's (k4-bar hides Omarchy's) unless Toggle › Status bar picked Omarchy's
