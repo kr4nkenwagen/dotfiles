@@ -136,6 +136,14 @@ o.bind("XF86AudioMute", "Mute", "k4-osd volume mute", { locked = true })
 o.bind("XF86AudioMicMute", "Mute microphone", "k4-osd mic mute", { locked = true })
 o.bind("XF86MonBrightnessUp", "Brightness up", "k4-osd brightness up", { locked = true, repeating = true })
 o.bind("XF86MonBrightnessDown", "Brightness down", "k4-osd brightness down", { locked = true, repeating = true })
+-- Shift: 1% steps (and volume past 100%, up to 150), the KOsd board's ⇧.
+o.bind("SHIFT + XF86AudioRaiseVolume", "Volume up 1% (past 100%)", "k4-osd volume up 1 boost", { locked = true, repeating = true })
+o.bind("SHIFT + XF86AudioLowerVolume", "Volume down 1%", "k4-osd volume down 1", { locked = true, repeating = true })
+o.bind("SHIFT + XF86MonBrightnessUp", "Brightness up 1%", "k4-osd brightness up 1", { locked = true, repeating = true })
+o.bind("SHIFT + XF86MonBrightnessDown", "Brightness down 1%", "k4-osd brightness down 1", { locked = true, repeating = true })
+o.bind("XF86KbdBrightnessUp", "Keyboard light", "k4-osd kbd", { locked = true })
+-- Caps Lock: the key does its job (not taken), the OSD says which way it went.
+o.bind("Caps_Lock", "Caps Lock (k4 OSD)", "k4-osd caps", { release = true, non_consuming = true })
 -- Play, next and previous on any MPRIS player through media-menu: the track box (cover, title,
 -- artist) while the k4 bar runs, Omarchy's media controls otherwise.
 for _, k in ipairs({ "XF86AudioPlay", "XF86AudioPause", "XF86AudioNext", "XF86AudioPrev" }) do
@@ -174,6 +182,8 @@ o.bind("SUPER + CTRL + S", "Send to a nearby device (k4, LocalSend)", "k4-share 
 hl.unbind("SUPER + CTRL + P") -- Omarchy's power popup (Super+Esc is k4's)
 o.bind("SUPER + CTRL + P", "Passwords (k4, pass)", "pass-menu")
 o.bind("SUPER + ALT + A", "Ask Claude (k4)", "k4-claude window ask")
+o.bind("SUPER + ALT + Y", "YouTube player: hide / show (k4)", "k4-youtube toggle")
+o.bind("SUPER + SHIFT + ALT + Y", "YouTube (k4)", "k4-youtube window")
 hl.unbind("SUPER + SHIFT + S") -- Omarchy's Google Maps web app
 o.bind("SUPER + SHIFT + S", "SSH hosts, server and keys (k4)", "k4-ssh open")
 hl.unbind("SUPER + comma")

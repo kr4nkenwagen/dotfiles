@@ -1868,6 +1868,8 @@ qr_scan() { local sel r
   r=$(grim -g "$sel" - | zbarimg -q --raw -Sdisable -Sqrcode.enable - 2>/dev/null)
   [ -n "$r" ] || { notify-send -a Capture -u critical "No QR code found" "Select a region containing a QR code"; return 1; }
   printf '%s' "$r" | wl-copy; notify-send -a Capture "QR code copied" "$r"; }
+osd_pref() { mkdir -p "$HOME/.local/state/k4"; local v=${K4_VALUE,,}; printf '%s\n' "${v%% *}" > "$HOME/.local/state/k4/osd"; notify "On-screen display" "$K4_VALUE"; }   # k4-osd: on, off, volume
+osd_pref_now() { case "$(cat "$HOME/.local/state/k4/osd" 2>/dev/null)" in off) echo Off ;; volume) echo "Volume only" ;; *) echo On ;; esac; }
 bar_pref_now() { local v; v=$(cat "$STATE/$1" 2>/dev/null); v=${v:-${2,,}}; printf '%s' "${v^}"; }
 pp_set() { local i; for i in "${!PP_NAMES[@]}"; do [ "${PP_NAMES[$i]}" = "${K4_VALUE:-}" ] && { powerprofilesctl set "${PP[$i]}" && notify "Power profile" "${PP_NAMES[$i]}"; return; }; done; }
 
@@ -1880,6 +1882,8 @@ k4_section() { local s="$1" rec="Start"; [ "$s" = capture ] && recording && rec=
   apps) local n id title key sum inst miss=() count=0 keys=""; local -A integ=()
         # design: the integrations first (each a page, letters g r m x q p in shortcut mode),
         # then the installed applications; the main menu keeps its 17 rows
+        command -v k4-messenger >/dev/null && k4-messenger find   # conversations: search finds them, the list shows none
+        command -v k4-youtube >/dev/null && k4-youtube find   # what you watched: search plays it again
         if command -v k4-apps >/dev/null; then
           hdr "Integrations"
           while IFS=$'\t' read -r id title key sum inst; do
@@ -1924,6 +1928,7 @@ k4_section() { local s="$1" rec="Start"; [ "$s" = capture ] && recording && rec=
             choice "Bar position" 'bar_pref bar-position' "$(bar_pref_now bar-position Top)" "Top|Bottom"
             choice "Bar background" 'bar_pref bar-background' "$(bar_pref_now bar-background Opaque)" "Opaque|Transparent"
             choice "Bar items" 'bar_pref bar-items' "$(bar_pref_now bar-items Full)" "Full|Icons"
+            choice "On-screen display" osd_pref "$(osd_pref_now)" "On|Off|Volume only"
           fi
           tog "Starfield" 'starfield-toggle >/dev/null; notify Starfield "$(starfield-toggle status)"' "$(starfield-toggle status 2>/dev/null || echo on)"
           tog "Launcher" toggle_launcher "$([ "$LAUNCHER" = k4 ] && echo on || echo off)"

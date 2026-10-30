@@ -8,13 +8,17 @@
   k4-messengerd daemon       the service: follows the homeserver (/sync), keeps the conversations,
                              posts a card per new message (inline reply), writes the unread count
   k4-messengerd ctl CMD …    one command to the service (tab-separated), its reply printed:
-      status                 S state unread account note   (state: setup down login relogin error ok)
-      data                   the k4 --messenger window's data (S, C per conversation, O and M for
-                             the open one, R and L)
-      rooms                  C lines only
+      status                 S state unread account note   (state: setup starting down login relogin error ok;
+                             starting: set up, the keyring not open yet after a reboot)
+      data                   the k4 --messenger window's data (S, E the encrypted chats still waiting
+                             for a message, C per conversation, O and M for the open one, R and L)
+      rooms                  C lines only: C ROOM NAME UNREAD TIME SENDER LAST GROUP MINE TITLED MEMBERS
+                             (TITLED 1: the chat has a name of its own; MEMBERS: the others, | between)
+      check                  ask the bridge again now (the window's Retry); the state after
       open ROOM | close      the conversation the window shows (its cards stay away; read on open)
       more                   older messages in the open conversation
       send ROOM TEXT         a message (TEXT may also come in $K4_INPUT)
+      media EVENT            a shown photo's or video's file, fetched once: "ok PATH"
       read ROOM              mark it read
       search QUERY           people on Messenger: P id name per match
       start ID [NAME]        the chat with that person (made if new); "ok ROOM", and it opens
@@ -26,7 +30,7 @@ Messages never leave this machine except through the bridge to Messenger; Messen
 handed to the bridge (which keeps them in its database), never stored by k4. Meta may ask to
 confirm the account after a bridge logs in; keep the browser session you took the cookies from.
 """
-import hashlib, json, os, re, secrets, shlex, socket, subprocess, sys, threading, time
+import hashlib, json, mimetypes, os, queue, re, secrets, shlex, shutil, socket, subprocess, sys, threading, time
 import urllib.error, urllib.parse, urllib.request
 import http.client as httplib  # (the module: "http" below is the request helper)
 
@@ -39,6 +43,7 @@ DATA = os.path.join(HOME, ".local/share/k4-messenger")
 LIB = os.path.join(HOME, ".local/lib/k4-messenger")
 UNITS = os.path.join(HOME, ".config/systemd/user")
 CACHE = os.path.join(HOME, ".cache/k4/messenger")
+MEDIA = os.path.join(CACHE, "media")  # previews (KEY.thumb) and the files opened (KEY.ext), 30 days
 SOCK = os.environ.get("K4_MESSENGER_SOCK") or os.path.join(RUN, "k4-messenger.sock")
 STATUS = os.environ.get("K4_MESSENGER_STATUS") or os.path.join(RUN, "k4-messenger.status")
 SERVER = "k4.local"
@@ -86,6 +91,17 @@ def http(method, url, body=None, token=None, timeout=40):
 
 def q(s):
     return urllib.parse.quote(s, safe="")
+
+
+def fetch(url, token, dest, limit=200 << 20):
+    """A file from the homeserver to dest (written whole, then renamed): False when too big."""
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", "Bearer " + token)
+    with urllib.request.urlopen(req, timeout=120) as r:
+        if int(r.headers.get("Content-Length") or 0) > limit: return False
+        with open(dest + ".part", "wb") as f: shutil.copyfileobj(r, f)
+    os.replace(dest + ".part", dest)
+    return True
 
 
 # ---------- secrets (k4-secret: the keyring; tests: the environment) ----------
@@ -359,6 +375,9 @@ class Service:
         self.notes = {}  # card id -> room
         self.since = None
         self.synced = False
+        self.media = {}  # event id -> (mxc, mimetype, body), for the messages shown
+        self._waiting = (0, 0)  # (when counted, how many encrypted chats wait for a message)
+        self.fetching, self.fetch_q = set(), queue.Queue()  # previews asked for (once a run)
         self._status = None
         self.load_cache()
 
@@ -417,7 +436,7 @@ class Service:
 
     def login_loop(self):
         while True:
-            self.check_login()
+            if self.token: self.check_login()  # (no token yet: setup or starting says so)
             time.sleep(60)
 
     # --- /sync ---
@@ -427,7 +446,7 @@ class Service:
                           "presence": {"types": []}, "account_data": {"types": []}}, separators=(",", ":"))
         while True:
             if not self.token:
-                self.set_state("setup", "Not set up yet"); time.sleep(10); self.token = secret_get("matrix"); continue
+                self.set_state(*not_ready()); time.sleep(10); self.token = secret_get("matrix"); continue
             url = HS + "/_matrix/client/v3/sync?timeout=%d&filter=%s" % (30000 if self.synced else 0, q(flt))
             if self.since: url += "&since=" + q(self.since)
             try:
@@ -566,25 +585,96 @@ class Service:
             if e.get("type") not in ("m.room.message", "m.sticker") or "body" not in e.get("content", {}): continue
             s = e.get("sender", "")
             out.append(["M", e.get("event_id", ""), e.get("origin_server_ts", 0) // 1000, names.get(s, s.split(":")[0].lstrip("@")),
-                        1 if s in self.me else 0, kind_of(e), msg_text(e)])
+                        1 if s in self.me else 0, kind_of(e), msg_text(e), self.preview(e)])
         return out
+
+    # --- photos and videos: a preview per message, made in the background; the file when opened ---
+    def preview(self, e):
+        """The preview's path once it is made ("" until then: the window shows the text meanwhile)."""
+        c = e.get("content", {})
+        url, kind = c.get("url", ""), kind_of(e)
+        if not url.startswith("mxc://") or kind not in ("image", "video"): return ""
+        with self.lock: self.media[e.get("event_id", "")] = (url, (c.get("info") or {}).get("mimetype", ""), c.get("body", ""))
+        path = os.path.join(MEDIA, media_key(url) + ".thumb")
+        if os.path.exists(path): return path
+        with self.lock:
+            if url not in self.fetching:
+                self.fetching.add(url)
+                self.fetch_q.put((url, kind, (c.get("info") or {}).get("mimetype", ""), c.get("body", "")))
+        return ""
+
+    def fetch_loop(self):
+        while True:
+            url, kind, mime, body = self.fetch_q.get()
+            try: self.make_preview(url, kind, mime, body)
+            except (OSError, ValueError, urllib.error.URLError, httplib.HTTPException, subprocess.SubprocessError): pass
+
+    def make_preview(self, url, kind, mime, body):
+        os.makedirs(MEDIA, exist_ok=True)
+        out = os.path.join(MEDIA, media_key(url) + ".thumb")
+        tmp = out + ".png"
+        if kind == "video":  # a frame from the video itself (the bridge sends no thumbnail)
+            src = self.download(url, mime, body)
+            if not src: return
+            subprocess.run(["ffmpegthumbnailer", "-i", src, "-o", tmp, "-s", "480", "-c", "png"], capture_output=True, timeout=60)
+        else:
+            raw = out + ".raw"
+            try: fetch(HS + "/_matrix/client/v1/media/thumbnail/%s?width=480&height=480&method=scale" % url[6:], self.token, raw)
+            except urllib.error.HTTPError: fetch(HS + "/_matrix/client/v1/media/download/" + url[6:], self.token, raw)
+            with open(raw, "rb") as f: head = f.read(8)
+            if head.startswith((b"\xff\xd8", b"\x89PNG", b"GIF8")): os.replace(raw, tmp)  # what k4 reads
+            else:  # WebP and the like: a PNG
+                subprocess.run(["ffmpeg", "-v", "quiet", "-y", "-i", raw, "-frames:v", "1", "-vf", "scale='min(480,iw)':-2", tmp], capture_output=True, timeout=60)
+                os.unlink(raw)
+        if os.path.exists(tmp) and os.path.getsize(tmp): os.replace(tmp, out)
+
+    def download(self, url, mime, body):
+        """The whole file, kept in the cache (its extension, so the opener knows it)."""
+        ext = os.path.splitext(body)[1] if re.fullmatch(r"\.[A-Za-z0-9]{1,5}", os.path.splitext(body)[1]) else (mimetypes.guess_extension(mime) or "")
+        path = os.path.join(MEDIA, media_key(url) + ext)
+        if os.path.exists(path): return path
+        os.makedirs(MEDIA, exist_ok=True)
+        return path if fetch(HS + "/_matrix/client/v1/media/download/" + url[6:], self.token, path) else ""
 
     def room_lines(self):
         with self.lock:
             order = sorted(self.rooms.items(), key=lambda kv: (-(kv[1]["unread"] > 0), -kv[1]["ts"]))
             return ["\t".join(map(field, ["C", rid, r["name"], r["unread"], r["ts"], r["names"].get(r["last_sender"], "") if r["group"] and not r["last_mine"] else "",
-                                          r["last"], 1 if r["group"] else 0, 1 if r["last_mine"] else 0])) for rid, r in order]
+                                          r["last"], 1 if r["group"] else 0, 1 if r["last_mine"] else 0, 1 if r.get("titled") else 0,
+                                          "|".join(n.replace("|", " ") for n in self.others(r))])) for rid, r in order]
+
+    def others(self, room):  # the members' names but yours and the bridge's
+        return [n for u, n in (room.get("members") or room["names"]).items() if u not in self.me and u != BOT]
+
+    def waiting(self):
+        """Encrypted chats the bridge knows but has no room for yet (Messenger sends a new device no
+        history for them: each comes with its next message). Read from its database, once a minute."""
+        if time.time() - self._waiting[0] < 60: return self._waiting[1]
+        n = 0
+        try:
+            import sqlite3
+            db = sqlite3.connect("file:%s?mode=ro" % os.path.join(DATA, "meta.db"), uri=True, timeout=2)
+            try: n = db.execute("SELECT count(*) FROM portal WHERE mxid IS NULL AND id IN (SELECT CAST(fb_thread_key AS TEXT) FROM meta_hybrid_thread)").fetchone()[0]
+            finally: db.close()
+        except Exception: n = 0  # (an older bridge, or none: nothing to say)
+        self._waiting = (time.time(), n)
+        return n
 
     def command(self, line, inp=""):
         p = line.rstrip("\n").split("\t")
         c, args = p[0], p[1:]
         if c == "status": return "\t".join(map(field, ["S", self.state, self.unread(), self.account, self.note])) + "\n"
         if c == "rooms": return "\n".join(self.room_lines()) + "\n"
+        if c == "check":
+            if self.token: self.check_login()
+            return "\t".join(map(field, [self.state, self.note])) + "\n"
         if c == "data":
             with self.lock:
                 self.open_seen = time.time() if self.open_room else self.open_seen
                 rid, limit = self.open_room, self.limit
-            out = ["\t".join(map(field, ["S", self.state, self.unread(), self.account, self.note]))] + self.room_lines()
+            out = ["\t".join(map(field, ["S", self.state, self.unread(), self.account, self.note]))]
+            if self.state in ("ok", "error") and self.waiting(): out.append("E\t%d" % self.waiting())
+            out += self.room_lines()
             if rid:
                 out.append("O\t" + rid)
                 out += ["\t".join(map(field, m)) for m in self.messages(rid, limit)]
@@ -605,6 +695,12 @@ class Service:
             text = "\t".join(args[1:]) or inp
             return (self.send(args[0], text) if text.strip() else "Nothing to send") + "\n"
         if c == "read" and args: self.mark_read(args[0]); return "Marked read\n"
+        if c == "media" and args:
+            with self.lock: m = self.media.get(args[0])
+            if not m: return "error\tThat message is not shown any more\n"
+            try: path = self.download(*m)
+            except (OSError, urllib.error.URLError, httplib.HTTPException) as e: return "error\tCould not fetch it: %s\n" % field(e)
+            return "ok\t%s\n" % path if path else "error\tToo big to fetch (over 200 MB)\n"
         if c == "note" and len(args) >= 2:
             key, cid = args[0], int(args[1]) if args[1].isdigit() else 0
             with self.lock: rid = self.notes.pop(cid, None)
@@ -695,14 +791,37 @@ def msg_text(e):
 
 
 def kind_of(e):
+    if e.get("type") == "m.sticker": return "image"
     t = e.get("content", {}).get("msgtype", "")
     return {"m.image": "image", "m.video": "video", "m.audio": "audio", "m.file": "file", "m.emote": "emote"}.get(t, "text")
 
 
+def not_ready():
+    """No token: never set up, or set up and the keyring not open yet (after a reboot)."""
+    if os.path.exists(os.path.join(CONF, "meta.yaml")): return "starting", "The keyring is locked"
+    return "setup", "Not set up yet"
+
+
+def media_key(mxc):
+    return hashlib.sha256(mxc.encode()).hexdigest()[:24]
+
+
+def prune_media(days=30):
+    try: names = os.listdir(MEDIA)
+    except OSError: return
+    old = time.time() - days * 86400
+    for n in names:
+        p = os.path.join(MEDIA, n)
+        try:
+            if os.path.getmtime(p) < old: os.unlink(p)
+        except OSError: pass
+
+
 def daemon():
     svc = Service()
-    svc.set_state("setup" if not svc.token else "down")
-    for target in (svc.sync_loop, svc.login_loop):
+    svc.set_state(*(not_ready() if not svc.token else ("down", "")))
+    prune_media()
+    for target in (svc.sync_loop, svc.login_loop, svc.fetch_loop):
         threading.Thread(target=target, daemon=True).start()
     svc.serve()
 

@@ -1,0 +1,356 @@
+#!/usr/bin/env bash
+K4_NAME=k4-youtube K4_ID=youtube K4_TITLE=YouTube K4_KEY=Y K4_ICON=󰗃 K4_DESC="Search YouTube, play in a corner on every workspace"
+# k4-youtube: YouTube in k4 (k4 --youtube, the Kestrel design's KYouTube board: a search, its
+# results as a grid, the queue, what you watched) and its player: one mpv in a small window pinned
+# to the top-left corner of every workspace (Hyprland rule for the class k4-pip), never taking
+# focus (the YouTubePip board). mpv-mpris makes it an MPRIS player, so the bar's media module and
+# the media keys control it. No daemon: mpv holds the queue (its playlist), youtube-mpv.lua writes
+# the history (where each video stopped), this script talks to it over its socket.
+#   k4-youtube window [--popup]     the window (again: closes it; from a bar click: under it)
+#   k4-youtube data                 its data: S, Q, V, N, P, H lines, R and L (src/youtube.odin)
+#   k4-youtube act VERB [ARG]       search QUERY, clear (back to the home page), home (fetch it again),
+#                                   home-more (24 more under it: the window's endless scroll),
+#                                   play ID [resume], queue ID, jump N, pause, next, prev, remove N,
+#                                   browser ID, pip, close, forget, install
+# Nothing searched: your YouTube home page (yt-dlp's :ytrec, signed in with the browser's session:
+# ~/.local/state/k4/youtube/browser, else the default browser), fetched in the background and
+# again after 30 minutes.
+#   k4-youtube play URL|ID          play a link (youtube.com/watch?v=…, youtu.be/…) or an id now
+#   k4-youtube toggle               hide or show the player (Super+Alt+Y); nothing playing: the window
+#   k4-youtube close                stop it
+#   k4-youtube find                 what you watched, as rows only the launcher's search shows
+. "$HOME/.local/share/k4/lib.sh"
+launch_row() { :; }   # (Omarchy's YouTube web app has the same name: not this)
+SELF=$(command -v k4-youtube || echo "$0")
+C="${K4_YOUTUBE_CACHE:-$HOME/.cache/k4/youtube}"     # search.json, results.tsv, query, error, took, thumbs/
+ST="${K4_YOUTUBE_STATE:-$HOME/.local/state/k4/youtube}" # meta.tsv (id title channel seconds), history.log (time id position seconds)
+SOCK="${XDG_RUNTIME_DIR:-/tmp}/k4-youtube.sock"
+LUA="$HOME/.local/share/k4/youtube-mpv.lua"
+KEEP_DAYS=90
+mkdir -p "$C/thumbs" "$ST"
+
+clean() { local s=${1:-}; s=${s//[$'\t\n\r']/ }; printf '%s' "$s"; }
+id_of() {  # a video's id from an id, a watch link, a youtu.be or shorts link
+  local u="$1"
+  case "$u" in
+    *youtu.be/*) u=${u##*youtu.be/} ;;
+    *v=*) u=${u##*v=} ;;
+    */shorts/*) u=${u##*/shorts/} ;;
+  esac
+  u=${u%%[&?#/]*}; printf '%s' "$u"; }
+url_of() { printf 'https://www.youtube.com/watch?v=%s' "$1"; }
+nth() { case "$1" in 1) echo 1st ;; 2) echo 2nd ;; 3) echo 3rd ;; *) echo "${1}th" ;; esac; }
+
+# ---------- mpv over its socket ----------
+
+ipc() { printf '%s\n' "$@" | socat -t0.3 - "UNIX-CONNECT:$SOCK" 2>/dev/null; }   # one JSON command a line
+running() { [ -S "$SOCK" ] && ipc '{"command":["get_property","pid"]}' | grep -q '"error":"success"' || { rm -f "$SOCK"; return 1; }; }
+cmd() { local a=() x; for x in "$@"; do a+=("$(jq -Rn --arg x "$x" '$x')"); done; local IFS=,; ipc "{\"command\":[${a[*]}]}" >/dev/null; }
+prop() { ipc "{\"command\":[\"get_property\",\"$1\"]}" | jq -r 'select(.error == "success") | .data // empty' 2>/dev/null | head -1; }
+
+start() {  # start URL [SECONDS]: the player, in its corner (the window rule), not focused
+  bg mpv --wayland-app-id=k4-pip --title='${media-title}' --input-ipc-server="$SOCK" \
+    --force-window=immediate --geometry=600x338 --idle=no --keep-open=no --no-terminal \
+    --ytdl-format='bestvideo[height<=720]+bestaudio/best[height<=720]' --hwdec=auto-safe \
+    ${2:+--start=$2} --script="$LUA" "$1"
+  local n=0; while [ $n -lt 30 ] && ! [ -S "$SOCK" ]; do sleep 0.1; n=$((n + 1)); done; }
+
+# The player's window (hyprctl): its address, pinned, workspace name.
+win() { hyprctl -j clients 2>/dev/null | jq -r '.[] | select(.class == "k4-pip") | "\(.address)\t\(.pinned)\t\(.workspace.name)"' | head -1; }
+hidden() { local ws; IFS=$'\t' read -r _ _ ws <<<"$(win)"; [ "${ws#special:}" != "$ws" ]; }
+hypr() {  # hypr LUA CLASSIC: Omarchy's Lua dispatch, the classic one where that is not there
+  hyprctl dispatch "$1" 2>/dev/null | grep -qi '^ok' || hyprctl dispatch $2 >/dev/null 2>&1; }
+
+pip_toggle() {  # hidden: on a special workspace (it still plays); shown: here, pinned, on top
+  local a pinned ws; IFS=$'\t' read -r a pinned ws <<<"$(win)"
+  [ -n "$a" ] || return 1
+  if [ "${ws#special:}" != "$ws" ]; then
+    local here; here=$(hyprctl -j activeworkspace | jq -r .id)
+    hypr "hl.dsp.window.move({ workspace = \"$here\", window = \"address:$a\", follow = false })" "movetoworkspacesilent $here,address:$a"
+    hypr "hl.dsp.window.pin({ window = \"address:$a\" })" "pin address:$a"
+    hyprctl dispatch alterzorder "top,address:$a" >/dev/null 2>&1
+    echo "Player shown · top left"
+  else
+    [ "$pinned" = true ] && hypr "hl.dsp.window.pin({ window = \"address:$a\" })" "pin address:$a"   # (a pinned window does not move)
+    hypr "hl.dsp.window.move({ workspace = \"special:k4pip\", window = \"address:$a\", follow = false })" "movetoworkspacesilent special:k4pip,address:$a"
+    echo "Player hidden · audio keeps playing · Super+Alt+Y anywhere"
+  fi; }
+
+# ---------- what is known about a video ----------
+
+meta() {  # meta ID: title, channel, seconds, \037 between (a tab would let read merge empty ones)
+  awk -F'\t' -v id="$1" '$1 == id { t = $2; c = $3; d = $4 } END { printf "%s\037%s\037%s", t, c, d }' "$ST/meta.tsv" 2>/dev/null; }
+thumb() {  # thumb ID: the thumbnail's path once it is whole (fetched in the background meanwhile)
+  local f="$C/thumbs/$1.jpg"
+  if [ -s "$f" ]; then echo "$f"; return; fi
+  [ -e "$f.part" ] || setsid -f sh -c 'curl -fsSL --max-time 8 "https://i.ytimg.com/vi/$1/mqdefault.jpg" -o "$2.part" && mv "$2.part" "$2" || rm -f "$2.part"' _ "$1" "$f" >/dev/null 2>&1 </dev/null
+  echo ""; }
+
+# What was watched: newest first, each once, with where it stopped (time id position seconds).
+watched() {  # watched N
+  tac "$ST/history.log" 2>/dev/null | awk -F'\t' -v old="$(( $(date +%s) - KEEP_DAYS * 86400 ))" '$1 >= old && !seen[$2]++' | head -n "$1"; }
+compact() {  # the log keeps one line a video (its last) and 90 days
+  [ "$(wc -l < "$ST/history.log" 2>/dev/null || echo 0)" -gt 2000 ] || return 0
+  watched 100000 | tac > "$ST/history.log.new" && mv "$ST/history.log.new" "$ST/history.log"; }
+resume_at() {  # resume_at ID: where it stopped, when that is worth going back to (else nothing)
+  watched 100000 | awk -F'\t' -v id="$1" '$2 == id { if ($3 > 10 && ($4 == 0 || $3 < $4 * 0.95)) print int($3); exit }'; }
+
+# ---------- the window's data ----------
+
+# ---------- your home page (the recommendations), with the browser's YouTube session ----------
+
+browser() {  # the browser whose cookies yt-dlp reads: the state file, else the default browser
+  local b; b=$(cat "$ST/browser" 2>/dev/null)
+  [ -n "$b" ] && { echo "$b"; return; }
+  b=$(omarchy-cmd-default-browser 2>/dev/null || xdg-settings get default-web-browser 2>/dev/null)
+  case "$b" in
+    *brave*) echo brave ;; *google-chrome*) echo chrome ;; *chromium*) echo chromium ;; *vivaldi*) echo vivaldi ;;
+    *zen*) echo firefox ;; *firefox*|*librewolf*) echo firefox ;; *) echo chromium ;;
+  esac; }
+cookies_from() {  # what yt-dlp is told: Chromium's kind keep their key in the keyring, and yt-dlp guesses
+  # wrong outside GNOME and KDE (it then decrypts none of the newer cookies, the sign-in among them)
+  local b; b=$(browser)
+  case "$b" in *+*|firefox) echo "$b" ;; *) busctl --user status org.freedesktop.secrets >/dev/null 2>&1 && echo "$b+gnomekeyring" || echo "$b" ;; esac; }
+home_fetch() {  # the first 24 of the home page into home.tsv; home.state: ok, signedout or error, why
+  local out err n
+  err=$(mktemp)
+  out=$(timeout 90 yt-dlp --cookies-from-browser "$(cookies_from)" --flat-playlist -J --no-warnings --playlist-end 24 ":ytrec" 2>"$err")
+  if grep -q "secretstorage not available" "$err"; then   # the key is in the keyring: yt-dlp needs a module to ask it
+    printf 'error\t%s\n' "yt-dlp needs python-secretstorage to read $(browser)'s sign-in (sudo pacman -S python-secretstorage)" > "$C/home.state"; rm -f "$err"; return
+  fi
+  if [ -z "$out" ]; then
+    printf 'error\t%s\n' "$(clean "$(grep -m1 'ERROR' "$err" | sed 's/^ERROR: //' | head -c 200)")" > "$C/home.state"; rm -f "$err"; return
+  fi
+  rm -f "$err"
+  jq -r '.entries[]? | select(.id != null) | [.id, (.title // ""), (.channel // .uploader // ""), ((.duration // 0) | floor), (.view_count // 0)] | map(tostring | gsub("[\t\n\r]"; " ")) | @tsv' <<<"$out" > "$C/home.tsv.part"
+  n=$(wc -l < "$C/home.tsv.part")
+  if [ "$n" -eq 0 ]; then rm -f "$C/home.tsv.part"; printf 'signedout\t\n' > "$C/home.state"; return; fi
+  mv "$C/home.tsv.part" "$C/home.tsv"; cut -f1-4 "$C/home.tsv" >> "$ST/meta.tsv"
+  printf 'ok\t\n' > "$C/home.state"; }
+home_more() {  # the next 24 after the ones listed (the scroll reached the end); only ones not listed
+  # yet: the feed is new each time it is asked for, so this is "more", not "the next page"
+  local n out new
+  n=$(wc -l < "$C/home.tsv" 2>/dev/null || echo 0)
+  out=$(timeout 90 yt-dlp --cookies-from-browser "$(cookies_from)" --flat-playlist -J --no-warnings --playlist-start $((n + 1)) --playlist-end $((n + 24)) ":ytrec" 2>/dev/null)
+  new=$(jq -r '.entries[]? | select(.id != null) | [.id, (.title // ""), (.channel // .uploader // ""), ((.duration // 0) | floor), (.view_count // 0)] | map(tostring | gsub("[\t\n\r]"; " ")) | @tsv' <<<"$out" 2>/dev/null \
+    | awk -F'\t' 'NR == FNR { seen[$1] = 1; next } !seen[$1]++' "$C/home.tsv" -)
+  [ -n "$new" ] || { echo "No more right now · ^R fetches a new home page"; return; }
+  printf '%s\n' "$new" >> "$C/home.tsv"; printf '%s\n' "$new" | cut -f1-4 >> "$ST/meta.tsv"
+  while IFS=$'\t' read -r id _; do thumb "$id" >/dev/null; done <<<"$new"
+  echo "$(wc -l <<<"$new") more"; }
+home_maybe() {  # fetch it in the background when it is older than 30 minutes (once at a time)
+  local f="$C/home.state"
+  [ -e "$C/home.lock" ] && [ $(( $(date +%s) - $(stat -c %Y "$C/home.lock") )) -lt 120 ] && return
+  [ -e "$f" ] && [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 1800 ] && return
+  touch "$C/home.lock"
+  setsid -f bash -c '"$0" home-fetch; rm -f "$1"' "$SELF" "$C/home.lock" >/dev/null 2>&1 </dev/null; }
+
+versions() { printf '%s\t%s' "$(yt-dlp --version 2>/dev/null)" "$(mpv --version 2>/dev/null | awk 'NR == 1 { print $2 }')"; }
+data() {
+  local ok=ok note="" v
+  if [ -e "$C/installing" ]; then ok=installing
+  elif ! command -v mpv >/dev/null || ! command -v yt-dlp >/dev/null; then ok=missing
+  elif [ -s "$C/error" ]; then ok=$(head -1 "$C/error"); note=$(clean "$(sed -n 2p "$C/error" | head -c 300)"); fi
+  v=$(versions)
+  printf 'S\t%s\t%s\t%s\n' "$ok" "$note" "$v"
+  [ -s "$C/query" ] && printf 'Q\t%s\t%s\t%s\n' "$(clean "$(cat "$C/query")")" "$(wc -l < "$C/results.tsv" 2>/dev/null || echo 0)" "$(cat "$C/took" 2>/dev/null)"
+  local id t ch d views
+  while IFS=$'\037' read -r id t ch d views; do
+    printf 'V\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$t" "$ch" "$d" "$views" "$(thumb "$id")"
+  done < <(tr '\t' '\037' 2>/dev/null < "$C/results.tsv")
+  if [ ! -s "$C/query" ] && [ "$ok" = ok ]; then   # nothing searched: the home page
+    [ -e "$C/home.state" ] || home_maybe   # (none yet; a stale one is fetched again when the window opens, not under the scroll)
+    local hs hwhy; IFS=$'\t' read -r hs hwhy < "$C/home.state" 2>/dev/null
+    printf 'F\t%s\t%s\t%s\n' "${hs:-loading}" "$(browser)" "$hwhy"
+    while IFS=$'\037' read -r id t ch d views; do
+      printf 'W\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$t" "$ch" "$d" "$views" "$(thumb "$id")"
+    done < <(tr '\t' '\037' 2>/dev/null < "$C/home.tsv")
+  fi
+  if running; then
+    local r pause pos dur title hidden=shown pl
+    r=$(ipc '{"command":["get_property","playlist"],"request_id":1}' '{"command":["get_property","pause"],"request_id":2}' \
+            '{"command":["get_property","time-pos"],"request_id":3}' '{"command":["get_property","duration"],"request_id":4}' \
+            '{"command":["get_property","media-title"],"request_id":5}')
+    get() { jq -c --argjson n "$1" 'select(.request_id == $n) | .data' <<<"$r" 2>/dev/null; }
+    pl=$(get 1); pause=$(get 2); pos=$(get 3); dur=$(get 4); title=$(get 5 | jq -r '. // ""')
+    hidden && hidden=hidden
+    local i=0 cur="" f c
+    while IFS=$'\t' read -r f c; do
+      id=$(id_of "$f"); IFS=$'\037' read -r t ch d <<<"$(meta "$id")"
+      [ "$c" = true ] && { cur=$id; [ -n "$t" ] || t=$title; }
+      printf 'P\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$id" "$(clean "${t:-$f}")" "$ch" "$d" "$([ "$c" = true ] && echo 1 || echo 0)" "$(thumb "$id")"
+      i=$((i + 1))
+    done < <(jq -r '.[]? | "\(.filename)\t\(.current // false)"' <<<"$pl")
+    if [ -n "$cur" ]; then
+      IFS=$'\037' read -r t ch d <<<"$(meta "$cur")"
+      printf 'N\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$cur" "$(clean "${t:-$title}")" "$ch" "$([ "$pause" = true ] && echo pause || echo play)" \
+        "$(printf '%.0f' "${pos:-0}" 2>/dev/null || echo 0)" "$(printf '%.0f' "${dur:-0}" 2>/dev/null || echo 0)" "$hidden" "$(thumb "$cur")"
+    fi
+  fi
+  local ts p md
+  while IFS=$'\t' read -r ts id p d; do   # what you watched, newest first, where it stopped
+    IFS=$'\037' read -r t ch md <<<"$(meta "$id")"
+    [ "${d:-0}" -gt 0 ] || d=${md:-0}
+    printf 'H\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$ts" "$id" "$(clean "${t:-$id}")" "$ch" "${d:-0}" "$(thumb "$id")" "${p:-0}"
+  done < <(watched 40)
+  printf 'R\t%s act\nL\t%s data\n' "$SELF" "$SELF"; }
+
+# ---------- actions ----------
+
+search() {  # search QUERY: yt-dlp's first 24 (no key, no account), their thumbnails fetched meanwhile
+  local q="$*" out err t0
+  printf '%s' "$q" > "$C/query"; t0=$(date +%s%N)
+  err=$(mktemp)
+  if ! out=$(yt-dlp --flat-playlist -J --no-warnings "ytsearch24:$q" 2>"$err"); then
+    local why; why=$(grep -m1 -i 'error' "$err" | sed 's/^ERROR: //'); rm -f "$err"
+    if grep -qiE 'resol|unreachable|timed out|connection|network|offline' <<<"${why:-network}"; then printf 'offline\n%s\n' "${why:-yt-dlp could not reach YouTube}" > "$C/error"
+    else printf 'error\n%s\n' "${why:-yt-dlp failed}" > "$C/error"; fi
+    : > "$C/results.tsv"
+    echo "Search failed · $(clean "${why:-no connection}" | head -c 100)"; echo k4:tone yellow; return
+  fi
+  rm -f "$err" "$C/error"
+  jq -r '.entries[]? | select(.id != null) | [.id, (.title // ""), (.channel // .uploader // ""), ((.duration // 0) | floor), (.view_count // 0)] | map(tostring | gsub("[\t\n\r]"; " ")) | @tsv' <<<"$out" > "$C/results.tsv"
+  cut -f1-4 "$C/results.tsv" >> "$ST/meta.tsv"
+  local n took; n=$(wc -l < "$C/results.tsv"); took=$(awk -v d="$(( $(date +%s%N) - t0 ))" 'BEGIN { printf "%.1f", d / 1e9 }')
+  printf '%s' "$took" > "$C/took"
+  while IFS=$'\t' read -r id _; do thumb "$id" >/dev/null; done < "$C/results.tsv"
+  [ "$n" -gt 0 ] && echo "$n results · $took s" || echo "Nothing for “$q”"; }
+
+play() {  # play ID [resume]: now, from where it stopped when asked; the player started when it is not running
+  local id at=""; id=$(id_of "$1")
+  [ -n "$id" ] || { echo "Not a YouTube link"; echo k4:tone red; return; }
+  [ "${2:-}" = resume ] && at=$(resume_at "$id")
+  if running; then
+    if [ -n "$at" ]; then cmd loadfile "$(url_of "$id")" replace -1 "start=$at"; else cmd loadfile "$(url_of "$id")" replace; fi
+  else start "$(url_of "$id")" "$at"; fi
+  [ -n "$(meta "$id" | cut -d$'\037' -f1)" ] || printf '%s\t\t\t\n' "$id" >> "$ST/meta.tsv"
+  local m="Playing in the corner player"
+  [ -n "$at" ] && m="$m · resumes where you stopped"
+  hidden && m="$m · hidden, y shows it"
+  echo "$m"; }
+
+queue() {  # queue ID: after the rest (already playing or queued: says so)
+  local id; id=$(id_of "$1")
+  if ! running; then play "$id" >/dev/null; echo "Queued · plays now, the queue was empty"; return; fi
+  local pl cur at
+  pl=$(prop playlist | jq -c . 2>/dev/null)
+  cur=$(jq -r '[.[] | .current // false] | index(true) // 0' <<<"$pl" 2>/dev/null)
+  at=$(jq -r --arg u "$id" '[.[] | .filename | contains($u)] | index(true) // -1' <<<"$pl" 2>/dev/null)
+  if [ "${at:--1}" = "$cur" ]; then echo "Already playing"; return; fi
+  if [ "${at:--1}" -ge 0 ]; then echo "Already in the queue · $(nth $(( at - cur )))"; return; fi
+  cmd loadfile "$(url_of "$id")" append-play
+  [ -n "$(meta "$id" | cut -d$'\037' -f1)" ] || printf '%s\t\t\t\n' "$id" >> "$ST/meta.tsv"
+  echo "Queued · $(nth $(( $(prop playlist-count) - cur - 1 ))) up next"; }
+
+act() {
+  local verb="${1:-}"; shift || true
+  case "$verb" in
+    search) search "$@" ;;
+    home-more) home_more ;;
+    clear) rm -f "$C/query" "$C/results.tsv" "$C/error" "$C/took"; echo "Your home page" ;;
+    home) rm -f "$C/home.state"; home_fetch; IFS=$'\t' read -r hs _ < "$C/home.state"
+          case "$hs" in ok) echo "Home page · $(wc -l < "$C/home.tsv") videos" ;; signedout) echo "Not signed in to YouTube in $(browser)"; echo k4:tone yellow ;; *) echo "Could not fetch the home page"; echo k4:tone yellow ;; esac ;;
+    play) play "$1" "${2:-}"; echo k4:close ;;   # a video starts: the window goes (the player is the corner one)
+    queue) queue "$1" ;;
+    pause) running || { echo "Nothing playing"; return; }
+           cmd cycle pause; [ "$(prop pause)" = true ] && echo "Paused · the bar module shows ‖" || echo "Playing" ;;
+    next) running || { echo "Queue is empty"; return; }
+          local n c; n=$(prop playlist-count); c=$(prop playlist-pos)
+          if [ $(( c + 1 )) -ge "${n:-1}" ]; then echo "End of the queue · the player closes when this one ends"
+          else cmd playlist-next; sleep 0.2; echo "Next · $(clean "$(prop media-title)")"; fi ;;
+    prev) running || return
+          if [ "$(printf '%.0f' "$(prop time-pos)")" -gt 3 ]; then cmd seek 0 absolute; echo "From the start · p again within 3 s for the previous video"
+          else cmd playlist-prev; echo "Previous video"; fi ;;
+    jump) running && cmd playlist-play-index "$1"; echo k4:close ;;
+    remove) running && cmd playlist-remove "$1"; echo "Removed from the queue" ;;
+    browser) open_url "$(url_of "$1")"; running && cmd set pause yes; echo "Opened in the browser · the player pauses" ;;
+    pip) pip_toggle || echo "The player opens when something plays" ;;
+    close) running && cmd quit; echo "Stopped" ;;
+    forget) : > "$ST/history.log"; echo "History cleared" ;;
+    install) touch "$C/installing"   # the window shows it; the terminal asks for the password
+             tui_wait "$(install_cmd "yt-dlp mpv" "yt-dlp mpv")"
+             local n=0; while [ $n -lt 900 ] && ! { command -v yt-dlp && command -v mpv; } >/dev/null; do sleep 1; n=$((n + 1)); done
+             rm -f "$C/installing"
+             if available; then echo "yt-dlp installed · ready"; echo k4:tone green; else echo "Not installed · the terminal says why"; echo k4:tone red; fi ;;
+  esac; }
+
+# ---------- the Apps section, the launcher ----------
+
+available() { command -v mpv >/dev/null && command -v yt-dlp >/dev/null; }
+missing() {
+  notice "YouTube needs yt-dlp" "yt-dlp searches and fetches the videos (3 MB). mpv, the player, $(command -v mpv >/dev/null && echo "is already installed" || echo "comes with it"). No account, nothing to sign in to."
+  item "Install yt-dlp" "tui_wait $(printf %q "$(install_cmd "yt-dlp mpv" "yt-dlp mpv")")" "3 MB · ↵" "" "mark=↓;markc=accent"
+  item "What it does" "open_url https://github.com/yt-dlp/yt-dlp" "github.com/yt-dlp" "" "mark=?"; }
+ago_short() {  # today, yesterday, Mon, 12 Oct
+  local now=${EPOCHSECONDS:-$(date +%s)}
+  if [ "$(date -d "@$1" +%F)" = "$(date +%F)" ]; then echo today
+  elif [ "$(date -d "@$1" +%F)" = "$(date -d "@$(( now - 86400 ))" +%F)" ]; then echo yesterday
+  elif [ $(( now - $1 )) -lt $(( 7 * 86400 )) ]; then LC_ALL=C date -d "@$1" +%a
+  else LC_ALL=C date -d "@$1" '+%-d %b'; fi; }
+summary() {
+  if running; then local q; q=$(( $(prop playlist-count) - $(prop playlist-pos) - 1 )); echo "1 playing$([ "$q" -gt 0 ] && echo " · $q queued")"
+  else echo "nothing playing"; fi; }
+section() {
+  local w="bg $(printf %q "$SELF") window"
+  desc "$(running && echo "↵ on a video plays it in the corner player · a queues it" || echo "the corner player opens when a video starts")" "$(summary)" "Search YouTube…"
+  item "Search YouTube…" "$w" "opens the window · Super+Shift+Alt+Y" "" "mark=›;markc=accent"
+  local id t ch d ts p
+  if running; then
+    hints "↑↓" Move "↵" Run "⌫" Back
+    id=$(id_of "$(prop path)"); IFS=$'\037' read -r t ch d <<<"$(meta "$id")"
+    local pos dur pa; pos=$(printf '%.0f' "$(prop time-pos)" 2>/dev/null); dur=$(printf '%.0f' "$(prop duration)" 2>/dev/null); pa=$(prop pause)
+    card "$([ "$pa" = true ] && echo ‖ || echo ▶)" "$([ "$pa" = true ] && echo PAUSED || echo PLAYING)" "${t:-$(prop media-title)}" "$ch · $(mmss "${pos:-0}") / $(mmss "${dur:-0}")" "$(hidden && echo "hidden · audio keeps playing" || echo "in the corner player, top left")" "$([ "$pa" = true ] || echo 1)"
+    stay "$(hidden && echo "Show PiP" || echo "Hide PiP")" "$(printf %q "$SELF") act pip" "Super+Alt+Y · audio keeps playing" "" "mark=▭;markc=accent"
+    local n c; n=$(prop playlist-count); c=$(prop playlist-pos)
+    if [ $(( n - c - 1 )) -gt 0 ]; then
+      hdr "Up next" $(( n - c - 1 ))
+      id=$(id_of "$(prop "playlist/$(( c + 1 ))/filename")"); IFS=$'\037' read -r t ch d <<<"$(meta "$id")"
+      stay "${t:-$id}" "$(printf %q "$SELF") act next" "$(mmss "${d:-0}") · n plays it" "" "sub=  $(k4flag "$ch")$([ -s "$C/thumbs/$id.jpg" ] && echo ";thumb=$C/thumbs/$id.jpg")"
+    fi
+  else
+    hints "↑↓" Move "↵" Play "⌫" Back
+  fi
+  local n=0
+  while IFS=$'\t' read -r ts id p d; do
+    [ $n -eq 0 ] && hdr "Recent" "$(watched 5 | wc -l)"; n=$((n + 1))
+    IFS=$'\037' read -r t ch _ <<<"$(meta "$id")"
+    local when; when=$(ago_short "$ts")
+    [ -n "$(resume_at "$id")" ] && when="$(( ${p%.*} * 100 / (${d:-1} > 0 ? ${d:-1} : 1) ))% · $when"
+    item "${t:-$id}" "$(printf %q "$SELF") act play $(printf %q "$id") resume" "$when" "" "sub=  $(k4flag "$ch")$([ -s "$C/thumbs/$id.jpg" ] && echo ";thumb=$C/thumbs/$id.jpg")"
+  done < <(watched 5)
+  if ! running && [ $n -gt 0 ]; then
+    hdr "More"
+    item "History" "$w" "$(watched 100000 | wc -l) videos · kept $KEEP_DAYS days" "" "mark=»"
+    stay "Clear history" "$(printf %q "$SELF") act forget" ""
+  fi; }
+mmss() { local s=${1:-0}; [ "$s" -ge 3600 ] && printf '%d:%02d:%02d' $((s / 3600)) $((s / 60 % 60)) $((s % 60)) || printf '%d:%02d' $((s / 60)) $((s % 60)); }
+find_rows() {  # what you watched: typing 3 letters of its title (or channel) plays it again; under apps
+  local ts id p d t ch md w
+  while IFS=$'\t' read -r ts id p d; do
+    IFS=$'\037' read -r t ch md <<<"$(meta "$id")"
+    [ -n "$t" ] || continue
+    [ "${d:-0}" -gt 0 ] || d=${md:-0}
+    w="watched"; [ -n "$(resume_at "$id")" ] && w="watched $(( ${p%.*} * 100 / (${d:-1} > 0 ? ${d:-1} : 1) ))%"
+    item "$t" "$(printf %q "$SELF") act play $(printf %q "$id") resume" "$ch · $(mmss "${d:-0}") · $w" "" "search;words;min=3;rank=90;tag=YouTube;icon=󰗃;find=$(k4flag "$ch")"
+  done < <(watched 100); }
+
+window() {
+  pkill -f '^k4 --youtub[e]' && exit 0
+  compact
+  rm -f "$C/query" "$C/results.tsv" "$C/error" "$C/took"   # each time it opens: the home page
+  home_maybe
+  local pop=()
+  [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,${K4_BAR_SIDE:-right},${K4_BAR_POS:-top}")
+  data | k4 --youtube "${pop[@]}" >/dev/null; }
+
+case "${1:-}" in
+  window) window; exit 0 ;;
+  data) data; exit 0 ;;
+  act) shift; act "$@"; exit 0 ;;
+  play) play "${2:?url or id}"; exit 0 ;;
+  toggle) pip_toggle >/dev/null || window; exit 0 ;;
+  close) running && cmd quit; exit 0 ;;
+  find) find_rows; exit 0 ;;
+  home-fetch) home_fetch; exit 0 ;;
+esac
+k4_dispatch "$@"

@@ -102,9 +102,14 @@ bar() {  # the module: note, title · artist; paused dims; nothing playing hides
   t=$(jq -r '.Metadata.data["xesam:title"].data // ""' <<<"$j")
   a=$(jq -r '(.Metadata.data["xesam:artist"].data // []) | if type == "array" then join(", ") else . end' <<<"$j")
   [ -n "$t" ] && [ "$st" != Stopped ] || { echo '{}'; return; }
-  if [ "$st" = Playing ]; then jq -cn --arg t "$t" --arg a "$a" --arg p "$(name_of "$b")" '{icon: "󰝚", icon_tone: "accent", text: $t, text2: $a, tooltip: "\($t) — \($a) · \($p)"}'
-  else jq -cn --arg t "$t" --arg a "$a" --arg p "$(name_of "$b")" '{icon: "󰏤", text: $t, text2: $a, class: "dim", tooltip: "Paused · \($t) — \($a) · \($p)"}'; fi; }
+  local box=""   # k4-youtube's corner player hidden: a PiP HIDDEN box (the YouTubePip board)
+  is_pip "$b" && hyprctl -j clients 2>/dev/null | jq -e '.[] | select(.class == "k4-pip" and (.workspace.name | startswith("special:")))' >/dev/null && box="PiP HIDDEN"
+  if [ "$st" = Playing ]; then jq -cn --arg t "$t" --arg a "$a" --arg p "$(name_of "$b")" --arg box "$box" '{icon: "󰝚", icon_tone: "accent", text: $t, text2: $a, tooltip: "\($t) — \($a) · \($p)"} + (if $box != "" then {box: $box, box_tone: "yellow"} else {} end)'
+  else jq -cn --arg t "$t" --arg a "$a" --arg p "$(name_of "$b")" --arg box "$box" '{icon: "󰏤", text: $t, text2: $a, class: "dim", tooltip: "Paused · \($t) — \($a) · \($p)"} + (if $box != "" then {box: $box, box_tone: "yellow"} else {} end)'; fi; }
 NOTE_RUN="${XDG_RUNTIME_DIR:-/tmp}/k4-media"
+is_pip() {  # is_pip BUS: the player is k4-youtube's mpv in the corner
+  local pid; pid=$(busctl --user status "$1" 2>/dev/null | sed -n 's/^PID=//p')
+  [ -n "$pid" ] && tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q 'wayland-app-id=k4-pip'; }
 now_card() {  # now_card [quiet]: a card for a new track (one card, updated in place: every bar's follower posts the same id)
   local b j st t a art key id dnd
   b=$(active) || return 0
@@ -117,6 +122,7 @@ now_card() {  # now_card [quiet]: a card for a new track (one card, updated in p
   printf '%s' "$key" > "$NOTE_RUN/last"
   [ -n "${1:-}" ] && return 0                                       # the follower starting: no card for what already plays
   pgrep -f '^k4 --medi[a]' >/dev/null && return 0                   # the popup shows it
+  is_pip "$b" && ! hyprctl -j clients 2>/dev/null | jq -e '.[] | select(.class == "k4-pip" and (.workspace.name | startswith("special:")))' >/dev/null && return 0   # k4-youtube's corner player shows it
   [ $(( $(date +%s) - $(stat -c %Y "$NOTE_RUN/osd" 2>/dev/null || echo 0) )) -lt 3 ] && return 0   # the keys' box just did
   dnd=$(k4 --notify-ctl status 2>/dev/null | cut -f2); [ "$dnd" = 1 ] && return 0
   art=$(cover "$(jq -r '.Metadata.data["mpris:artUrl"].data // ""' <<<"$j")")
@@ -146,26 +152,35 @@ follow() {  # the module, then again after every burst of player changes; every 
     [ "$rc" -eq 0 ] && now_card
   done; }
 
-osd() {  # osd GLYPH TONE [SUB]: the track box (k4 --osd, track form)
-  local b j t a art
-  b=$(active) || return 0
+osd() {  # osd play|pause|next|prev: the track box (k4 --osd, the KOsd board's media kind, 2.5 s)
+  case "$(cat "$HOME/.local/state/k4/osd" 2>/dev/null)" in off|volume) return 0 ;; esac
+  local b j t a art pos len p=""
+  b=$(active) || { setsid -f k4 --osd "icon=󰝚|icon_tone=dim|label=Nothing playing|label_tone=soft|line=Media keys work once a player starts|edge=faint" >/dev/null 2>&1 </dev/null; return 0; }
   j=$(all "$b"); t=$(jq -r '.Metadata.data["xesam:title"].data // ""' <<<"$j")
   a=$(jq -r '(.Metadata.data["xesam:artist"].data // []) | if type == "array" then join(", ") else . end' <<<"$j")
   art=$(cover "$(jq -r '.Metadata.data["mpris:artUrl"].data // ""' <<<"$j")")
+  len=$(jq -r '.Metadata.data["mpris:length"].data // 0' <<<"$j"); pos=$(jq -r '.Position.data // 0' <<<"$j")
+  [ "${len:-0}" -gt 0 ] 2>/dev/null && p=$(( pos * 1000 / len ))
   [ -n "$t" ] || t=$(name_of "$b")
+  local sub=playing st=accent tile=accent glyph="$1" fill=1 tone=accent edge=accent
+  case "$1" in
+    pause) sub=paused st=dim tile=line fill=0 tone=soft edge=faint ;;
+    next) sub=next ;;
+    prev) sub="from the start" ;;
+  esac
   mkdir -p "$NOTE_RUN"; : > "$NOTE_RUN/osd"   # the card stays away for a moment
-  setsid -f k4 --osd "󰝚|-1||$1|$2||${t//|/ }||${3:-${a//|/ }}|$art" >/dev/null 2>&1 </dev/null; }
+  setsid -f k4 --osd "${art:+art=$art|}icon=󰝚|tile=$tile|label=${t//|/ }|label_tone=$([ "$1" = pause ] && echo soft || echo fg)|sub=$sub|sub_tone=$st|line=${a//|/ }${a:+ · }$(name_of "$b")|line_tone=soft|glyph=$glyph|glyph_fill=$fill|glyph_tone=$tone|edge=$edge${p:+|prog=$p}|prog_tone=$([ "$1" = pause ] && echo faint || echo accent)|hold=2500" >/dev/null 2>&1 </dev/null; }
 ctl() {  # the media keys and the bar's clicks: Omarchy's own when the k4 bar is not running
   local b
   if ! pgrep -f '^k4 --bar' >/dev/null && command -v omarchy-shell >/dev/null; then
     case "$1" in play-pause) exec omarchy-shell media playPause ;; next) exec omarchy-shell media next ;; previous) exec omarchy-shell media previous ;; esac
   fi
-  b=$(active) || exit 0
+  b=$(active) || { osd none; exit 0; }
   case "$1" in
     play-pause) call "$b" PlayPause; sleep 0.15
-                if [ "$(status "$b")" = Playing ]; then osd "󰐊" accent; else osd "󰏤" dim "paused"; fi ;;
-    next) call "$b" Next; sleep 0.35; osd "󰒭" accent ;;
-    previous) call "$b" Previous; sleep 0.35; osd "󰒮" accent ;;
+                if [ "$(status "$b")" = Playing ]; then osd play; else osd pause; fi ;;
+    next) call "$b" Next; sleep 0.35; osd next ;;
+    previous) call "$b" Previous; sleep 0.35; osd prev ;;
   esac; }
 
 window() {
