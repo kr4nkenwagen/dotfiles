@@ -265,13 +265,31 @@ def week_start():
 
 # ---------- notifications ----------
 
-def post(title, body, acts, image="", tag="", warn=False, ident="0"):
+def post(title, body, acts, image="", tag="", kind="1", ident="0", stays=False):
+    """A card (KNote's wow-* kinds): kind 1, warn (yellow), wait (the edge lit: a raid) or done (the tag green)."""
     if FAKE:
-        with open(os.path.join(FAKE, "posts.log"), "a") as f: f.write("%s | %s | %s | %s\n" % (title, body, acts, image))
+        with open(os.path.join(FAKE, "posts.log"), "a") as f:
+            f.write("%s | %s | %s | %s%s\n" % (title, body, acts, image, (" | %s %s" % (kind, tag)) if tag or kind != "1" else ""))
         return
-    line = "\t".join(["post", ident, "WoW", field(title), field(body)[:300], "warn" if warn else "1", "-1", "-1", tag, "󰺵", "",
+    line = "\t".join(["post", ident, "WoW", field(title), field(body)[:300], kind, "-1", "0" if stays else "-1", tag, "", "",
                       acts, "%s note" % FRONT] + ([image] if image else []))
     subprocess.run(["k4", "--notify-ctl", line], capture_output=True, timeout=5)
+
+
+def newest():
+    """The character played last (the companion's newest "seen"), or {}."""
+    return max(chars(), key=lambda c: int(c.get("seen") or 0), default={})
+
+
+def rested_pct(c):
+    xm = int(c.get("xpMax") or 0)
+    return int(int(c.get("rested") or 0) * 100 / xm) if xm else -1
+
+
+def short_name(name):
+    """"Molten Core" → "MC", "Onyxia" → "Onyxia" (the bar's raid)."""
+    w = [x for x in re.split(r"[\s’']+", name) if x and x[0].isalpha()]
+    return "".join(x[0].upper() for x in w) if len(w) >= 2 else name
 
 
 def note(key, card):
@@ -281,6 +299,9 @@ def note(key, card):
         with open(shot, "rb") as f: subprocess.run(["wl-copy", "--type", "image/png"], stdin=f)
     elif key == "folder": subprocess.Popen(["xdg-open", os.path.dirname(shot) if shot else os.path.join(flavor_dir(), "Screenshots")], start_new_session=True)
     elif key == "play": play()
+    elif key == "snooze":   # the raid night's card again in 5 min
+        done = jload(os.path.join(STATE, "said.json"), {})
+        if "last_raid" in done: done["snooze"] = [done["last_raid"], now() + 300]; jsave(os.path.join(STATE, "said.json"), done)
     elif key in ("default", "open"): subprocess.Popen(["setsid", "-f", FRONT, "window"])
 
 
@@ -340,7 +361,15 @@ def screenshot(path):
         pic = os.path.join(CACHE, "shots", os.path.splitext(os.path.basename(path))[0] + ".png")
         subprocess.run(["ffmpeg", "-v", "quiet", "-y", "-i", path, pic])
     jsave(os.path.join(STATE, "cards.json"), {"last": pic})
-    post("Screenshot", os.path.basename(path), "copy:Copy,folder:Open folder,default:", image=pic)
+    c = newest()
+    title = "Screenshot" + (" · %s" % c["name"] if c.get("name") else "") + (" in %s" % c["zone"] if c.get("zone") else "")
+    size = ""
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", pic],
+                           capture_output=True, text=True, timeout=10)
+        size = r.stdout.strip().replace("x", " × ")
+    except (OSError, subprocess.TimeoutExpired): pass
+    post(title, os.path.basename(path) + (" · " + size if size else ""), "copy:Copy,folder:Open folder,default:", image=pic)
 
 
 # ---------- Blizzard's API ----------
@@ -419,8 +448,14 @@ def world(force=False):
     except PermissionError: out["why"] = "noclient"
     except (urllib.error.URLError, OSError, TimeoutError) as e: out["why"] = "offline"; out["note"] = field(e)[:80]
     old = {r["name"]: r["status"] for r in w.get("realms", [])}
-    for r in out["realms"]:   # a realm back up: say so
-        if old.get(r["name"]) == "DOWN" and r["status"] == "UP": post("%s is up again" % r["name"], "The realm is back", "play:Play,default:")
+    since = w.get("down_since", {})
+    out["down_since"] = {}
+    for r in out["realms"]:   # a realm back up: say so, with how long it was down
+        if r["status"] == "DOWN": out["down_since"][r["name"]] = since.get(r["name"]) or now()
+        elif old.get(r["name"]) == "DOWN" and r["status"] == "UP":
+            body = ("Down %s" % span(now() - since[r["name"]])) if since.get(r["name"]) else "It is back"
+            post("%s is back up" % r["name"], body + (" · queue" if r.get("queue") else ""), "play:Play,default:", tag="UP", kind="done")
+    if out.get("why"): out["down_since"] = since
     jsave(path, out)
     return out
 
@@ -663,18 +698,45 @@ def tick():
     t = now()
     r = next_reset(t)
     if 0 < r - t <= 3600 and done.get("reset") != r:
-        open_ = [l["name"] for c in chars() for l in (c.get("lockouts") or []) if l.get("raid") and int(l.get("killed", 0)) < int(l.get("bosses", 1))]
-        post("Weekly reset in %s" % span(r - t), ("Still open: " + ", ".join(sorted(set(open_)))) if open_ else "Lockouts, cooldowns and the vendor reset", "play:Play,default:")
+        post("Weekly reset in %s" % span(r - t), reset_body(), "play:Play,dismiss:Dismiss,default:", tag="RESET " + dt.datetime.fromtimestamp(r).strftime("%H:%M"), kind="warn")
         done["reset"] = r
+    sn = done.get("snooze")
     for i, rd in enumerate(raids()):
         s = raid_next(rd, t)
-        if 0 < s - t <= 900 and done.get("raid%d" % i) != s:
-            post("%s in %s" % (rd["name"], span(s - t)), "Raid night · %s %s" % (rd["day"].title(), rd["time"]), "play:Launch WoW,default:")
-            done["raid%d" % i] = s
+        again = sn and sn[0] == i and sn[1] <= t
+        if (0 < s - t <= 900 and done.get("raid%d" % i) != s) or again:
+            post("Raid night · %s" % rd["name"], raid_body(), "play:Launch WoW,snooze:Snooze 5 min,skip:Can’t make it,default:", tag=rd["time"], kind="wait", stays=True)
+            if not again: done["raid%d" % i] = s
+            done["last_raid"] = i
+            if again: done.pop("snooze", None)
     jsave(os.path.join(STATE, "said.json"), done)
     if running() and not FAKE:   # (started from Battle.net, not k4: the watch starts here; it keeps one at a time)
         subprocess.Popen(["setsid", "-f", sys.executable, "-I", SELF, "watch"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if blizzard_client() or FAKE: world()
+
+
+def reset_body():
+    """The reset card's line: "2 raids still open: Molten Core 7/10, Onyxia 0/1 · Elowen. Transmute: Arcanite is ready, too."""
+    c = newest()
+    t = now()
+    open_ = ["%s %d/%d" % (l["name"], int(l.get("killed", 0)), int(l.get("bosses", 0))) for l in (c.get("lockouts") or [])
+             if l.get("raid") and int(l.get("killed", 0)) < int(l.get("bosses", 1))]
+    ready = [k["name"] for k in (c.get("cooldowns") or []) if int(k.get("ready") or 0) <= t]
+    body = ("%d raid%s still open: %s · %s" % (len(open_), "" if len(open_) == 1 else "s", ", ".join(open_), c.get("name", ""))) if open_ else "Lockouts, cooldowns and the vendor reset"
+    if ready: body += ". %s is ready, too." % ready[0]
+    return body
+
+
+def raid_body():
+    """The raid card's line: "on Elowen · rested 80 % · Silverpine queue"."""
+    c = newest()
+    parts = ["on %s" % c["name"]] if c.get("name") else []
+    rp = rested_pct(c)
+    if rp > 0: parts.append("rested %d %%" % min(rp, 150))
+    w = jload(os.path.join(CACHE, "world.json"), {})
+    parts += ["%s queue" % r["name"] for r in w.get("realms", []) if r.get("queue")]
+    parts += ["%s is down" % r["name"] for r in w.get("realms", []) if r.get("status") == "DOWN"]
+    return " · ".join(parts) or "Launch WoW to be there for invites"
 
 
 # ---------- what k4 shows ----------
@@ -728,21 +790,30 @@ def data():
 
 
 def bar():
+    """The bar module (BarModWow): gold in yellow; a dot for a cooldown ready; the realm's queue or
+    down; while playing the session time and the character; 30 min before a raid night, the raid."""
     cs = chars()
     if not cs: print("{}"); return
+    t = now()
     gold = sum(int(c.get("gold") or 0) for c in cs)
-    ready = [k["name"] for c in cs for k in (c.get("cooldowns") or []) if int(k.get("ready") or 0) <= now()]
+    ready = [k["name"] for c in cs for k in (c.get("cooldowns") or []) if int(k.get("ready") or 0) <= t]
     w = jload(os.path.join(CACHE, "world.json"), {})
     down = [r["name"] for r in w.get("realms", []) if r.get("status") == "DOWN"]
     queue = [r["name"] for r in w.get("realms", []) if r.get("queue")]
-    out = {"icon": "󰺵", "text": gold_short(gold), "tooltip": "WoW · %s across %d characters%s%s · reset in %s" % (
-        money(gold), len(cs), (" · %d cooldowns ready" % len(ready)) if ready else "", (" · " + ", ".join(down) + " down") if down else "", span(next_reset() - now()))}
+    out = {"icon": "󰺵", "text": gold_short(gold), "text_tone": "yellow", "tooltip": "WoW · %s across %d characters%s%s · reset in %s" % (
+        money(gold), len(cs), (" · %s ready" % ", ".join(ready)) if ready else "", (" · " + ", ".join(down) + " down") if down else "", span(next_reset() - t))}
+    if ready: out["pill"] = "•"
+    if down: out.update(icon_tone="red", text2="down", text2_tone="red", text2_bold=True)
+    elif queue: out.update(icon_tone="yellow", text2="queue", text2_tone="yellow")
     if running():
-        a = max((a for a, b in sessions() if b >= now() - 5), default=0)
-        if a: out["text2"] = span(now() - a)
-    if ready: out["badge"] = len(ready)
-    if down: out["icon_tone"] = "red"
-    elif queue: out["icon_tone"] = "yellow"
+        a = max((a for a, b in sessions() if b >= t - 5), default=0)
+        if a:
+            el = int(t - a)
+            out.update(icon_tone="accent", text="%d:%02d" % (el // 3600, el // 60 % 60), text_tone="", text2=newest().get("name", ""), text2_tone="", text2_bold=False)
+    soon = sorted((raid_next(r, t), r) for r in raids() if 0 < raid_next(r, t) - t <= 1800)
+    if soon:
+        s_, r = soon[0]
+        out.update(icon_tone="accent", text="%s %s" % (short_name(r["name"]), r["time"]), text_tone="accent", text2="in %d m" % ((s_ - t + 59) // 60), text2_tone="", text2_bold=False)
     print(json.dumps(out, ensure_ascii=False))
 
 
@@ -752,18 +823,28 @@ def find():
 
 
 def info():
-    """The Apps page's: S state played-today played-week reset companion running · C chars · W realms/token · A addons"""
+    """The Apps page (AppsWow): S state today week reset-in companion running reset-unix · C name realm
+    class level gold seen rested-% cooldown-ready · W realms, token, why · A addons updates · D the next
+    raid night · F screenshots folder, combat log."""
     w = jload(os.path.join(CACHE, "world.json"), {})
-    print("S\t%s\t%d\t%d\t%d\t%d\t%d" % (state_of(), played_since(today_start()), played_since(week_start()), next_reset() - now(), companion_installed(), running()))
-    for c in chars():
-        print("C\t%s\t%s\t%s\t%d\t%s\t%d" % (field(c.get("name")), field(c.get("realm")), field(c.get("className")), int(c.get("level") or 0), money(c.get("gold")), int(c.get("seen") or 0)))
+    t = now()
+    print("S\t%s\t%d\t%d\t%d\t%d\t%d\t%d" % (state_of(), played_since(today_start()), played_since(week_start()), next_reset() - t, companion_installed(), running(), next_reset()))
+    for c in sorted(chars(), key=lambda c: -int(c.get("seen") or 0)):
+        cd = any(int(k.get("ready") or 0) <= t for k in (c.get("cooldowns") or []))
+        print("C\t%s\t%s\t%s\t%d\t%s\t%d\t%d\t%d" % (field(c.get("name")), field(c.get("realm")), field(c.get("className")), int(c.get("level") or 0),
+                                                gold_short(int(c.get("gold") or 0)), int(c.get("seen") or 0), rested_pct(c), 1 if cd else 0))
     for r in w.get("realms", []): print("W\trealm\t%s\t%s\t%d" % (field(r["name"]), r["status"], r["queue"]))
-    if w.get("token"): print("W\ttoken\t%s" % money(w["token"]))
+    if w.get("token"): print("W\ttoken\t%s" % gold_short(int(w["token"])))
     if w.get("why"): print("W\twhy\t%s" % w["why"])
-    for a in addons(): print("A\t%s\t%s\t%s\t%s\t%s" % (a["folder"], field(a["title"]), field(a["version"]), a["source"], a["update"]))
-    for i, r in enumerate(raids()): print("D\t%d\t%s\t%s\t%s\t%d" % (i, r["day"], r["time"], field(r["name"]), raid_next(r)))
-    sr = jload(os.path.join(CACHE, "search.json"), {})
-    for h in sr.get("hits", []): print("H\t%s\t%s\t%s\t%s\t%s" % (h["source"], h["id"], h["name"], h["summary"], field(sr.get("q"))))
+    ads = addons() if state_of() == "ok" else []
+    print("A\t%d\t%d" % (len(ads), sum(1 for x in ads if x["update"])))
+    nxt = sorted((raid_next(r, t), r) for r in raids())
+    if nxt: print("D\t%s\t%s\t%s\t%d" % (dt.datetime.fromtimestamp(nxt[0][0]).strftime("%a"), nxt[0][1]["time"], field(nxt[0][1]["name"]), len(nxt)))
+    if state_of() == "ok":
+        shots = os.path.join(flavor_dir(), "Screenshots")
+        log = os.path.join(flavor_dir(), "Logs", "WoWCombatLog.txt")
+        size = os.path.getsize(log) if os.path.exists(log) else 0
+        print("F\t%s\t%s" % (shots.replace(HOME, "~", 1), ("WoWCombatLog.txt · %d MB" % (size // 1048576)) if size else "no combat log yet"))
 
 
 def act(verb, a):

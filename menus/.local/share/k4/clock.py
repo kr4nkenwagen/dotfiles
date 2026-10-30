@@ -226,7 +226,7 @@ def resync(s=None):
 
 def post(title, body, acts, urgency, ident=0):
     if FAKE: log("post %s | %s | %s" % (title, body, acts)); return 0
-    line = "\t".join(["post", str(ident), "Clock", field(title), field(body), urgency, "-1", "0", "RINGING", "󰥔", "", acts, FRONT + " note"])
+    line = "\t".join(["post", str(ident), "Clock", field(title), field(body), urgency, "-1", "0", "RINGING", "", "", acts, FRONT + " note"])
     r = subprocess.run(["k4", "--notify-ctl", line], capture_output=True, text=True, timeout=5)
     try: return int(r.stdout.strip() or 0)
     except ValueError: return 0
@@ -294,7 +294,7 @@ def fire(kind, ident):
         label = a.get("label") or "Alarm"
         sub = "%s · louder over 30 s, stops by itself after 10 min." % rep_of(a.get("days") or "0000000").capitalize()
         s["ringing"] = {"kind": "alarm", "id": a["id"], "label": label, "since": t, "at": "%02d:%02d" % (a["h"], a["m"])}
-        s["ringing"]["card"] = post("%02d:%02d · %s" % (a["h"], a["m"], label), sub, "snooze:Snooze 9 min,stop:Stop", "2")
+        s["ringing"]["card"] = post("%02d:%02d · %s" % (a["h"], a["m"], label), sub, "snooze:Snooze 9 min,stop:Stop", "wait")
     save(s); resync(s); sound_start()
 
 

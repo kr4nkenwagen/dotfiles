@@ -72,14 +72,26 @@ def api(method, url, body=None, query=None): return GOOGLE.request(method, url, 
 
 
 def wow_reset():
-    """" · WoW reset in 2 d 4 h" when World of Warcraft is here (k4-wow's wow.py), else ""."""
-    if os.environ.get("K4_CAL_DIR"): return ""
+    """"CW <unix> <YYYY-MM-DD> <HH:MM>": World of Warcraft's next weekly reset when the game is
+    here (k4-wow's wow.py; K4_CAL_WOW_RESET=unix in tests), else ""."""
+    t = os.environ.get("K4_CAL_WOW_RESET")
     try:
-        import wow
-        if wow.state_of() != "ok": return ""
-        return " · WoW reset in %s" % wow.span(wow.next_reset() - wow.now())
+        if not t:
+            if os.environ.get("K4_CAL_DIR"): return ""
+            import wow
+            if wow.state_of() != "ok": return ""
+            t = wow.next_reset()
+        t = int(t)
+        return "CW\t%d\t%s" % (t, time.strftime("%Y-%m-%d\t%H:%M", time.localtime(t)))
     except Exception:
         return ""
+
+
+def wow_calendar():
+    """The id of k4-wow's raid nights calendar (it names and colours it), else ""."""
+    try:
+        with open(os.path.join(HOME, ".local/state/k4/wow/calendar.json")) as f: return json.load(f).get("id", "")
+    except (OSError, ValueError): return ""
 
 
 def q(s): return urllib.parse.quote(s, safe="")
@@ -234,11 +246,16 @@ def k4():
     if not connected and not os.environ.get("K4_CAL_DIR") and not have_client(): print("CS\tsetup\tnot set up")
     elif not connected: print("CS\tnone\tnot connected")
     elif st.get("offline"): print("CS\toffline\toffline · cached %s" % time.strftime("%H:%M", time.localtime(st.get("synced", 0))))
-    elif st.get("synced"): print("CS\tok\tsynced %s%s" % (time.strftime("%H:%M", time.localtime(st["synced"])), wow_reset()))
+    elif st.get("synced"): print("CS\tok\tsynced %s" % time.strftime("%H:%M", time.localtime(st["synced"])))
     else: print("CS\tsync\t↻ syncing…")
     print("CX\t%s" % SELF)
+    w = wow_reset()
+    if w: print(w)
+    wc = wow_calendar()
     for c in cals:
-        print("CC\t%s\t%s\t%s\t%s\t%d\t%d" % (c["id"], c["name"], c["tone"], c["acct"], 1 if c.get("on", True) else 0, 1 if c.get("ro") else 0))
+        name, tone, acct = c["name"], c["tone"], c["acct"]
+        if wc and c["id"] == wc: name, tone, acct = "WoW raid nights", "wow", "from k4 · KWow"
+        print("CC\t%s\t%s\t%s\t%s\t%d\t%d" % (c["id"], name, tone, acct, 1 if c.get("on", True) else 0, 1 if c.get("ro") else 0))
     for e in load("events.json", []):
         flags = []
         if e.get("own"): flags.append("own")
