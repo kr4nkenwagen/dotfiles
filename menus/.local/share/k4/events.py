@@ -34,7 +34,7 @@ import datetime as dt, email, email.policy, email.utils, glob, hashlib, json, os
 HOME = os.path.expanduser("~")
 SHARE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SHARE)
-import k4host   # where this runs: the desktop, or the Pi (cards to the outbox, no Discord, no game to yield to)
+import k4host   # where this runs: the desktop, or the Pi (cards to the outbox, Discord as the desktop relays it, no game to yield to)
 STATE = os.environ.get("K4_EVENTS_STATE") or os.path.join(HOME, ".local/state/k4/events")
 FAKE = os.environ.get("K4_EVENTS_FAKE")
 FRONT = os.environ.get("K4_EVENTS_FRONT") or shutil.which("k4-events") or "k4-events"
@@ -115,12 +115,12 @@ def messenger_items(seen, since):
 
 
 def discord_items(seen, since):
-    if k4host.pi_mode(): return []   # Discord is read from the desktop's running app: not on the Pi
+    # the desktop's Discord app (discord.py watch): its DMs and mentions; on the Pi, a copy k4-pi pull sends there
     p = os.path.join(FAKE, "discord.json") if FAKE else os.path.join(HOME, ".local/state/k4/discord/state.json")
     out = []
     for n in jload(p, {}).get("log", []):
         k = "discord:%s:%d" % (n.get("open", ""), n.get("at", 0))
-        if n.get("at", 0) <= since or k in seen: continue
+        if n.get("at", 0) <= since - 3600 or k in seen: continue   # an hour back: on the Pi a DM arrives with the next pull, after its scan
         out.append({"id": k, "source": "discord", "who": n.get("title", ""), "subject": "", "at": n["at"], "text": n.get("body", ""), "open": n.get("open", "")})
     return out
 

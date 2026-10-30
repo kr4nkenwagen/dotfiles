@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# k4-hub: the Pi's API for the k4 phone launcher (k4hub.py in ~/.local/share/k4): HTTPS on :8740,
+# a token per paired device, a self-signed certificate the phone pins. Runs as k4-hub.service.
+#   k4-hub serve | pair NAME [HOST] | unpair NAME | devices | service (install and start the unit)
+PY="$HOME/.local/share/k4/k4hub.py"
+case "${1:-}" in
+  service)
+    d="$HOME/.config/systemd/user"; mkdir -p "$d"
+    printf '[Unit]\nDescription=k4 hub: the phone launcher API\nAfter=network-online.target\n\n[Service]\nEnvironment=PATH=%%h/.local/bin:/usr/local/bin:/usr/bin:/bin\nExecStart=/usr/bin/python3 -I %%h/.local/share/k4/k4hub.py serve\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n' > "$d/k4-hub.service"
+    systemctl --user daemon-reload && systemctl --user enable --now k4-hub.service && echo "k4-hub is running on :8740" ;;
+  pair) shift; code=$(python3 -I "$PY" pair "$@") || exit 1
+        echo "$code"; command -v qrencode >/dev/null && qrencode -t ANSIUTF8 "$code" ;;
+  *) exec python3 -I "$PY" "$@" ;;
+esac

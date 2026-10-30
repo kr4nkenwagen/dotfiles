@@ -8,7 +8,11 @@ it replaces in k4: same keyring entry (secret-tool, application=kr4nk.openwrt), 
   k4-router open [PAGE]         the Router window (a bar click: under the module; again: closes it)
   k4-router bar [--follow]      the bar module: clients, the WAN rate in the tooltip
   k4-router data                what k4 --router reads (polls when the last poll is old)
+  k4-router json                the same for the phone (k4-hub /api/router), as JSON
   k4-router log                 the router's syslog, newest first: T time level text
+  k4-router home                exit 0 when this machine is on the router's LAN itself (not through
+                                a tunnel, not another network with the same address): the router's
+                                MAC answers the router's address on a non-tunnel interface
   k4-router do VERB ARGS        reboot · radio NAME on|off · copy TEXT · password (K4_INPUT)
                                 · retry · luci · wanip   (the last line is k4's footer)
 
@@ -59,18 +63,27 @@ def save_state(st):
     os.replace(tmp, STATE)
 
 
-# ---------- the keyring (the plugin's entry) ----------
+# ---------- the keyring (the plugin's entry); on the Pi, k4-secret's file store (token router) ----------
 def secret_get():
-    try:
-        r = subprocess.run(["secret-tool", "lookup", "application", "kr4nk.openwrt"], capture_output=True, text=True, timeout=5)
-        return r.stdout if r.returncode == 0 else ""
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
+    for cmd in (["secret-tool", "lookup", "application", "kr4nk.openwrt"], ["k4-secret", "lookup", "token", "router"]):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if r.returncode == 0 and r.stdout:
+                return r.stdout
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    return ""
 
 
 def secret_set(user, pw):
-    r = subprocess.run(["secret-tool", "store", "--label", "OpenWrt Router", "application", "kr4nk.openwrt", "username", user],
-                       input=pw, capture_output=True, text=True, timeout=10)
+    try:
+        r = subprocess.run(["secret-tool", "store", "--label", "OpenWrt Router", "application", "kr4nk.openwrt", "username", user],
+                           input=pw, capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            return True
+    except OSError:
+        pass
+    r = subprocess.run(["k4-secret", "store", "token", "router"], input=pw, capture_output=True, text=True, timeout=10)
     return r.returncode == 0
 
 
@@ -275,6 +288,9 @@ def fetch(cfg, st, now):
 
     wan = next((i for i in ifaces if i.get("interface") == "wan"), None)
     lan = next((i for i in ifaces if i.get("interface") == "lan"), None)
+    lan_mac = (devs.get((lan or {}).get("l3_device") or (lan or {}).get("device") or "br-lan") or {}).get("mac", "")
+    if lan_mac:  # what `home` matches the neighbour entry against
+        st["lan_mac"] = lan_mac.lower()
     wan_up = bool(wan and wan.get("up"))
     wan_ip = ((wan or {}).get("ipv4-address") or [{}])[0].get("address", "") if wan else ""
     stats = (devs.get((wan or {}).get("l3_device") or (wan or {}).get("device") or "wan") or devs.get("wan") or {}).get("stats", {})
@@ -349,6 +365,49 @@ def fetch(cfg, st, now):
     st["clients"] = clients
 
 
+# ---------- on the home network? ----------
+def tunnel(dev):
+    """WireGuard, tun and other links without an Ethernet address."""
+    try:
+        with open("/sys/class/net/%s/type" % dev) as f:
+            return f.read().strip() != "1"
+    except OSError:
+        return True
+
+
+def neigh(host, dev):
+    out = subprocess.run(["ip", "neigh", "show", host, "dev", dev], capture_output=True, text=True, timeout=3).stdout.split()
+    return out[out.index("lladdr") + 1].lower() if "lladdr" in out else ""
+
+
+def home():
+    """True when the router's address is on a local, non-tunnel subnet and its MAC answers there.
+    Routing is ignored on purpose: a tunnel's policy routes can't hide the LAN."""
+    host = settings()["routerHost"]
+    try:
+        addrs = subprocess.run(["ip", "-4", "-o", "addr"], capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    for l in addrs.splitlines():
+        f = l.split()
+        if len(f) < 4 or f[1] == "lo" or tunnel(f[1]) or "/" not in f[3]:
+            continue
+        addr, mask = f[3].split("/")
+        net = ip_net(addr, mask)
+        if not net or not in_net(host, net) or host == addr:
+            continue
+        mac = neigh(host, f[1])
+        if not mac:  # nothing cached yet: one ping fills it
+            subprocess.run(["ping", "-c1", "-W1", "-I", f[1], host], capture_output=True, timeout=3)
+            mac = neigh(host, f[1])
+        if not mac:
+            continue
+        want = load_state().get("lan_mac") or poll(force=True).get("lan_mac")
+        if want and mac == want:
+            return True
+    return False
+
+
 # ---------- what k4 reads ----------
 def clean(s):
     return str(s).replace("\t", " ").replace("\n", " ")
@@ -356,6 +415,14 @@ def clean(s):
 
 def line(*f):
     print("\t".join(clean(x) for x in f))
+
+
+def as_json():
+    """What the phone reads (k4-hub /api/router): the poll's state as JSON, without the session token."""
+    st = poll()
+    out = {k: st.get(k) for k in ("status", "host", "last_seen", "reboot_at", "err", "sys", "wan", "hist", "radios", "clients", "pending")}
+    out["now"] = int(time.time())
+    print(json.dumps(out))
 
 
 def data():
@@ -580,6 +647,8 @@ def main():
     a = sys.argv[1:] or ["open"]
     if a[0] == "data":
         data()
+    elif a[0] == "json":
+        as_json()
     elif a[0] == "log":
         log()
     elif a[0] == "bar":
@@ -590,6 +659,8 @@ def main():
         do_card(a[1], a[2] if len(a) > 2 else "open")
     elif a[0] == "open":
         open_window(a[1] if len(a) > 1 else "")
+    elif a[0] == "home":
+        sys.exit(0 if home() else 1)
     elif a[0] == "poll":
         poll(force=True)
     else:

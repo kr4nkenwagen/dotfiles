@@ -57,7 +57,7 @@ case "${1:-}" in
   window) shift; window "${1:-}" "${2:-}"; exit 0 ;;
   data) r data; exit 0 ;;
   act) shift; r act "$@"; exit 0 ;;
-  tick|find) r "$1"; exit 0 ;;
+  tick|find|refresh) r "$1"; exit 0 ;;   # (refresh: the lists only, no cards; the Pi's timer)
   card) shift; r card "$@"; exit 0 ;;
 esac
 k4_dispatch "$@"

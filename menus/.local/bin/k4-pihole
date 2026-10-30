@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+K4_NAME=k4-pihole K4_ID=pihole K4_TITLE="Pi-hole" K4_KEY=H K4_ICON=󰒃 K4_DESC="Your Pi-hole and unbound: watched, paused, allowed and blocked"
+# k4-pihole: your Pi-hole v6 (kr4nkenhole) and the unbound behind it in k4: the Apps page (blocking,
+# unbound, the query log, adlists and gravity, your allow/deny entries), the bar module (blocked today;
+# OFF while paused; red when DNS is down) and cards when something changes. pihole.py in
+# ~/.local/share/k4 does the work; k4-pihole.timer asks every minute (tick).
+#   k4-pihole window          the popup (k4 --pihole, the KPihole board): under the bar item, else alone
+#   k4-pihole tick | bar [--follow] | find | page | status | window-data
+#   k4-pihole pause SECONDS|0 | resume | toggle | allow|block DOMAIN | unlist TYPE KIND DOMAIN
+#   k4-pihole list-toggle ADDRESS | gravity | restart-unbound | restart-dns | setup-password | trust
+#   k4-pihole setup-host     once, in a terminal: lets k4 read unbound's stats and restart it (sudo asks there)
+. "$HOME/.local/share/k4/lib.sh"
+launch_row() { :; }
+SELF=$(command -v k4-pihole || echo "$0")
+PY="$HOME/.local/share/k4/pihole.py"
+export K4_PIHOLE_FRONT="$SELF"
+p() { python3 -I "$PY" "$@"; }
+HOST=$(jq -r '.host // "kr4nkenhole"' "$HOME/.config/k4/pihole.json" 2>/dev/null || echo kr4nkenhole)
+
+timer() {  # every minute, once the page has been opened
+  local d="$HOME/.config/systemd/user"
+  [ -e "$d/k4-pihole.timer" ] && return
+  mkdir -p "$d"
+  printf '[Unit]\nDescription=k4 Pi-hole: watch it\n\n[Service]\nType=oneshot\nExecStart=%s tick\n' "$SELF" > "$d/k4-pihole.service"
+  printf '[Unit]\nDescription=k4 Pi-hole every minute\n\n[Timer]\nOnBootSec=1min\nOnUnitActiveSec=1min\nAccuracySec=10s\n\n[Install]\nWantedBy=timers.target\n' > "$d/k4-pihole.timer"
+  systemctl --user daemon-reload && systemctl --user enable --now k4-pihole.timer >/dev/null 2>&1; }
+
+setup_host() {  # sudoers on the Pi-hole for exactly what k4 runs there (unbound's stats, restarting it)
+  local u; u=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$HOST" whoami 2>/dev/null) && [ -n "$u" ] || { echo "ssh $HOST with your key doesn’t work yet · ssh-copy-id $HOST first"; return 1; }
+  local line="$u ALL=(root) NOPASSWD: /usr/sbin/unbound-control stats_noreset, /usr/sbin/unbound-control status, /usr/bin/systemctl restart unbound, /usr/bin/systemctl restart pihole-FTL"
+  echo "On $HOST, /etc/sudoers.d/k4-unbound will allow only:"; echo "  $line"
+  ssh -t "$HOST" "echo $(printf %q "$line") | sudo tee /etc/sudoers.d/k4-unbound.tmp >/dev/null && sudo chmod 440 /etc/sudoers.d/k4-unbound.tmp && sudo visudo -cf /etc/sudoers.d/k4-unbound.tmp && sudo mv /etc/sudoers.d/k4-unbound.tmp /etc/sudoers.d/k4-unbound && echo done" || return 1
+  python3 -I -c "import json,os;p=os.path.expanduser('~/.cache/k4/pihole/state.json');s=json.load(open(p));s['unbound_at']=0;json.dump(s,open(p,'w'))" 2>/dev/null
+  p tick >/dev/null; echo "k4 reads unbound now · Apps › Pi-hole"; }
+
+window() {  # again: closes it
+  pkill -f '^k4 --pihol[e]' && exit 0
+  [ -z "${K4_PIHOLE_FAKE:-}" ] && timer
+  local pop=()
+  [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,${K4_BAR_SIDE:-right},${K4_BAR_POS:-top}")
+  p window-data | k4 --pihole "${pop[@]}" >/dev/null; }
+
+available() { :; }
+summary() { p status | sed 's/^ok$/watching/'; }
+section() {  # Apps › Pi-hole: the popup first, then the page's rows
+  [ -z "${K4_PIHOLE_FAKE:-}" ] && timer
+  p page | awk -v id="$(k4id "bg $(printf %q "$SELF") window")" 'NR == 3 { print "A\t" id "\tOpen Pi-hole\tthe popup · Super+Alt+P\t\tmark=›;markc=accent" } { print }'; }
+
+case "${1:-}" in
+  window) window; exit 0 ;;
+  tick|bar|find|page|status|window-data) p "$@"; exit 0 ;;
+  toggle) p toggle; exit 0 ;;   # the bar's right click: pause 5 min / resume, said on the item itself
+  ssh-setup) tui_wait "ssh-copy-id $(printf %q "$HOST") && $(printf %q "$SELF") setup-host" & echo "Setting up ssh to $HOST in a terminal"; exit 0 ;;
+  admin) open_url "https://$HOST/admin/${2:-}"; echo "Opened $HOST/admin${2:+/$2}"; exit 0 ;;
+  keep-cert|set-host|restart-ftl) p "$@"; exit 0 ;;
+  pause|resume|allow|block|unlist|list-toggle|restart-unbound|restart-dns|setup-password|trust) p "$@"; exit 0 ;;
+  gravity) p gravity; exit 0 ;;   # (every line: the popup streams them)
+  card) shift; p card "$@"; exit 0 ;;
+  setup-host) setup_host; exit $? ;;
+esac
+k4_dispatch "$@"

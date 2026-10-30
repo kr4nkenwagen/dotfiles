@@ -446,14 +446,27 @@ vpn_gui() {
   local id; id=$(ls /usr/share/applications 2>/dev/null | grep -i -m1 forticlient | sed 's/\.desktop$//')
   if [ -n "$id" ]; then bg gtk-launch "$id"; else notify "VPN" "FortiClient GUI desktop entry not found"; fi
 }
-leaves_vpn() { local p="${1:-}" n
-  command -v forticlient >/dev/null || { add "󰖂  ${p}FortiClient not installed" 'notify VPN "forticlient command not found"'; return; }
-  # connect runs in the background: FortiClient brings up its own GUI for the login
-  while IFS= read -r n; do [ -n "$n" ] && add "󰖂  ${p}Connect: $n" "bg forticlient vpn connect $(printf %q "$n"); notify VPN $(printf %q "Connecting to $n")"; done < <(vpn_profiles)
-  add "󰖂  ${p}Connect in terminal (shows CLI output)" "tui $(printf %q "$SELF") vpn-pick"
-  add "󰖂  ${p}Disconnect ($(vpn_state))" 'forticlient vpn disconnect >/dev/null 2>&1; notify VPN "Disconnected"'
-  add "󰖂  ${p}Status" vpn_status
-  add "󰖂  ${p}FortiClient GUI" vpn_gui; }
+# WireGuard: NetworkManager's wireguard connections. Never up on the home network (k4-router home:
+# the OpenWrt router answers on this machine's own LAN); k4-bar brings one down there.
+wg_list() { nmcli -t -f NAME,TYPE,ACTIVE connection show 2>/dev/null | awk -F: '$2 == "wireguard" { print $1 "\t" $3 }'; }
+wg_home() { command -v k4-router >/dev/null && k4-router home; }
+wg_toggle() {  # wg_toggle NAME: down when up; up unless on the home network
+  if nmcli -t -f NAME,TYPE connection show --active 2>/dev/null | grep -qxF "$1:wireguard"; then nmcli connection down "$1" >/dev/null 2>&1; notify WireGuard "$1 disconnected"
+  elif wg_home; then notify WireGuard "On the home network · $1 stays off"
+  else bg nmcli connection up "$1"; notify WireGuard "Connecting to $1"; fi; }
+vpn_any() { command -v forticlient >/dev/null || [ -n "$(wg_list)" ]; }
+vpn_desc() { local f="" w=""; command -v forticlient >/dev/null && f="FortiClient profiles"; [ -n "$(wg_list)" ] && w="WireGuard tunnels"
+  printf '%s' "$f${f:+${w:+ · }}$w"; }
+leaves_vpn() { local p="${1:-}" n a
+  if command -v forticlient >/dev/null; then
+    # connect runs in the background: FortiClient brings up its own GUI for the login
+    while IFS= read -r n; do [ -n "$n" ] && add "󰖂  ${p}Connect: $n" "bg forticlient vpn connect $(printf %q "$n"); notify VPN $(printf %q "Connecting to $n")"; done < <(vpn_profiles)
+    add "󰖂  ${p}Connect in terminal (shows CLI output)" "tui $(printf %q "$SELF") vpn-pick"
+    add "󰖂  ${p}Disconnect ($(vpn_state))" 'forticlient vpn disconnect >/dev/null 2>&1; notify VPN "Disconnected"'
+    add "󰖂  ${p}Status" vpn_status
+    add "󰖂  ${p}FortiClient GUI" vpn_gui
+  fi
+  while IFS=$'\t' read -r n a; do [ -n "$n" ] && add "󰖂  ${p}WireGuard $([ "$a" = yes ] && echo Disconnect || echo Connect): $n" "wg_toggle $(printf %q "$n")"; done < <(wg_list); }
 vpn_pick() {  # fzf over profiles, in the floating terminal
   local n; n=$(vpn_profiles | fzf --prompt 'VPN ❯ ' --header 'enter: connect · esc: cancel') || exit 0
   [ -n "$n" ] && vpn_connect "$n"
@@ -821,7 +834,7 @@ k4_meta() { case "$1" in
   weather) echo "Weather|W|One fetch, shown as rows|󰖐" ;;
   setup) echo "Setup|E|Configure the machine|󰒓" ;;
   config) echo "Config|F|Config files in ~/.config, opened in \$EDITOR|" ;;
-  vpn) echo "VPN|V|FortiClient profiles|󰖂" ;;
+  vpn) echo "VPN|V|$(vpn_desc)|󰖂" ;;
   bookmarks) echo "Bookmarks|K|From managed Chrome · read-only|󰃀" ;;
   install) echo "Install|I|Add or remove software|󰏖" ;;
   update) echo "Update|U|Keep everything current|󰚰" ;;
@@ -830,6 +843,7 @@ k4_meta() { case "$1" in
   esac; }
 k4_tree() { local s name key desc icon
   for s in "${K4_SECTIONS[@]}"; do
+    [ "$s" = vpn ] && ! vpn_any && continue   # neither FortiClient nor a WireGuard tunnel
     IFS='|' read -r name key desc icon <<<"$(k4_meta "$s")"
     printf 'S\t%s\t%s\t%s\t%s\t%s\n' "$s" "$name" "$key" "$desc" "$icon"
     printf 'L\t%q k4-section %s\n' "$SELF" "$s"
@@ -967,9 +981,29 @@ k4_pages() { case "$1" in   # the P/F records of a section (printed after it, so
          page timezone Timezone "Setting it asks for sudo in a terminal" ;;
   install) page nerdfonts "Nerd Fonts" "Latest release; installs in the background"
            page webapps "Web apps" "Enter removes the launcher from Apps" ;;
+  toggle) page baritems "Bar items" "Each module on the bar, on or off · the bar restarts with the change" ;;
   system) page calendar Calendar "The month with ISO weeks · ← → steps the month"
           [ -n "$(ls -d /sys/class/power_supply/BAT* 2>/dev/null)" ] && page battery Battery "Charge, time left, power and profile" ;;
   esac; }
+# ---------- Toggles › Bar items: each module of the k4 bar on or off (k4-bar items / hide) ----------
+bar_items_page() {
+  local -A only=([dnd]="only while on" [night]="only while on" [rec]="only while recording" [awake]="only while on" [reminder]="a meeting soon"
+    [calsync]="only when the calendar can't sync" [share]="only while sending" [drives]="only with a drive in" [pin0]="a tray app you pin"
+    [pin1]="a tray app you pin" [pin2]="a tray app you pin" [updates]="only with updates" [battery]="only on a laptop" [brightness]="only on a laptop")
+  local -A head=([left]="Left" [center]="Centre" [status]="Status" [apps]="Apps" [info]="Info" [sound]="Sound" [net]="Network" [system]="System" [-]="Other")
+  local id name side g st part last="" n_off=0 rows
+  rows=$(k4-bar items 2>/dev/null)
+  n_off=$(grep -c $'	off$' <<<"$rows")
+  desc "Each module on the bar · Space or ↵ switches it · the bar restarts with the change" "$([ "$n_off" -gt 0 ] && echo "$n_off hidden" || echo "all on")" "Search bar items…"
+  hints "↑↓" Move "Space" "On / off" "⌫" Back
+  while IFS=$'\t' read -r id name side g st; do
+    [ -n "$id" ] || continue
+    part=$([ "$side" = right ] && echo "$g" || echo "$side")
+    if [ "$part" != "$last" ]; then hdr "${head[$part]:-$part}"; last=$part; fi
+    tog "$name" "k4-bar hide $(printf %q "$id") toggle" "$st" "${only[$id]:-}"
+  done <<<"$rows"
+  if [ "$n_off" -gt 0 ]; then hdr "More"; stay "Show all" "k4-bar hide all-on" "$n_off hidden" "mark=↺;markc=accent"; fi; }
+
 # ---------- the bar's Wi-Fi and Bluetooth popups (the Kestrel design, 424×524) ----------
 kbind() { printf 'KB\t%s\t%s\n' "$1" "$(k4id "$2")"; }   # kbind KEY ACTION: a letter in the popup runs ACTION
 wifi_dev() { nmcli -t -f DEVICE,TYPE dev 2>/dev/null | awk -F: '$2 == "wifi" { print $1; exit }'; }
@@ -1323,6 +1357,7 @@ k4_page() { local p="$1"; shift
   net-wifi) net_page wifi ;;
   wifi-qr) wifi_qr_page "$@" ;;
   bt) bt_popup ;;
+  baritems) bar_items_page ;;
   ls-trusted) local fp alias n=0
     hdr "Trusted devices · they send without asking"
     while IFS=$'\t' read -r fp alias; do [ -n "$fp" ] || continue; n=$((n + 1))
@@ -1899,6 +1934,8 @@ k4_section() { local s="$1" rec="Start"; [ "$s" = capture ] && recording && rec=
         command -v k4-events >/dev/null && fresh events 60 k4-events find   # event suggestions: ↵ adds one to the calendar
         command -v k4-parcels >/dev/null && fresh parcels 120 k4-parcels find   # parcels by shop, carrier or number
         command -v k4-todo >/dev/null && fresh todo 60 k4-todo find   # open todos (Google Tasks): ↵ ticks one off
+        command -v k4-pihole >/dev/null && fresh pihole 30 k4-pihole find   # Pause / Resume ad blocking
+        command -v k4-jellyfin >/dev/null && fresh jellyfin 600 k4-jellyfin find   # Jellyfin's movies (↵ plays) and shows (↵ their episodes)
         command -v k4-discord >/dev/null && fresh discord 300 k4-discord find   # Discord: text channels open, voice channels join
         command -v k4-clock >/dev/null && k4-clock find   # cities (their time; ↵ adds one to Clock) and the Clock's tabs
         command -v k4-youtube >/dev/null && fresh youtube 300 k4-youtube find   # what you watched: search plays it again
@@ -1946,6 +1983,9 @@ k4_section() { local s="$1" rec="Start"; [ "$s" = capture ] && recording && rec=
             choice "Bar position" 'bar_pref bar-position' "$(bar_pref_now bar-position Top)" "Top|Bottom"
             choice "Bar background" 'bar_pref bar-background' "$(bar_pref_now bar-background Opaque)" "Opaque|Transparent"
             choice "Bar items" 'bar_pref bar-items' "$(bar_pref_now bar-items Full)" "Full|Icons"
+            tog "Group bar items" 'k4-bar groups toggle >/dev/null; notify "Status bar" "Group bar items $(cat "$STATE/bar-groups")"' "$(cat "$STATE/bar-groups" 2>/dev/null || echo off)" "the right side as Status · Apps · Info · Network · System"
+            n_off=$(grep -c . "$STATE/bar-hidden" 2>/dev/null); n_off=${n_off:-0}
+            item "Bar items" : "$([ "$n_off" -gt 0 ] && echo "$n_off hidden" || echo "all on")" baritems
             choice "On-screen display" osd_pref "$(osd_pref_now)" "On|Off|Volume only"
           fi
           tog "Starfield" 'starfield-toggle >/dev/null; notify Starfield "$(starfield-toggle status)"' "$(starfield-toggle status 2>/dev/null || echo on)"
@@ -2072,18 +2112,25 @@ k4_section() { local s="$1" rec="Start"; [ "$s" = capture ] && recording && rec=
          item "Autostart" "tui nvim +/^#\\ Autostart $(printf %q "$SWAY_CONFIG")"
          item "Edit $WM config" "tui nvim $(printf %q "$WM_CONFIG")"
          item "Reload $WM" 'wm_reload' "Super+Ctrl+R" ;;
-  vpn) local n on
+  vpn) local n on a home="" wg
        if command -v forticlient >/dev/null; then
          on=$(vpn_state)
          hdr "Profiles · Enter connects"
          while IFS= read -r n; do [ -n "$n" ] && tog "Connect: $n" "vpn_profile_toggle $(printf %q "$n")" "$on" "$([ "$on" = on ] && echo connected)"; done < <(vpn_profiles)
+         hdr "More"
+         item "Connect in terminal" "tui $(printf %q "$SELF") vpn-pick"
+         item "FortiClient GUI" vpn_gui
+         stay "Disconnect" 'forticlient vpn disconnect >/dev/null 2>&1; notify VPN Disconnected'
+         item "Status" vpn_status "$(vpn_state | sed 's/on/connected/; s/off/disconnected/')"
+         item "Add profile…" vpn_gui
        fi
-       hdr "More"
-       item "Connect in terminal" "tui $(printf %q "$SELF") vpn-pick"
-       item "FortiClient GUI" vpn_gui
-       stay "Disconnect" 'forticlient vpn disconnect >/dev/null 2>&1; notify VPN Disconnected'
-       item "Status" vpn_status "$(command -v forticlient >/dev/null && vpn_state | sed 's/on/connected/; s/off/disconnected/' || echo 'not installed')"
-       item "Add profile…" vpn_gui ;;
+       wg=$(wg_list)
+       if [ -n "$wg" ]; then
+         wg_home && home=1
+         hdr "WireGuard${home:+ · off on the home network}"
+         while IFS=$'\t' read -r n a; do [ -n "$n" ] && tog "$n" "wg_toggle $(printf %q "$n")" "$([ "$a" = yes ] && echo on || echo off)" \
+           "$([ "$a" = yes ] && echo connected || { [ -n "$home" ] && echo "home network"; })" "${home:+dim}"; done <<<"$wg"
+       fi ;;
   bookmarks) local url title path n=0
              while IFS=$'\t' read -r url title path; do [ -n "$url" ] && { item "${path:+$path › }$title" "open_url $(printf %q "$url")"; n=$((n+1)); }; done < <(bookmarks_list)
              [ "$n" -gt 0 ] || item "No managed bookmarks found" ':' ;;
@@ -2137,7 +2184,7 @@ main_menu() {
   reset
   local s
   add "󰀻  Apps" 'bg fz'
-  for s in "${sections[@]}"; do add "$(section_icon "$s")  $(section_title "$s")" "submenu $s"; done
+  for s in "${sections[@]}"; do [ "$s" = vpn ] && ! vpn_any && continue; add "$(section_icon "$s")  $(section_title "$s")" "submenu $s"; done
   add "󰋽  About" about
   local top=${#L[@]}
   # Leaves and apps come after the sections. Showing only $top rows keeps them out of

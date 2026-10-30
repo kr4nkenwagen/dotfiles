@@ -27,6 +27,12 @@
       login-start            the cookie login's instructions
       login-cookies          the cookies ($K4_INPUT: JSON, "name=value; …" or a "Copy as cURL")
       note KEY ID            a card's button (reply: the text in $K4_INPUT)
+      send-file ROOM PATH [W H]   a photo (JPEG/PNG) to the chat
+    JSON, for k4-hub (the phone):
+      j-rooms                {state, account, note, unread, seq, rooms: [{id, name, unread, ts, who, last, group, mine, members}]}
+      j-messages ROOM LIMIT  {room, name, group, messages: [{id, ts, who, sender, mine, kind, text, w, h}]}; marks it read
+      j-events SINCE         {seq, events: [{seq, type: message|read, room, ...}]}: what happened after SINCE (a ring of 500)
+      j-media EVENT thumb|full   {path, mime}: the preview or the whole file (j-messages showed the message first)
 
 Messages never leave this machine except through the bridge to Messenger; Messenger's cookies are
 handed to the bridge (which keeps them in its database), never stored by k4. Meta may ask to
@@ -126,7 +132,13 @@ def secret_put(kind, value):
 
 def bridge_secret():
     """provisioning.shared_secret from the bridge's config: the JSON setup wrote, or the YAML the
-    bridge rewrites it as on its first start (no YAML module needed for one key)."""
+    bridge rewrites it as on its first start (no YAML module needed for one key). With the bridge on
+    the Pi (k4-pi messenger), the Pi's secret, which k4-pi put in pi-prov-secret."""
+    try:
+        with open(os.path.join(CONF, "pi-prov-secret")) as f:
+            s = f.read().strip()
+            if s: return s
+    except OSError: pass
     try:
         text = open(os.path.join(CONF, "meta.yaml")).read()
     except OSError:
@@ -218,11 +230,14 @@ def hs_config(registration):
 def first_user_token():
     """continuwuity's one-time token for the first account: printed in its log at start (the
     configured token works only once an account exists)."""
-    try:
-        out = subprocess.run(["journalctl", "--user", "-u", "k4-matrix.service", "-n", "5000", "--no-pager", "-o", "cat"],
-                             capture_output=True, text=True, timeout=20).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
+    out = ""
+    # the user's own journal; where it isn't kept (Raspberry Pi OS) the system journal has it, for adm
+    for args in (["--user", "-u", "k4-matrix.service"], ["_SYSTEMD_USER_UNIT=k4-matrix.service"]):
+        try:
+            out = subprocess.run(["journalctl", *args, "-n", "5000", "--no-pager", "-o", "cat"], capture_output=True, text=True, timeout=20).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if "registration token" in out: break
     out = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", out)  # the log is coloured: the token comes wrapped in escape codes
     found = re.findall(r"using the registration token (\S+?) ?\.", out)
     return found[-1] if found else ""
@@ -383,6 +398,7 @@ class Service:
         self._waiting = (0, 0)  # (when counted, how many encrypted chats wait for a message)
         self.fetching, self.fetch_q = set(), queue.Queue()  # previews asked for (once a run)
         self._status = None
+        self.seq, self.ring = int(time.time() * 1000), []  # (seq starts at the time: a restarted daemon never repeats one)
         self.load_cache()
 
     # the conversations survive a restart (the list shows at once)
@@ -492,12 +508,16 @@ class Service:
                 summ = jr.get("summary", {})
                 if "m.joined_member_count" in summ and "members" not in room: room["group"] = summ["m.joined_member_count"] > 3
                 un = jr.get("unread_notifications", {})
+                was = room["unread"]
                 if "notification_count" in un: room["unread"] = un["notification_count"]
                 for e in jr.get("timeline", {}).get("events", []):
                     if e.get("type") not in ("m.room.message", "m.sticker") or "body" not in e.get("content", {}): continue
                     mine = e.get("sender") in self.me
                     room.update(ts=e.get("origin_server_ts", 0) // 1000, last=msg_text(e), last_sender=e.get("sender", ""), last_mine=mine)
-                    if not first and not mine: new.append((rid, e))
+                    if not first:
+                        if not mine: new.append((rid, e))
+                        self.happened(dict(self.msg_json(rid, e, room["names"]), type="message", room=rid, name=room["name"], group=room["group"], unread=room["unread"]))
+                if not first and was and not room["unread"]: self.happened({"type": "read", "room": rid})
                 self.settle(room)
             if self.open_room and time.time() - self.open_seen < 8 and self.open_room in self.rooms:
                 self.rooms[self.open_room]["unread"] = 0  # the window shows it: read
@@ -525,6 +545,50 @@ class Service:
                 self.settle(room)
             self.save_cache()
 
+    def happened(self, ev):  # (under the lock) one more for j-events
+        self.seq += 1
+        ev["seq"] = self.seq
+        self.ring = self.ring[-499:] + [ev]
+
+    def msg_json(self, rid, e, names):
+        c, s = e.get("content", {}), e.get("sender", "")
+        info = c.get("info") or {}
+        if kind_of(e) in ("image", "video") and str(c.get("url", "")).startswith("mxc://"):
+            with self.lock: self.media[e.get("event_id", "")] = (c["url"], info.get("mimetype", ""), c.get("body", ""))
+        return {"id": e.get("event_id", ""), "ts": e.get("origin_server_ts", 0) // 1000, "who": names.get(s, s.split(":")[0].lstrip("@")),
+                "sender": s, "mine": s in self.me, "kind": kind_of(e), "text": msg_text(e),
+                "w": info.get("w", 0), "h": info.get("h", 0)}
+
+    def messages_json(self, rid, limit):
+        st, r = http("GET", HS + "/_matrix/client/v3/rooms/%s/messages?dir=b&limit=%d&filter=%s" % (
+            q(rid), limit, q('{"lazy_load_members":true}')), token=self.token)
+        if st != 200: return []
+        names = dict(self.rooms.get(rid, {}).get("names", {}))
+        for e in r.get("state", []):
+            if e.get("type") == "m.room.member" and e.get("content", {}).get("displayname"): names[e["state_key"]] = e["content"]["displayname"]
+        return [self.msg_json(rid, e, names) for e in reversed(r.get("chunk", []))
+                if e.get("type") in ("m.room.message", "m.sticker") and "body" in e.get("content", {})]
+
+    def send_file(self, rid, path, w=0, h=0):
+        mime = mimetypes.guess_type(path)[0] or "image/jpeg"
+        with open(path, "rb") as f: data = f.read()
+        req = urllib.request.Request(HS + "/_matrix/media/v3/upload?filename=" + q(os.path.basename(path)), data=data, method="POST")
+        req.add_header("Content-Type", mime)
+        req.add_header("Authorization", "Bearer " + self.token)
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r: mxc = json.loads(r.read()).get("content_uri", "")
+        except (urllib.error.URLError, OSError, ValueError) as e: return "Could not upload: %s" % e
+        if not mxc: return "Could not upload"
+        info = {"mimetype": mime, "size": len(data)}
+        if w and h: info.update(w=int(w), h=int(h))
+        st, r = http("PUT", HS + "/_matrix/client/v3/rooms/%s/send/m.room.message/k4-%s" % (q(rid), secrets.token_hex(8)),
+                     {"msgtype": "m.image", "body": os.path.basename(path), "url": mxc, "info": info}, self.token)
+        if st != 200: return "Could not send: %s" % r.get("error", st)
+        with self.lock:
+            if rid in self.rooms: self.rooms[rid].update(ts=int(time.time()), last="[photo]", last_sender=ME, last_mine=True)
+        self.mark_read(rid)
+        return "Sent"
+
     def settle(self, room):  # the name (when the chat has none) and group from who is in it
         others = [n for u, n in (room.get("members") or room["names"]).items() if u not in self.me and u != BOT]
         if "members" in room: room["group"] = len(others) > 1
@@ -532,6 +596,7 @@ class Service:
             room["name"] = ", ".join(others[:3]) + (" +%d" % (len(others) - 3) if len(others) > 3 else "") or room["name"] or "Conversation"
 
     def card(self, rid, e):
+        if on_pi(): return
         with self.lock:
             room = self.rooms.get(rid)
             if not room: return
@@ -702,6 +767,40 @@ class Service:
         if c == "more":
             with self.lock: self.limit = min(self.limit + 40, 400)
             return "ok\n"
+        if c == "j-rooms":
+            with self.lock:
+                order = sorted(self.rooms.items(), key=lambda kv: -kv[1]["ts"])
+                rooms = [{"id": rid, "name": r["name"], "unread": r["unread"], "ts": r["ts"],
+                          "who": r["names"].get(r["last_sender"], "") if r["group"] and not r["last_mine"] else "",
+                          "last": r["last"], "group": bool(r["group"]), "mine": bool(r["last_mine"]), "members": self.others(r)} for rid, r in order]
+                return json.dumps({"state": self.state, "account": self.account, "note": self.note, "unread": self.unread(),
+                                   "waiting": self.waiting() if self.state in ("ok", "error") else 0, "seq": self.seq, "rooms": rooms}) + "\n"
+        if c == "j-messages" and args:
+            rid, limit = args[0], min(int(args[1]) if len(args) > 1 and args[1].isdigit() else 40, 400)
+            msgs = self.messages_json(rid, limit)
+            if self.rooms.get(rid, {}).get("unread"): self.mark_read(rid)
+            room = self.rooms.get(rid, {})
+            return json.dumps({"room": rid, "name": room.get("name", ""), "group": bool(room.get("group")), "members": self.others(room) if room else [], "messages": msgs}) + "\n"
+        if c == "j-events":
+            since = int(args[0]) if args and args[0].isdigit() else 0
+            with self.lock: return json.dumps({"seq": self.seq, "events": [e for e in self.ring if e["seq"] > since]}) + "\n"
+        if c == "j-media" and args:
+            with self.lock: m = self.media.get(args[0])
+            if not m: return json.dumps({"error": "That message is not shown any more"}) + "\n"
+            url, mime, body = m
+            try:
+                if len(args) > 1 and args[1] == "thumb":
+                    path = os.path.join(MEDIA, media_key(url) + ".thumb")
+                    if not os.path.exists(path): self.make_preview(url, "video" if mime.startswith("video/") else "image", mime, body)
+                    if not os.path.exists(path): return json.dumps({"error": "No preview"}) + "\n"
+                    with open(path, "rb") as f: head = f.read(4)
+                    return json.dumps({"path": path, "mime": "image/jpeg" if head.startswith(b"\xff\xd8") else "image/png"}) + "\n"
+                path = self.download(url, mime, body)
+            except (OSError, ValueError, urllib.error.URLError, httplib.HTTPException, subprocess.SubprocessError) as e:
+                return json.dumps({"error": "Could not fetch it: %s" % e}) + "\n"
+            return json.dumps({"path": path, "mime": mime or mimetypes.guess_type(path)[0] or "application/octet-stream"} if path else {"error": "Too big (over 200 MB)"}) + "\n"
+        if c == "send-file" and len(args) >= 2:
+            return self.send_file(args[0], args[1], *(args[2:4] if len(args) >= 4 else ())) + "\n"
         if c == "send" and args:
             text = "\t".join(args[1:]) or inp
             return (self.send(args[0], text) if text.strip() else "Nothing to send") + "\n"
@@ -807,6 +906,12 @@ def kind_of(e):
     return {"m.image": "image", "m.video": "video", "m.audio": "audio", "m.file": "file", "m.emote": "emote"}.get(t, "text")
 
 
+def on_pi():  # the Pi (k4-pi messenger): no k4 there to show cards; the phone gets its own through k4-hub
+    try:
+        with open(os.path.join(HOME, ".config/k4/host")) as f: return f.read().strip() == "pi"
+    except OSError: return False
+
+
 def not_ready():
     """No token: never set up, or set up and the keyring not open yet (after a reboot)."""
     if os.path.exists(os.path.join(CONF, "meta.yaml")): return "starting", "The keyring is locked"
@@ -866,6 +971,7 @@ def main():
         return
     if a[0] == "daemon": return daemon()
     if a[0] == "ctl": return ctl(a[1:])
+    if a[0] == "prov-secret": sys.stdout.write(bridge_secret()); return   # (k4-pi messenger pipes it to the desktop)
     if a[0] == "parse-cookies": print(json.dumps(parse_cookies(sys.stdin.read()))); return  # tests
     print(__doc__.strip(), file=sys.stderr); sys.exit(2)
 

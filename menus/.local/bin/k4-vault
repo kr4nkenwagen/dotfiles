@@ -20,7 +20,7 @@ export PASSWORD_STORE_DIR="$STORE"
 REPO="${K4_VAULT_REPO:-kr4nkenwagen/pass}"
 KEYFILE="$STORE/.vault/gpg-key.asc.gpg"
 M=machine
-FILES=(.config/k4/google-client.json .config/k4/keymap .local/state/k4/bus.json .config/aerc/accounts.conf .config/k4/blizzard-client.json .config/k4/wow .local/state/k4/wow/raids.json .local/state/k4/wow/addons.json .local/state/k4/wow/sessions.tsv .local/state/k4/clock/state.json .config/k4/discord-client.json .local/state/k4/parcels.json .local/state/k4/events/suggestions.json .local/state/k4/releases/follow.json)
+FILES=(.config/k4/google-client.json .config/k4/keymap .local/state/k4/bus.json .config/aerc/accounts.conf .config/k4/blizzard-client.json .config/k4/wow .local/state/k4/wow/raids.json .local/state/k4/wow/addons.json .local/state/k4/wow/sessions.tsv .local/state/k4/clock/state.json .config/k4/discord-client.json .local/state/k4/parcels.json .local/state/k4/events/suggestions.json .local/state/k4/releases/follow.json .config/k4/jellyfin.json .config/k4/pihole.json)
 umask 077
 
 info() { printf '\033[1;34m:: %s\033[0m\n' "$1"; }

@@ -5,6 +5,10 @@
 #   k4-bar stop
 #   k4-bar spec            the module list k4 --bar reads
 #   k4-bar icons [on|off|toggle]   modules as icons only (the info in their tooltips), or in full
+#   k4-bar items | hide ID on|off|toggle | hide all-on   each module, on or off (Toggles › Bar items)
+#   k4-bar groups [on|off|toggle]  Group bar items: the right side folds into Status, Apps, Info, Network,
+#                                  System chips (the battery stays); a chip's click: its drawer
+#   k4-bar drawer GROUP | drawer-data | drawer-act VERB …   the drawer (k4 --bardrawer) and its data
 #   k4-bar status MODULE   one module's line (Waybar JSON); --follow keeps printing on changes
 #   k4-bar cal-note-act KEY ID   a meeting card's buttons (join, snooze, open)
 # Modules (left · center · right): menu, workspaces, window · clock, media (any MPRIS player, via
@@ -140,6 +144,7 @@ status() {
   network)  # icon only; SSID, signal and IP in the tooltip; a VPN adds the shield
     local dev type state ssid sig ip vpn=""
     IFS=: read -r dev type state < <(nmcli -t -f DEVICE,TYPE,STATE dev 2>/dev/null | awk -F: '$3 == "connected" && ($2 == "wifi" || $2 == "ethernet") { print; exit }')
+    wg_home_down
     nmcli -t -f TYPE,STATE connection show --active 2>/dev/null | grep -qE '^(vpn|wireguard):' && vpn=󰒃
     ip=$( [ -n "${dev:-}" ] && ip -4 -br addr show "$dev" 2>/dev/null | awk '{ sub(/\/.*/, "", $3); print $3 }')
     if [ "${type:-}" = wifi ]; then
@@ -220,6 +225,16 @@ battery_card() {  # battery_card PERCENT: a yellow card once at 15%, a critical 
       notify-send -a Battery "Battery low · $1%" "Plug in soon."
   fi; }
 
+wg_home_down() {  # a WireGuard tunnel never stays up on the home network (k4-router home): down, one card
+  local n f="${XDG_RUNTIME_DIR:-/tmp}/k4-wg-home"
+  n=$(nmcli -t -f NAME,TYPE connection show --active 2>/dev/null | awk -F: '$2 == "wireguard" { print $1; exit }')
+  [ -n "$n" ] && command -v k4-router >/dev/null || return 0
+  [ -n "$(find "$f" -newermt '-20 seconds' 2>/dev/null)" ] && return 0   # already going down: its events land here too
+  k4-router home || return 0
+  touch "$f"; (nmcli connection down "$n" >/dev/null 2>&1 &)
+  k4 --notify-ctl "$(printf 'post\t0\tWireGuard\t%s off\tYou are on the home network, so the tunnel is not needed.\t1\t-1\t-1\t\t󰖂\t\t\t' "$n")" >/dev/null 2>&1 ||
+    notify-send -a WireGuard "$n off" "You are on the home network, so the tunnel is not needed."; }
+
 follow_status() {  # status, then again on every change of what it shows
   MOD=$1
   case "$1" in
@@ -250,8 +265,24 @@ follow_status() {  # status, then again on every change of what it shows
 # id side kind arg interval tone left right middle up down flags ("-" = none)
 spec() {
   local p="$SELF popup" c="sway-menu call"
-  printf 'B\theight=26\tposition=%s\ttransparent=%s\ticons=%s\n' "$(cat "$STATE/bar-position" 2>/dev/null || echo top)" "$([ "$(cat "$STATE/bar-background" 2>/dev/null)" = transparent ] && echo 1 || echo 0)" "$([ "$(cat "$STATE/bar-items" 2>/dev/null)" = icons ] && echo 1 || echo 0)"
-  m() { local IFS=$'\t'; printf 'M\t%s\n' "$*"; }
+  printf 'B\theight=26\tposition=%s\ttransparent=%s\ticons=%s\tgroups=%s\n' "$(cat "$STATE/bar-position" 2>/dev/null || echo top)" "$([ "$(cat "$STATE/bar-background" 2>/dev/null)" = transparent ] && echo 1 || echo 0)" "$([ "$(cat "$STATE/bar-items" 2>/dev/null)" = icons ] && echo 1 || echo 0)" "$([ "$(cat "$STATE/bar-groups" 2>/dev/null)" = on ] && echo 1 || echo 0)"
+  # the groups (Toggles › Group bar items: each folds into one chip; a click opens its drawer)
+  local d; d=$(printf %q "$SELF")
+  printf 'G\t%s\t%s\t%s\t%s\t%s\n' status 󰂚 Status - "$d drawer status" apps 󰀻 Apps - "$d drawer apps" info 󰋼 Info weather "$d drawer info" \
+    net 󰖩 Network - "$d drawer net" system 󰒓 System audio "$d drawer system"
+  local -A grp=([dnd]=status [night]=status [rec]=status [awake]=status [reminder]=status [calsync]=status [share]=status [drives]=status
+    [pin0]=apps [pin1]=apps [pin2]=apps [messenger]=apps [mail]=apps [parcels]=apps [discord]=apps [wow]=apps [tray]=apps
+    [updates]=info [perf]=info [claude]=info [bus]=info [weather]=info
+    [pihole]=net [network]=net [router]=net [bluetooth]=net
+    [microphone]=system [audio]=system [brightness]=system [keyboard]=system)   # (battery: on its own)
+  local -A off=()   # the modules switched off (Toggles › Bar items; k4-bar items prints them all: K4_BAR_ALL)
+  if [ -z "${K4_BAR_ALL:-}" ]; then local x; while IFS= read -r x; do [ -n "$x" ] && off[$x]=1; done 2>/dev/null < "$STATE/bar-hidden"; fi
+  m() {  # a module; its kind added to its flags; one switched off: not at all
+    [ -n "${off[$1]:-}" ] && return 0
+    local a=("$@") g="${grp[$1]:-}" f="${12:--}"
+    if [ -n "$g" ]; then f="$([ "$f" = - ] && echo "" || echo "$f;")group=$g"; fi
+    a[11]=$f
+    local IFS=$'\t'; printf 'M\t%s\n' "${a[*]}"; }
   m menu left icon 󰕰 0 accent "$p menu" "${TERMINAL:-ghostty}" - - - "px=9;tip=k4 menu · Super+Space"
   m workspaces left workspaces - 0 - - - - - - -
   m window left window - 0 - - - - - - -
@@ -261,7 +292,7 @@ spec() {
   local mc="media-menu ctl"; command -v media-menu >/dev/null || mc="playerctl"
   local mp="media-menu ctl pip"; command -v media-menu >/dev/null || mp="-"
   m media center exec "$SELF status media --follow" 0 - "$p media" "$mp" "$mc play-pause" "$mc previous" "$mc next" "maxw=200;maxw2=140;compact"   # right click: YouTube's player hides or shows
-  m dnd right exec "$SELF status dnd" 1 - "k4-notify center" "$c toggle_dnd" - - - - "px=5"
+  m dnd right exec "$SELF status dnd" 1 - "k4-notify center" "$c toggle_dnd" - - - "px=5"
   m night right exec "$SELF status night" 3 - "$c toggle_night" - - - - "px=5"
   m rec right exec "$SELF status rec --follow" 0 - "$c record_toggle" - - - - "px=5"
   m awake right exec "$SELF status awake" 3 - "$c toggle_idle" - - - - "px=5"
@@ -285,6 +316,7 @@ spec() {
   m weather right exec "$SELF status weather" 900 - "$p weather" "rm -f ~/.cache/sway-weather.json" - - - -
   m microphone right exec "$SELF status microphone --follow" 0 - "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle" - "$p audio" "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SOURCE@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-" "flash"
   m audio right exec "$SELF status audio --follow" 0 - "$p audio" "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle" - "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+" "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-" -
+  command -v k4-pihole >/dev/null && m pihole right exec "k4-pihole bar --follow" 0 - "$p pihole" "k4-pihole toggle" - - - "px=7"   # Pi-hole: blocked today; OFF and a countdown while paused (right click pauses 5 min / resumes); red when DNS is down
   m network right exec "$SELF status network --follow" 0 - "$p wifi" "nmcli radio wifi \"\$(nmcli radio wifi | grep -q enabled && echo off || echo on)\"" - - - -
   # the OpenWrt router (k4-router): clients, the WAN rate in the tooltip; only with a router set up
   { [ -f ~/.config/k4/router.json ] || [ -f ~/.config/omarchy/plugins/kr4nk.openwrt/settings.json ]; } && command -v k4-router >/dev/null \
@@ -298,7 +330,7 @@ spec() {
 popup() {  # popup PAGE: the k4 page under the clicked module; a second click closes it, another
   # module's click swaps it for that one
   local cur="${XDG_RUNTIME_DIR:-/tmp}/k4-popup" pat='^k4 --(menu|media|drives|keyring|bus|claude)'
-  pat="${pat%)}|messenger|mail|wow|clock)"   # (Messenger's and Mail's popups too)
+  pat="${pat%)}|messenger|mail|wow|clock|pihole|bardrawer)"   # (Messenger's and Mail's popups too)
   if pgrep -f "$pat" >/dev/null; then
     pkill -f "$pat"
     [ "$(cat "$cur" 2>/dev/null)" = "$1" ] && { rm -f "$cur"; exit 0; }
@@ -315,8 +347,84 @@ popup() {  # popup PAGE: the k4 page under the clicked module; a second click cl
     mail) exec k4-mail window ;;
     wow) exec k4-wow window ;;
     clock) exec k4-clock window ;;
+    pihole) exec k4-pihole window ;;
     claude) exec k4-claude window sessions ;;
     *) exec sway-menu "$1" ;;
+  esac; }
+
+# ---------- a group's drawer (the KGroups board): its members as the bar shows them ----------
+drawer_data() {  # the drawer's lines, from what the bar shows (k4-bar-OUTPUT.tsv), for the group it was opened on
+  local run="${XDG_RUNTIME_DIR:-/tmp}" g out
+  g=$(cat "$run/k4-bar-drawer.group" 2>/dev/null || echo status)
+  out=$(. "$run/k4-bar-drawer.env" 2>/dev/null; echo "${K4_BAR_OUTPUT:-}")
+  [ -n "$out" ] && [ "$out" != - ] || out=bar
+  local snap="$run/k4-bar-$out.tsv"; [ -s "$snap" ] || snap=$(ls -t "$run"/k4-bar-*.tsv 2>/dev/null | head -1)
+  spec | awk -F'\t' '$1 == "G"' > "$run/k4-bar-groups.tsv"
+  K4_BAR_ALL=1 "$SELF" items > "$run/k4-bar-items.tsv"
+  python3 -I - "$g" "$snap" "$run/k4-bar-groups.tsv" "$run/k4-bar-items.tsv" "$STATE/bar-pins" "$(printf %q "$SELF")" <<'PY'
+import sys
+g, snap, groups, items, pins, me = sys.argv[1:7]
+rd = lambda p: [l.rstrip("\n").split("\t") for l in open(p, encoding="utf-8")] if p else []
+try: S = {f[0]: f for f in rd(snap) if len(f) >= 14}
+except OSError: S = {}
+G = [f for f in rd(groups) if len(f) >= 5]
+I = rd(items)
+try: P = dict(l.split(None, 1) for l in open(pins).read().splitlines() if " " in l)
+except OSError: P = {}
+gl = next((f for f in G if f[1] == g), G[0] if G else ["G", g, "", g, "-"])
+pin = P.get(g, "").strip() or (gl[4] if gl[4] != "-" else "")
+TOG = {"dnd": "do not disturb", "night": "night light", "rec": "recording", "awake": "stay awake", "microphone": "the microphone"}
+def sev(f):
+    _, _, icon, shape, text, _, itone, ttone, cls, badge, btone = f[:11]
+    if cls in ("critical", "urgent", "error"): return 4
+    tone = itone if (itone or icon or shape) else ttone
+    if tone == "red" or btone == "red": return 3
+    if cls == "warning" or tone == "yellow" or btone == "yellow": return 2
+    if (itone == "accent" or ttone == "accent") and text: return 1
+    return 0
+mem = [(i[0], i[1]) for i in I if len(i) >= 5 and i[3] == g and i[4] == "on"]
+shown, hidden = [], []
+for mid, name in mem:
+    f = S.get(mid)
+    vis = f is not None and (f[2] or f[3] or f[4] or f[5])
+    (shown if vis else hidden).append((mid, name, f))
+shown.sort(key=lambda x: -sev(x[2]) if sev(x[2]) >= 2 else 0)
+worst = max(shown, key=lambda x: sev(x[2]), default=None)
+pn = next((x for x in shown if x[0] == pin and x[2][4]), None)
+if worst and sev(worst[2]) >= 2: summ, st = "Chip shows %s%s" % (worst[1], " · " + worst[2][4] if worst[2][4] else ""), ("red" if sev(worst[2]) >= 3 else "yellow")
+elif pn: summ, st = "Chip shows %s · %s" % (pn[1], pn[2][4]), "dim"
+else: summ, st = "%d showing%s" % (len(shown), " · %d hidden" % len(hidden) if hidden else ""), "dim"
+cl = lambda s: (s or "").replace("\t", " ")
+print("D\t%s\t%s\t%s\t%s" % (g, cl(gl[3]), cl(summ), st))
+for f in G: print("G\t%s\t%s\t%s\t%d" % (f[1], cl(f[3]), f[2], 1 if f[1] == g else 0))
+for mid, name, f in shown:
+    line = (f[12] or "").split(" · ")[0:3]
+    print("M\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t1\t%d\t%s" % (mid, cl(name), f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[11], cl(" · ".join(line)), sev(f),
+          1 if mid == pin else 0, "toggle" if mid in TOG and mid != "microphone" else "open"))
+for mid, name, f in hidden:
+    line = ("off · ↵ turns %s on" % TOG[mid]) if mid in TOG else "not showing now"
+    print("M\t%s\t%s\t\t\t\t\t\t\t\t0\t\t%s\t0\t0\t0\t%s" % (mid, cl(name), line, "toggle" if mid in TOG and mid != "microphone" else "open"))
+print("R\t%s drawer-act\nL\t%s drawer-data" % (me, me))
+PY
+}
+drawer_act() {  # open ID (its own popup where the drawer was) · toggle ID · nav ±1 · pin ID
+  local run="${XDG_RUNTIME_DIR:-/tmp}" g; g=$(cat "$run/k4-bar-drawer.group" 2>/dev/null)
+  case "${1:-}" in
+    open) local out cmd; out=$(. "$run/k4-bar-drawer.env" 2>/dev/null; echo "${K4_BAR_OUTPUT:-bar}")
+          cmd=$(awk -F'\t' -v id="$2" '$1 == id { print $14 }' "$run/k4-bar-$out.tsv" 2>/dev/null | head -1)
+          [ -n "$cmd" ] && [ "$cmd" != - ] || { echo "It has no popup of its own"; return; }
+          ( set -a; . "$run/k4-bar-drawer.env" 2>/dev/null; set +a; setsid -f sh -c "$cmd" >/dev/null 2>&1 </dev/null )
+          echo k4:close ;;
+    toggle) case "$2" in
+              dnd) sway-menu call toggle_dnd ;; night) sway-menu call toggle_night ;; rec) sway-menu call record_toggle ;; awake) sway-menu call toggle_idle ;;
+              *) drawer_act open "$2"; return ;;
+            esac >/dev/null 2>&1
+            sleep 0.3; echo "Switched"; echo k4:reload ;;
+    nav) local -a gs; mapfile -t gs < <(spec | awk -F'\t' '$1 == "G" { print $2 }')
+         local i n=${#gs[@]} k; for ((k = 0; k < n; k++)); do [ "${gs[$k]}" = "$g" ] && i=$k; done
+         echo "${gs[$(( (${i:-0} + ${2:-1} + n) % n ))]}" > "$run/k4-bar-drawer.group"; echo k4:reload ;;
+    pin) mkdir -p "$STATE"; { grep -v "^$g " "$STATE/bar-pins" 2>/dev/null; echo "$g $2"; } > "$STATE/bar-pins.tmp"; mv "$STATE/bar-pins.tmp" "$STATE/bar-pins"
+         echo "$2 now shows on the chip"; echo k4:reload ;;
   esac; }
 
 start() {
@@ -337,6 +445,41 @@ case "${1:-}" in
   "") start ;;
   stop) stop ;;
   spec) spec ;;
+  items)  # every module the bar has here: id, name, side, kind, on|off (Toggles › Bar items)
+    declare -A nm=([menu]="Menu" [workspaces]="Workspaces" [window]="Window title" [clock]="Clock" [todo]="Todo" [media]="Media"
+      [dnd]="Do not disturb" [night]="Night light" [rec]="Recording" [awake]="Stay awake" [reminder]="Reminder" [calsync]="Calendar sync"
+      [share]="LocalSend" [drives]="Drives" [pin0]="Pinned tray app 1" [pin1]="Pinned tray app 2" [pin2]="Pinned tray app 3"
+      [messenger]="Messenger" [mail]="Mail" [parcels]="Parcels" [discord]="Discord" [wow]="WoW" [tray]="Tray" [updates]="Updates"
+      [perf]="Performance" [claude]="Claude" [bus]="Bus" [weather]="Weather" [microphone]="Microphone" [audio]="Audio" [pihole]="Pi-hole"
+      [network]="Network" [router]="Router" [bluetooth]="Bluetooth" [brightness]="Brightness" [battery]="Battery" [keyboard]="Keyboard layout")
+    declare -A hid=(); while IFS= read -r x; do [ -n "$x" ] && hid[$x]=1; done 2>/dev/null < "$STATE/bar-hidden"
+    K4_BAR_ALL=1 spec | awk -F'\t' '$1 == "M" { g = "-"; if (match($13, /group=[a-z]+/)) g = substr($13, RSTART + 6, RLENGTH - 6); print $2 "\t" $3 "\t" g }' |
+      while IFS=$'\t' read -r id side g; do printf '%s\t%s\t%s\t%s\t%s\n' "$id" "${nm[$id]:-$id}" "$side" "$g" "$([ -n "${hid[$id]:-}" ] && echo off || echo on)"; done ;;
+  hide)  # hide ID on|off|toggle (on: shown), or all-on: every module back
+    mkdir -p "$STATE"; touch "$STATE/bar-hidden"
+    if [ "${2:-}" = all-on ]; then : > "$STATE/bar-hidden"; v="all on"
+    else
+      id="${2:?module}"; is_off=$(grep -qxF "$id" "$STATE/bar-hidden" && echo 1)
+      case "${3:-toggle}" in on) want=on ;; off) want=off ;; *) [ -n "$is_off" ] && want=on || want=off ;; esac
+      grep -vxF "$id" "$STATE/bar-hidden" > "$STATE/bar-hidden.tmp"; [ "$want" = off ] && echo "$id" >> "$STATE/bar-hidden.tmp"
+      mv "$STATE/bar-hidden.tmp" "$STATE/bar-hidden"; v="$id $want"
+    fi
+    pgrep -f '^k4 --bar' >/dev/null && start
+    echo "Bar items · $v" ;;
+  drawer)  # a group's drawer under its chip (k4 --bardrawer, the KGroups board); where it opened is kept for its members' popups
+    pkill -f '^k4 --bardrawe[r]'
+    env | grep '^K4_BAR_' > "${XDG_RUNTIME_DIR:-/tmp}/k4-bar-drawer.env"
+    echo "${2:?group}" > "${XDG_RUNTIME_DIR:-/tmp}/k4-bar-drawer.group"
+    pop=(); [ -n "${K4_BAR_MX:-}" ] && pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,${K4_BAR_SIDE:-right},${K4_BAR_POS:-top}")
+    drawer_data | k4 --bardrawer "${pop[@]}" >/dev/null ;;
+  drawer-data) drawer_data ;;
+  drawer-act) shift; drawer_act "$@" ;;
+  groups)  # each group folds into one chip (the KGroups board), or the modules as they are
+    cur=$(cat "$STATE/bar-groups" 2>/dev/null || echo off)
+    case "${2:-toggle}" in on) v=on ;; off) v=off ;; *) [ "$cur" = on ] && v=off || v=on ;; esac
+    mkdir -p "$STATE"; echo "$v" > "$STATE/bar-groups"
+    pgrep -f '^k4 --bar' >/dev/null && start
+    echo "Bar groups · $v" ;;
   icons)  # icons only, or full: the setting, then the bars again
     cur=$(cat "$STATE/bar-items" 2>/dev/null || echo full)
     case "${2:-toggle}" in on) v=icons ;; off) v=full ;; *) [ "$cur" = icons ] && v=full || v=icons ;; esac

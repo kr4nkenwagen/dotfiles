@@ -197,6 +197,8 @@ o.bind("SUPER + CTRL + P", "Passwords (k4, pass)", "pass-menu")
 o.bind("SUPER + ALT + A", "Ask Claude (k4)", "k4-claude window ask")
 o.bind("SUPER + ALT + Y", "YouTube player: hide / show (k4)", "k4-youtube toggle")
 o.bind("SUPER + SHIFT + ALT + Y", "YouTube (k4)", "k4-youtube window")
+o.bind("SUPER + ALT + J", "Jellyfin: your server (k4)", "k4-jellyfin window")
+o.bind("SUPER + ALT + P", "Pi-hole (k4)", "k4-pihole window")
 o.bind("SUPER + ALT + L", "Keyboard layout: the Corne's QMK keymap (k4)", "k4-keymap")
 hl.unbind("SUPER + SHIFT + S") -- Omarchy's Google Maps web app
 o.bind("SUPER + SHIFT + S", "SSH hosts, server and keys (k4)", "k4-ssh open")

@@ -2,7 +2,9 @@
 -- Kestrel design's YouTubePip board). Each video that plays, from the queue too, goes in the
 -- history with where it stopped (time, id, position, length; again every 15 s and when it ends);
 -- k4's corners are drawn over the picture, grey, the accent while the pointer is on it with one
--- hint; when mpv quits its socket goes.
+-- hint; when mpv quits its socket goes. A Jellyfin stream (k4-jellyfin plays in this player too) is
+-- reported to the server instead: started, where it is every 15 s and on pause, stopped
+-- (k4-jellyfin report), so Jellyfin's resume and "watched" follow you to the TV.
 local home = os.getenv("HOME")
 local dir = home .. "/.local/state/k4/youtube"
 local log = dir .. "/history.log"
@@ -10,6 +12,14 @@ local sock = (os.getenv("XDG_RUNTIME_DIR") or "/tmp") .. "/k4-youtube.sock"
 
 local function id_of(path)
 	return path:match("[?&]v=([%w_-]+)") or path:match("youtu%.be/([%w_-]+)") or path:match("/shorts/([%w_-]+)")
+end
+
+local jf = nil -- the Jellyfin item playing (its id), nil for YouTube and other links
+local function jf_of(path) return path:match("/Videos/(%x+)/stream") end
+local function report(what, at)
+	if not jf then return end
+	mp.command_native_async({ name = "subprocess", playback_only = false, capture_stdout = true,
+		args = { home .. "/.local/bin/k4-jellyfin", "report", what, jf, tostring(math.floor(at or pos)), mp.get_property_bool("pause") and "1" or "0" } }, function() end)
 end
 
 local cur, pos, len = nil, 0, 0
@@ -21,9 +31,12 @@ end
 
 mp.observe_property("time-pos", "number", function(_, v) if v then pos = v end end)
 mp.observe_property("duration", "number", function(_, v) if v then len = v end end)
-mp.add_periodic_timer(15, function() if not mp.get_property_bool("pause") then save() end end)
+mp.add_periodic_timer(15, function() if not mp.get_property_bool("pause") then save(); report("progress") end end)
+mp.observe_property("pause", "bool", function() report("progress") end)
 
 mp.register_event("file-loaded", function()
+	jf = jf_of(mp.get_property("path", ""))
+	report("start", mp.get_property_number("time-pos", 0))
 	cur, pos, len = id_of(mp.get_property("path", "")), mp.get_property_number("time-pos", 0), mp.get_property_number("duration", 0)
 	if not cur then return end
 	save()
@@ -37,6 +50,7 @@ mp.register_event("file-loaded", function()
 end)
 
 mp.register_event("end-file", function(e)
+	report("stop", e.reason == "eof" and len or pos); jf = nil
 	save(e.reason == "eof" and len or pos) -- (played to the end: watched)
 	cur = nil
 end)

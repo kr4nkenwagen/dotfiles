@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+K4_NAME=k4-jellyfin K4_ID=jellyfin K4_TITLE=Jellyfin K4_KEY=J K4_ICON=󰼁 K4_DESC="Your Jellyfin server, played in a corner on every workspace"
+# k4-jellyfin: your Jellyfin server in k4 (k4 --jellyfin: the YouTube window over this data): a home
+# page (continue watching, next up, recently added), search, a show's episodes; it plays in the
+# corner player k4-youtube uses (pip.sh: one player, whichever started last), and the player tells
+# the server where you are (youtube-mpv.lua → k4-jellyfin report), so resume and "watched" follow
+# you to the TV. jellyfin.py in ~/.local/share/k4 does the talking to the server.
+#   k4-jellyfin window [channel ID NAME]   the window (again: closes it); not set up: the Apps page
+#   k4-jellyfin data | act VERB [ARG]      its data and actions (the YouTube window's verbs)
+#   k4-jellyfin play ID [resume] | report start|progress|stop ID POS PAUSED | find | page
+. "$HOME/.local/share/k4/lib.sh"
+launch_row() { :; }
+SELF=$(command -v k4-jellyfin || echo "$0")
+PY="$HOME/.local/share/k4/jellyfin.py"
+LUA="$HOME/.local/share/k4/youtube-mpv.lua"
+export K4_JELLYFIN_FRONT="$SELF"
+j() { python3 -I "$PY" "$@"; }
+. "$HOME/.local/share/k4/pip.sh"
+
+player_env() {  # what the player plays, for jellyfin.py (mpv's answers, one a line; and whether it is hidden)
+  running || return 0
+  K4_JF_PLAYER=$(ipc '{"command":["get_property","playlist"],"request_id":1}' '{"command":["get_property","pause"],"request_id":2}' \
+                     '{"command":["get_property","time-pos"],"request_id":3}' '{"command":["get_property","duration"],"request_id":4}' \
+                     '{"command":["get_property","media-title"],"request_id":5}')
+  K4_JF_HIDDEN=$(hidden && echo hidden || echo shown); K4_JF_NOW=1
+  export K4_JF_PLAYER K4_JF_HIDDEN K4_JF_NOW; }
+
+play() {  # play ID [resume]: now, in the corner player (from where you stopped on any device, when asked)
+  local u at title
+  IFS=$'\t' read -r u at title < <(j url "$1" "${2:-}")
+  [ -n "$u" ] || { echo "Jellyfin isn’t set up · Apps › Jellyfin"; echo k4:tone yellow; return; }
+  if running; then
+    local o="force-media-title=$title"; [ -n "$at" ] && o="$o,start=$at"
+    cmd loadfile "$u" replace -1 "$o"
+  else start "$u" "$at" "$title"; fi
+  echo "Playing in the corner player$([ -n "$at" ] && echo " · from $((at / 60)) min")"; }
+
+queue() {
+  running || { play "$1" >/dev/null; echo "Queued · plays now, the queue was empty"; return; }
+  local u at title; IFS=$'\t' read -r u at title < <(j url "$1")
+  cmd loadfile "$u" append-play -1 "force-media-title=$title"
+  echo "Queued · $(( $(prop playlist-count) - $(prop playlist-pos) - 1 )) up next"; }
+
+act() {
+  local verb="${1:-}"; shift || true
+  case "$verb" in
+    search) j search "$*" ;;
+    home|home-more) j home ;;   # (^R; the server's lists have no endless scroll: they are short)
+    channel) j channel "$@" ;;
+    back|clear|forget|browser) j "$verb" "$@" ;;
+    play) play "$1" "${2:-}"; echo k4:close ;;
+    queue) queue "$1" ;;
+    pause) running || { echo "Nothing playing"; return; }
+           cmd cycle pause; [ "$(prop pause)" = true ] && echo "Paused" || echo "Playing" ;;
+    next) running || { echo "Queue is empty"; return; }; cmd playlist-next; echo "Next" ;;
+    prev) running || return
+          if [ "$(printf '%.0f' "$(prop time-pos)")" -gt 3 ]; then cmd seek 0 absolute; echo "From the start"; else cmd playlist-prev; echo "Previous"; fi ;;
+    jump) running && cmd playlist-play-index "$1"; echo k4:close ;;
+    remove) running && cmd playlist-remove "$1"; echo "Removed from the queue" ;;
+    pip) pip_toggle || echo "The player opens when something plays" ;;
+    close) running && cmd quit; echo "Stopped" ;;
+    install) echo "Nothing to install · mpv plays it" ;;
+  esac; }
+
+window() {  # window [channel ID NAME]: on that show's episodes (the launcher's search)
+  if [ "$(j status)" != ok ]; then bg sway-menu jellyfin; return; fi   # not set up: the Apps page asks for the key
+  if [ "${1:-}" = channel ]; then
+    pkill -f '^k4 --jellyfi[n]'
+    j clear >/dev/null; printf '%s' "$3" > "${K4_JELLYFIN_CACHE:-$HOME/.cache/k4/jellyfin}/query"
+    touch "${K4_JELLYFIN_CACHE:-$HOME/.cache/k4/jellyfin}/from-launcher"
+    j channel "$2" "$3" >/dev/null
+  else
+    pkill -f '^k4 --jellyfi[n]' && exit 0
+    j clear >/dev/null   # each time it opens: the home page, fetched again
+  fi
+  j home-maybe --force
+  local pop=()
+  [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,${K4_BAR_SIDE:-right},${K4_BAR_POS:-top}")
+  { player_env; j data; } | k4 --jellyfin "${pop[@]}" >/dev/null; }
+
+available() { :; }
+summary() { [ "$(j status)" = ok ] && echo "your server" || echo "not set up"; }
+section() { player_env; j page; }
+
+case "${1:-}" in
+  window) shift; window "$@"; exit 0 ;;
+  data) player_env; j data; exit 0 ;;
+  act) shift; act "$@"; exit 0 ;;
+  play) play "${2:?id}" "${3:-}"; exit 0 ;;
+  report) shift; j report "$@" >/dev/null 2>&1; exit 0 ;;
+  setup-url|setup-key|user) j "$@"; exit 0 ;;
+  find|page|status|home|library) j "$@"; exit 0 ;;
+esac
+k4_dispatch "$@"

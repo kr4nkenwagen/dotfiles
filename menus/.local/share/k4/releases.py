@@ -7,6 +7,7 @@ Keys of your own, kept in the keyring (k4-secret token tmdb | hardcover); Steam 
 are cached 6 h in ~/.cache/k4/releases.
 
   releases.py data                     the window's lines (k4 --releases, see src/releases.odin)
+  releases.py json                     the same for the phone (k4-hub /api/releases), as JSON
   releases.py act VERB …               play KIND ID [N] | cal KIND ID | follow KIND ID | open KIND ID
                                        search KIND QUERY | clear | refresh | key tmdb|hardcover ($K4_INPUT)
   releases.py refresh [--force]       the lists (stale ones) and their posters, in the background
@@ -430,6 +431,29 @@ def data():
     if stale: refresh_bg()
 
 
+def as_json():
+    """What the phone reads (k4-hub /api/releases): per kind its state and titles, and what you follow.
+    A poster is the name of its cached file (k4-hub serves it), "" until the refresh has fetched it."""
+    fol = follows()
+
+    def one(it):
+        k = "%s:%s" % (it["kind"], it["id"])
+        f = fol.get(k, {})
+        pic = image(it["poster"]) or image(it.get("poster2", ""))
+        return {"kind": it["kind"], "id": str(it["id"]), "title": it["title"], "date": it["date"] or "", "when": it["when"], "line": it["line"],
+                "poster": os.path.basename(pic) if pic else "", "followed": k in fol, "incal": bool(f.get("cal_date")),
+                "trailers": [{"id": v["id"], "name": v["name"]} for v in it["trailers"]], "overview": it.get("overview", ""), "url": it.get("url", "")}
+
+    out, stale = {"kinds": {}}, False
+    for kind in KINDS:
+        st, items, at = listing(kind) if FAKE else cached_listing(kind)
+        stale |= st == "refreshing"
+        out["kinds"][kind] = {"state": st, "at": at, "items": [one(it) for it in items]}
+    out["following"] = [one(f["item"]) for _, f in sorted(fol.items(), key=lambda kv: kv[1].get("item", {}).get("date") or "9999") if f.get("item")]
+    print(json.dumps(out, ensure_ascii=False))
+    if stale: refresh_bg()
+
+
 # ---------- what you do ----------
 
 def search(kind, q):
@@ -614,6 +638,7 @@ def find_rows():
 def main(argv):
     cmd, rest = (argv[1] if len(argv) > 1 else ""), argv[2:]
     if cmd == "data": data()
+    elif cmd == "json": as_json()
     elif cmd == "act": act(rest)
     elif cmd == "tick": tick(); refresh()
     elif cmd == "refresh": refresh("--force" in rest)
