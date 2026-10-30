@@ -1895,6 +1895,11 @@ k4_section() { local s="$1" rec="Start"; [ "$s" = capture ] && recording && rec=
         command -v k4-messenger >/dev/null && fresh messenger 30 k4-messenger find   # conversations: search finds them, the list shows none
         command -v k4-mail >/dev/null && fresh mail 120 k4-mail find   # mail threads by sender or subject, and Compose mail
         command -v k4-wow >/dev/null && k4-wow find   # WoW characters by name
+        command -v k4-releases >/dev/null && fresh releases 600 k4-releases find   # upcoming titles, followed ones first
+        command -v k4-events >/dev/null && fresh events 60 k4-events find   # event suggestions: ↵ adds one to the calendar
+        command -v k4-parcels >/dev/null && fresh parcels 120 k4-parcels find   # parcels by shop, carrier or number
+        command -v k4-todo >/dev/null && fresh todo 60 k4-todo find   # open todos (Google Tasks): ↵ ticks one off
+        command -v k4-discord >/dev/null && fresh discord 300 k4-discord find   # Discord: text channels open, voice channels join
         command -v k4-clock >/dev/null && k4-clock find   # cities (their time; ↵ adds one to Clock) and the Clock's tabs
         command -v k4-youtube >/dev/null && fresh youtube 300 k4-youtube find   # what you watched: search plays it again
         if command -v k4-apps >/dev/null; then

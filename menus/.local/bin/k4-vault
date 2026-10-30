@@ -20,7 +20,7 @@ export PASSWORD_STORE_DIR="$STORE"
 REPO="${K4_VAULT_REPO:-kr4nkenwagen/pass}"
 KEYFILE="$STORE/.vault/gpg-key.asc.gpg"
 M=machine
-FILES=(.config/k4/google-client.json .config/k4/keymap .local/state/k4/bus.json .config/aerc/accounts.conf .config/k4/blizzard-client.json .config/k4/wow .local/state/k4/wow/raids.json .local/state/k4/wow/addons.json .local/state/k4/wow/sessions.tsv .local/state/k4/clock/state.json)
+FILES=(.config/k4/google-client.json .config/k4/keymap .local/state/k4/bus.json .config/aerc/accounts.conf .config/k4/blizzard-client.json .config/k4/wow .local/state/k4/wow/raids.json .local/state/k4/wow/addons.json .local/state/k4/wow/sessions.tsv .local/state/k4/clock/state.json .config/k4/discord-client.json .local/state/k4/parcels.json .local/state/k4/events/suggestions.json .local/state/k4/releases/follow.json)
 umask 077
 
 info() { printf '\033[1;34m:: %s\033[0m\n' "$1"; }
@@ -64,11 +64,11 @@ backup() {
     done
     ok "k4 keyring: $n items$(k4-secret lookup token trafiklab >/dev/null && echo ' (the Trafiklab key among them)')"
   else skip "k4 keyring: locked or missing"; fi
-  n=0   # the Google sign-ins (k4-cal, k4-mail): their refresh tokens in the keyring
-  for svc in calendar mail; do
+  n=0   # the Google sign-ins (k4-cal, k4-mail, k4-todo): their refresh tokens in the keyring
+  for svc in calendar mail tasks; do
     secret-tool lookup service "k4-google-$svc" 2>/dev/null | put "$M/google/$svc" && n=$((n + 1))
   done
-  [ "$n" -gt 0 ] && ok "Google sign-ins: $n" || skip "Google: no sign-in (Calendar, Gmail)"
+  [ "$n" -gt 0 ] && ok "Google sign-ins: $n" || skip "Google: no sign-in (Calendar, Gmail, Tasks)"
   local db="$HOME/.local/share/k4-messenger/meta.db"
   if [ -f "$db" ] && command -v sqlite3 >/dev/null; then
     sqlite3 -readonly "$db" "select json(json_extract(json(metadata), '\$.cookies')) from user_login limit 1" 2>/dev/null \
@@ -144,7 +144,7 @@ restore() {
   if [ -d "$STORE/$M/google" ]; then
     if command -v secret-tool >/dev/null && command -v k4-secret >/dev/null && ! k4-secret locked; then
       local svc n=0
-      for svc in calendar mail; do
+      for svc in calendar mail tasks; do
         has "$M/google/$svc" || continue
         pass show "$M/google/$svc" | secret-tool store --label="k4 Google ${svc^}" service "k4-google-$svc" && n=$((n + 1))
       done

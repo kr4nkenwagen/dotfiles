@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+K4_NAME=k4-parcels K4_ID=parcels K4_TITLE="Parcels" K4_KEY=B K4_ICON=󰏗 K4_DESC="Your deliveries, found in your mail"
+# k4-parcels: k4's parcel tracking (parcels.py in ~/.local/share/k4 does the work): shipments from
+# your mail (Gmail and the IMAP accounts, the last 30 days), numbers added by hand, PostNord and
+# DHL asked directly with a key. The Apps page, cards on each change, the bar module, the launcher.
+#   k4-parcels sync | scan                look again (every 15 min: k4-parcels.timer) | counts only
+#   k4-parcels add NUMBER [NAME]          track one by hand (the launcher: "track 00370…")
+#   k4-parcels copy|open|archive KEY      a parcel's pickup code, its page, away
+#   k4-parcels bar | find | card …        the bar module, the launcher's rows, the cards' buttons
+. "$HOME/.local/share/k4/lib.sh"
+launch_row() { :; }
+SELF=$(command -v k4-parcels || echo "$0")
+PY="$HOME/.local/share/k4/parcels.py"
+export K4_PARCELS_FRONT="$SELF"
+p() { python3 -I "$PY" "$@"; }
+
+timer() {  # every 15 minutes, once set up
+  local d="$HOME/.config/systemd/user"
+  [ -e "$d/k4-parcels.timer" ] && return
+  mkdir -p "$d"
+  printf '[Unit]\nDescription=k4 Parcels: look for deliveries in the mail\n\n[Service]\nType=oneshot\nExecStart=%s sync --quiet\n' "$SELF" > "$d/k4-parcels.service"
+  printf '[Unit]\nDescription=k4 Parcels every 15 minutes\n\n[Timer]\nOnBootSec=2min\nOnUnitActiveSec=15min\n\n[Install]\nWantedBy=timers.target\n' > "$d/k4-parcels.timer"
+  systemctl --user daemon-reload && systemctl --user enable --now k4-parcels.timer >/dev/null 2>&1; }
+
+available() { :; }
+summary() { local n r; n=$(p info | grep -c '^P'); r=$(p info | grep -c $'^P\t[^\t]*\tready'); echo "$n parcel$([ "$n" = 1 ] || echo s)$([ "$r" -gt 0 ] && echo " · $r ready for pickup")"; }
+
+car_tag() {  # the board's carrier tags: TAG<TAB>colour
+  case "$1" in
+    PostNord) printf 'POSTNORD\t#00A0D6' ;; DHL) printf 'DHL\t#FFCC00' ;; Budbee) printf 'BUDBEE\t#B18CFF' ;; Instabox) printf 'INSTABOX\t#FF6FA1' ;;
+    Bring) printf 'BRING\t#7BC144' ;; Schenker) printf 'SCHENKER\t#FF5A5A' ;; Airmee) printf 'AIRMEE\t#47C1BF' ;; "Early Bird") printf 'EARLY BIRD\t#F4B400' ;;
+    *) printf 'CARRIER\t#5E8A96' ;;
+  esac; }
+
+section() {  # the KParcels board: ready for pickup (the code the hero), out for delivery, on the way, delivered
+  [ -z "${K4_PARCELS_FAKE:-}" ] && timer
+  local kind k st car num shop code point last win eta at synced keys n=0 nready=0 nout=0
+  local -a ps=()
+  while IFS=$'\t' read -r kind k st car num shop code point last win eta at; do
+    case "$kind" in
+      Y) synced=$k; keys=$st ;;
+      P) ps+=("$k"$'\t'"$st"$'\t'"$car"$'\t'"$num"$'\t'"$shop"$'\t'"$code"$'\t'"$point"$'\t'"$last"$'\t'"$win"$'\t'"$eta"$'\t'"$at"); n=$((n + 1))
+         [ "$st" = ready ] && nready=$((nready + 1)); [ "$st" = out ] && nout=$((nout + 1)) ;;
+    esac
+  done < <(p info)
+  local count; count=$( { [ "$nready" -gt 0 ] && echo "$nready to pick up"; [ "$nout" -gt 0 ] && echo "$nout today"; } | paste -sd'·' | sed 's/·/ · /')
+  desc "from Gmail and IMAP order mails, and numbers you paste$([ "$keys" = 1 ] && echo " · live: PostNord, DHL")" "${count:-nothing active}" "Paste a tracking number…"
+  query "$(printf %q "$SELF") add-input"
+  if [ "$n" -eq 0 ]; then
+    hints "↵" Open "type" "Add a number" "⌫" Back
+    notice "No parcels on the way" "k4 reads order and shipping mails from Gmail and your IMAP accounts (the last 30 days) and keeps the ones still moving. Paste a tracking number above to add one by hand." muted
+    item "Checked $([ "${synced:-0}" -gt 0 ] && ago "$synced" || echo "not yet")" ":" "every 15 min" "" "mark=✓;markc=green"
+    stay "Look now" "$(printf %q "$SELF") sync" "" "mark=↻;markc=accent"
+    return
+  fi
+  hints "↑↓" Move "↵" Tracking "⌃C" "Copy code" "Del" Archive "type" "Add a number" "⌫" Back
+  local group l qk tag tc v me; me=$(printf %q "$SELF")
+  for group in ready out way delivered; do
+    local -a rows=()
+    for l in "${ps[@]}"; do
+      IFS=$'\t' read -r k st car num shop code point last win eta at <<<"$l"
+      case "$group:$st" in ready:ready|out:out|way:transit|way:registered|way:problem|delivered:delivered) rows+=("$l") ;; esac
+    done
+    [ ${#rows[@]} -eq 0 ] && continue
+    case "$group" in ready) hdr "Ready for pickup" "${#rows[@]}" ;; out) hdr "Out for delivery today" "${#rows[@]}" ;; way) hdr "On the way" "${#rows[@]}" ;; delivered) hdr "Delivered" ;; esac
+    for l in "${rows[@]}"; do
+      IFS=$'\t' read -r k st car num shop code point last win eta at <<<"$l"
+      for v in shop code point last win eta; do [ "${!v}" = - ] && printf -v "$v" ''; done
+      IFS=$'\t' read -r tag tc < <(car_tag "$car"); qk=$(printf %q "$k")
+      local name="${shop:-$car}" del; del=$(k4id "$me archive $qk")
+      case "$st" in
+        ready)
+          if [ -n "$code" ]; then
+            local lt="" ltone=""
+            [ "$last" = today ] && lt="Last day today" ltone=yellow || lt="${last:+Pick up by $last}"
+            printf 'PU\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(k4id "bg $me open $qk")" "$name" "$tag" "$tc" "${point:-the pickup point}" "$car · $num" "${lt:-ready to pick up}" "$ltone" "$code" "$(k4id "$me copy $qk")" "$del"
+          else item "$name" "bg $me open $qk" "${last:+by $last}" "" "mark=󰏗;markc=accent;tag2=$tag;tag2c=$tc;l2=$(k4flag "Ready at ${point:-the pickup point}");l2c=fg;del=$del"; fi ;;
+        out) item "$name" "bg $me open $qk" "${win:-today}" "" "tag2=$tag;tag2c=$tc;l2=$(k4flag "Out for delivery · $num");l2c=fg;bigmeta;metac=accent;del=$del" ;;
+        problem) item "$name" "bg $me open $qk" "fix it ↵" "" "tag2=$tag;tag2c=$tc;l2=Delayed or a problem · see the carrier’s page;l2c=yellow;edge=yellow;metac=yellow;del=$del" ;;
+        delivered) item "$name" "bg $me open $qk" "$(ago "${at:-0}" | sed 's/ ago//')" "" "mark=✓;markc=green;tag2=$tag;tag2c=$tc;l2=Delivered;dim;del=$del" ;;
+        *) item "$name" "bg $me open $qk" "${eta:-—}" "" "tag2=$tag;tag2c=$tc;l2=$(k4flag "$([ "$st" = registered ] && echo "Registered · waiting for the carrier" || echo "In transit") · $num");l2c=dim;del=$del" ;;
+      esac
+    done
+  done
+  [ "$keys" = 1 ] || empty "PostNord and DHL statuses come from their mails. A free API key adds live status: k4-secret store token postnord | dhl."; }
+
+case "${1:-}" in
+  sync) shift; if [ "${1:-}" = --quiet ]; then p sync --quiet; else m=$(p sync | head -1); notify "Parcels" "$m"; fi; exit 0 ;;
+  add) shift; m=$(p add "$@" | head -1); notify "Parcels" "$m"; exit 0 ;;
+  add-input) m=$(p add ${K4_INPUT:-} | head -1); notify "Parcels" "$m"; exit 0 ;;
+  copy|archive) m=$(p "$@" | tail -1); notify "Parcels" "$m"; exit 0 ;;
+  open|scan|info|bar|find|guess|card) p "$@"; exit 0 ;;
+esac
+k4_dispatch "$@"

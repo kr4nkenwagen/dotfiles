@@ -13,6 +13,13 @@ CLIENT = os.path.join(HOME, ".config/k4/google-client.json")
 RUN = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
 
 
+def _pi():
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import k4host
+    return k4host.pi_mode()
+
+
 def client():
     with open(CLIENT) as f: c = json.load(f)
     return c.get("installed") or c.get("web") or c
@@ -57,7 +64,7 @@ class Account:
     def refresh_token(self):
         if self.test_token: return self.test_token()
         try:
-            r = subprocess.run(["secret-tool", "lookup", *self.secret], capture_output=True, text=True, timeout=10)
+            r = subprocess.run(self._lookup(), capture_output=True, text=True, timeout=10)
             return r.stdout.strip() or None
         except (OSError, subprocess.SubprocessError): return None
 
@@ -129,11 +136,15 @@ class Account:
             j = json.load(r)
         if "refresh_token" not in j:
             return False, "Google sent no refresh token"
-        subprocess.run(["secret-tool", "store", "--label=k4 " + self.name, *self.secret], input=j["refresh_token"], text=True, check=True)
+        subprocess.run(self._store(), input=j["refresh_token"], text=True, check=True)
         _write_private(self.cache, {"token": j["access_token"], "expires": time.time() + j.get("expires_in", 3600)})
         return True, ""
 
+    # the keyring (secret-tool), or on the Pi k4-secret's file store (kind google, named like the keyring item)
+    def _lookup(self): return ["k4-secret", "lookup", "google", self.secret[-1]] if _pi() else ["secret-tool", "lookup", *self.secret]
+    def _store(self): return ["k4-secret", "store", "google", self.secret[-1]] if _pi() else ["secret-tool", "store", "--label=k4 " + self.name, *self.secret]
+
     def sign_out(self):
-        subprocess.run(["secret-tool", "clear", *self.secret], capture_output=True)
+        subprocess.run(["k4-secret", "clear", "google", self.secret[-1]] if _pi() else ["secret-tool", "clear", *self.secret], capture_output=True)
         try: os.remove(self.cache)
         except OSError: pass

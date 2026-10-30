@@ -30,7 +30,11 @@ missing() { missing_body "ask Claude and follow your Claude Code sessions from h
 
 agents() { (cd / && timeout 10 "$CLAUDE" agents --json 2>/dev/null) || echo '[]'; }
 model() { cat "$MODEL_FILE" 2>/dev/null || echo sonnet; }
-logged_in() { (cd / && timeout 10 "$CLAUDE" auth status 2>/dev/null) | jq -e '.loggedIn' >/dev/null 2>&1; }
+AUTH="${XDG_RUNTIME_DIR:-/tmp}/k4-claude-auth"   # signed in, remembered 10 min (only a yes: signing in shows at once)
+logged_in() {
+  [ -n "$(find "$AUTH" -mmin -10 2>/dev/null)" ] && return 0
+  (cd / && timeout 10 "$CLAUDE" auth status 2>/dev/null) | jq -e '.loggedIn' >/dev/null 2>&1 && : > "$AUTH" && return 0
+  rm -f "$AUTH"; return 1; }
 pct() { awk -v u="${1:-0}" 'BEGIN { printf "%d%%", u * 100 + 0.5 }'; }
 
 summary() { local j w b; j=$(agents); w=$(jq '[.[] | select(.status == "waiting")] | length' <<<"$j"); b=$(jq '[.[] | select(.status == "busy")] | length' <<<"$j")
@@ -122,7 +126,7 @@ jump() {  # jump PID: its tmux pane in the terminal used last, else the window t
 act() {
   local verb="$1"; shift
   case "$verb" in
-    ask) ask "$1" "$2" ;;
+    ask) rm -f "$AUTH"; ask "$1" "$2" ;;
     follow) ask "$2" "$3" "$1" ;;
     copy) printf '%s' "${K4_INPUT:-}" | wl-copy && echo "Copied"; echo k4:noreload ;;
     term) tui sh -c "cd \"\$HOME\" && $(printf %q "$CLAUDE") --resume $(printf %q "$1")"; echo k4:close ;;

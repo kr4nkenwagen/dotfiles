@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# k4-pi: k4's event and todo finder on a Raspberry Pi (64-bit Pi OS Lite, ssh with your key), so it
+# runs every hour without the desktop: mail, Messenger (the bridge moves there), GitHub, the calendar
+# and Google Tasks; a local model in Ollama. Discord stays the desktop's. The desktop shows the Pi's
+# results (k4-pi pull, every 5 min: Apps › Events and Todo, the cards) and sends its changes there.
+#   k4-pi setup HOST     packages (sudo asks once), Ollama, k4's scripts, the timers; idempotent
+#   k4-pi update         k4's scripts again (after changing them here)
+#   k4-pi bench [MODELS] which model, scored on k4's invented test messages (default: a few 4B ones)
+#   k4-pi enroll         your sign-ins and keys to the Pi (never printed), then the Pi takes over
+#   k4-pi messenger      Messenger's bridge to the Pi; this desktop's Messenger goes through a tunnel
+#   k4-pi messenger-local   back to the bridge on this desktop
+#   k4-pi pull [--quiet] the Pi's state and cards to this desktop (k4-pi-pull.timer)
+#   k4-pi status | ssh [CMD]
+set -u
+CONF="$HOME/.config/k4"
+ST="$HOME/.local/state/k4/pi"
+DOT=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)   # the dotfiles' menus/ (…/menus/.local/bin/k4-pi)
+K4REPO="${K4_REPO:-$HOME/repos/k4}"
+UNITS="$HOME/.config/systemd/user"
+MODELS_DEFAULT="qwen3:4b,gemma3:4b"
+host() { cat "$CONF/pi" 2>/dev/null || cat "$CONF/pi-host" 2>/dev/null; }
+HOST=$(host)
+on() { ssh -o BatchMode=yes -o ConnectTimeout=8 "$HOST" "$@"; }
+say() { printf '%s\n' "$*"; }
+need() { [ -n "$HOST" ] || { say "No Pi yet · k4-pi setup HOST"; exit 1; }; on true 2>/dev/null || { say "Can’t reach $HOST over ssh with your key · ssh-copy-id $HOST"; exit 1; }; }
+
+FILES=(.local/share/k4/{events,todo,google,gmail,mailimap,parcels,k4host,pibench}.py .local/share/k4/{lib,b64}.sh
+       .local/bin/{k4-events,k4-todo,k4-cal,k4-parcels,k4-messengerd,k4-messenger})
+
+update() {
+  need
+  local f
+  on 'mkdir -p ~/.local/share/k4 ~/.local/bin ~/.config/k4 ~/.config/systemd/user'
+  for f in "${FILES[@]}"; do [ -e "$DOT/$f" ] || { say "missing $f"; exit 1; }; done
+  (cd "$DOT" && rsync -a --relative "${FILES[@]}" "$HOST:") || exit 1
+  rsync -a "$DOT/../pi/.local/bin/k4-secret" "$HOST:.local/bin/k4-secret" || exit 1
+  on 'echo pi > ~/.config/k4/host; grep -q "local/bin" ~/.profile 2>/dev/null || echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> ~/.profile'
+  units
+  say "k4’s scripts are on $HOST"; }
+
+units() {  # the Pi's timers: the finder hourly, Tasks and the calendar every 5 min, Parcels every 15
+  on 'bash -s' <<'U'
+d=~/.config/systemd/user; mkdir -p $d
+unit() {  # NAME DESCRIPTION COMMAND EVERY
+  printf '[Unit]\nDescription=%s\n\n[Service]\nType=oneshot\nEnvironment=PATH=%%h/.local/bin:/usr/local/bin:/usr/bin:/bin\nEnvironmentFile=-%%h/.config/k4/pi.env\nExecStart=%%h/.local/bin/%s\n' "$2" "$3" > $d/$1.service
+  printf '[Unit]\nDescription=%s\n\n[Timer]\nOnBootSec=3min\nOnUnitActiveSec=%s\n\n[Install]\nWantedBy=timers.target\n' "$2" "$4" > $d/$1.timer; }
+unit k4-events "k4 Events: plans and todos in new mail and messages" "k4-events scan --quiet" 1h
+unit k4-todo "k4 Todo: sync Google Tasks" "k4-todo sync --quiet" 5min
+unit k4-cal "k4 Calendar: sync" "k4-cal sync --quiet" 5min
+unit k4-parcels "k4 Parcels: deliveries in the mail" "k4-parcels sync --quiet" 15min
+systemctl --user daemon-reload
+U
+}
+
+setup() {
+  HOST="${1:?k4-pi setup HOST (an ssh name or address)}"
+  mkdir -p "$CONF"; echo "$HOST" > "$CONF/pi-host"
+  ssh -o ConnectTimeout=8 "$HOST" true || { say "Can’t reach $HOST · ssh-copy-id $HOST first"; exit 1; }
+  [ "$(ssh "$HOST" uname -m)" = aarch64 ] || { say "$HOST isn’t a 64-bit Pi OS (uname -m: aarch64 expected)"; exit 1; }
+  say "Packages (sudo may ask for the Pi’s password)…"
+  ssh -t "$HOST" 'sudo apt-get update -qq && sudo apt-get install -y -qq python3 jq gh rsync curl git >/dev/null &&
+    { command -v ollama >/dev/null || curl -fsSL https://ollama.com/install.sh | sh; } && sudo loginctl enable-linger "$USER"' || exit 1
+  update
+  say "Models (a few GB, once)…"
+  local m; for m in ${MODELS_DEFAULT//,/ }; do on "ollama pull $m >/dev/null 2>&1" && say "  $m"; done
+  say "Next: k4-pi bench (picks the model), then k4-pi enroll"; }
+
+prompts() {  # DIR: the finder's prompts for k4's invented test messages (a first run, then the invoice paid)
+  local d="$1" t; t=$(mktemp -d)
+  cp -r "$K4REPO/tests/events" "$t/f"
+  (export K4_EVENTS_FAKE="$t/f" K4_EVENTS_STATE="$t/st" K4_CAL_DIR="$t/f/cal" K4_HOST=desktop
+   K4_EVENTS_NOW=1793352734 python3 -I "$DOT/.local/share/k4/events.py" scan >/dev/null && cp "$t/f/prompt" "$d/p1.txt"
+   printf 'From: Elbolaget Norr <faktura@elbolaget.example>\nSubject: Kvitto\nDate: Fri, 30 Oct 2026 13:00:00 +0100\nContent-Type: text/plain; charset=utf-8\n\nTack! Betalningen är mottagen för fakturan med OCR 4471902.\n' > "$t/f/mail/04-paid.eml"
+   K4_EVENTS_NOW=1793360000 python3 -I "$DOT/.local/share/k4/events.py" scan >/dev/null && cp "$t/f/prompt" "$d/p2.txt")
+  rm -rf "$t"; [ -s "$d/p1.txt" ] && [ -s "$d/p2.txt" ]; }
+
+bench() {
+  need
+  local models="${1:-$MODELS_DEFAULT}" t m; t=$(mktemp -d)
+  prompts "$t" || { say "Couldn’t make the test prompts (k4’s tests/events in $K4REPO)"; exit 1; }
+  on 'mkdir -p /tmp/k4bench' && rsync -a "$t/" "$HOST:/tmp/k4bench/" && rm -rf "$t"
+  for m in ${models//,/ }; do on "ollama pull $m >/dev/null 2>&1" || say "  (couldn’t pull $m)"; done
+  say "Each model reads the test messages twice, with thinking on and off (minutes each on a Pi)…"
+  local best; best=$(on "K4_HOST=pi python3 -I ~/.local/share/k4/pibench.py /tmp/k4bench $models" | tee /dev/stderr | awk -F'\t' '$1 == "best" { print $2 "\t" $3 }')
+  [ -n "$best" ] || exit 1
+  on "printf 'K4_EVENTS_MODEL=%s\nK4_EVENTS_THINK=%s\n' $(printf %q "${best%%$'\t'*}") ${best##*$'\t'} > ~/.config/k4/pi.env"
+  say "The finder on $HOST uses ${best%%$'\t'*} (thinking $([ "${best##*$'\t'}" = 1 ] && echo on || echo off))"; }
+
+copy_secret() {  # KIND NAME [desktop keyring command…]: one secret to the Pi's k4-secret, never shown
+  local kind="$1" name="$2"; shift 2
+  "$@" 2>/dev/null | { IFS= read -r -d '' v || [ -n "$v" ]; [ -n "$v" ] && printf '%s' "$v" | on "~/.local/bin/k4-secret store $(printf %q "$kind") $(printf %q "$name")"; }; }
+
+enroll() {
+  need
+  local n=0 svc name
+  on 'mkdir -p ~/.config/k4 ~/.config/aerc ~/.local/state/k4'
+  [ -s "$CONF/google-client.json" ] && rsync -a --chmod=600 "$CONF/google-client.json" "$HOST:.config/k4/google-client.json"
+  for svc in calendar mail tasks; do copy_secret google "k4-google-$svc" secret-tool lookup service "k4-google-$svc" && n=$((n + 1)); done
+  say "Google sign-ins: $n"
+  [ -s "$HOME/.config/aerc/accounts.conf" ] && rsync -a --chmod=600 "$HOME/.config/aerc/accounts.conf" "$HOST:.config/aerc/accounts.conf"
+  n=0; while IFS= read -r name; do [ -n "$name" ] && copy_secret mail "$name" k4-secret lookup mail "$name" && n=$((n + 1)); done < <(k4-secret names mail 2>/dev/null)
+  say "Mail accounts: $n"
+  n=0; for name in postnord dhl; do copy_secret token "$name" k4-secret lookup token "$name" && n=$((n + 1)); done
+  say "Parcels keys: $n"
+  if gh auth token >/dev/null 2>&1; then gh auth token | on 'gh auth login --with-token' && say "GitHub: signed in"; else say "GitHub: not signed in here (skipped)"; fi
+  # what k4 added so far (its events and todos) goes along, so the Pi keeps tidying them
+  [ -d "$HOME/.local/state/k4/events" ] && rsync -a "$HOME/.local/state/k4/events/" "$HOST:.local/state/k4/events/"
+  [ -s "$HOME/.local/state/k4/todo/k4.json" ] && on 'mkdir -p ~/.local/state/k4/todo' && rsync -a "$HOME/.local/state/k4/todo/k4.json" "$HOST:.local/state/k4/todo/k4.json"
+  on 'export PATH=$HOME/.local/bin:$PATH; k4-cal sync --quiet; k4-todo sync --quiet; systemctl --user enable --now k4-events.timer k4-todo.timer k4-cal.timer k4-parcels.timer >/dev/null 2>&1'
+  # this desktop: the Pi runs the finder now; its results come every 5 minutes
+  echo "$HOST" > "$CONF/pi"
+  systemctl --user disable --now k4-events.timer >/dev/null 2>&1
+  mkdir -p "$UNITS"
+  printf '[Unit]\nDescription=k4: the Pi’s events, todos and cards\n\n[Service]\nType=oneshot\nExecStart=%s pull --quiet\n' "$(readlink -f "$0")" > "$UNITS/k4-pi-pull.service"
+  printf '[Unit]\nDescription=k4: the Pi every 5 minutes\n\n[Timer]\nOnBootSec=1min\nOnUnitActiveSec=5min\n\n[Install]\nWantedBy=timers.target\n' > "$UNITS/k4-pi-pull.timer"
+  systemctl --user daemon-reload && systemctl --user enable --now k4-pi-pull.timer >/dev/null 2>&1
+  pull --quiet
+  say "The Pi ($HOST) runs the finder now · Messenger moves with: k4-pi messenger"; }
+
+pull() {  # the Pi's state (events, which todos are k4's) and its cards
+  local quiet="${1:-}"
+  [ -n "$HOST" ] || exit 0
+  mkdir -p "$ST/events" "$ST/todo"
+  if ! rsync -a --timeout=10 "$HOST:.local/state/k4/events/" "$ST/events/" 2>/dev/null; then
+    [ "$quiet" = --quiet ] || say "Can’t reach $HOST · last seen $( [ -e "$ST/seen" ] && date -d @"$(cat "$ST/seen")" '+%a %H:%M' || echo never)"
+    exit 1
+  fi
+  rsync -a --timeout=10 "$HOST:.local/state/k4/todo/k4.json" "$ST/todo/k4.json" 2>/dev/null
+  local line n=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    k4 --notify-ctl "$(printf '%s' "$line" | jq -r '.line')" >/dev/null 2>&1 && n=$((n + 1))
+  done < <(on 'f=~/.local/state/k4/outbox.jsonl; [ -s $f ] && mv $f $f.sending && cat $f.sending && rm -f $f.sending' 2>/dev/null)
+  date +%s > "$ST/seen"
+  [ "$quiet" = --quiet ] || say "Pulled from $HOST$([ "$n" -gt 0 ] && echo " · $n card$([ "$n" = 1 ] || echo s)")"; }
+
+messenger() {  # the bridge on the Pi; this desktop's daemon reaches it through an ssh tunnel (same ports)
+  need
+  say "Messenger’s bridge on $HOST (downloads the arm64 builds once)…"
+  on 'export PATH=$HOME/.local/bin:$PATH; k4-messengerd setup' || exit 1
+  # this desktop: its own homeserver and bridge stop; the tunnel brings the Pi's to the same ports
+  local tok; tok=$(k4-secret lookup matrix '@me:k4.local' 2>/dev/null)
+  [ -n "$tok" ] && ! k4-secret lookup matrix-local '@me:k4.local' >/dev/null 2>&1 && printf '%s' "$tok" | k4-secret store matrix-local '@me:k4.local'   # kept for messenger-local
+  systemctl --user disable --now k4-meta-bridge.service k4-matrix.service >/dev/null 2>&1
+  printf '[Unit]\nDescription=k4: Messenger on the Pi (ssh tunnel)\nAfter=network-online.target\n\n[Service]\nExecStart=/usr/bin/ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 46108:127.0.0.1:46108 -L 46119:127.0.0.1:46119 %s\nRestart=always\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n' "$HOST" > "$UNITS/k4-pi-tunnel.service"
+  mkdir -p "$UNITS/k4-messenger.service.d"
+  printf '[Unit]\nAfter=k4-pi-tunnel.service\nWants=k4-pi-tunnel.service\n' > "$UNITS/k4-messenger.service.d/pi.conf"
+  systemctl --user daemon-reload && systemctl --user enable --now k4-pi-tunnel.service >/dev/null 2>&1
+  copy_back=$(on '~/.local/bin/k4-secret lookup matrix @me:k4.local' 2>/dev/null)
+  [ -n "$copy_back" ] && printf '%s' "$copy_back" | k4-secret store matrix '@me:k4.local'
+  unset copy_back
+  systemctl --user restart k4-messenger.service
+  say "Messenger goes through $HOST now · log in once from the Messenger window (its login reaches the Pi’s bridge)"; }
+
+messenger_local() {
+  systemctl --user disable --now k4-pi-tunnel.service >/dev/null 2>&1
+  rm -f "$UNITS/k4-pi-tunnel.service" "$UNITS/k4-messenger.service.d/pi.conf"
+  local tok; tok=$(k4-secret lookup matrix-local '@me:k4.local' 2>/dev/null)
+  [ -n "$tok" ] && printf '%s' "$tok" | k4-secret store matrix '@me:k4.local'
+  systemctl --user daemon-reload; systemctl --user enable --now k4-matrix.service k4-meta-bridge.service >/dev/null 2>&1
+  systemctl --user restart k4-messenger.service
+  say "Messenger runs on this desktop again"; }
+
+status() {
+  [ -n "$HOST" ] || { say "No Pi · k4-pi setup HOST"; return; }
+  say "Pi: $HOST$([ -s "$CONF/pi" ] && echo " (runs the finder)" || echo " (set up, not enrolled)")"
+  say "Last pulled: $( [ -e "$ST/seen" ] && date -d @"$(cat "$ST/seen")" '+%a %H:%M' || echo never)"
+  on 'systemctl --user list-timers "k4-*" --no-pager 2>/dev/null | head -6; cat ~/.config/k4/pi.env 2>/dev/null' 2>/dev/null || say "(unreachable)"; }
+
+case "${1:-}" in
+  setup) setup "${2:-}" ;;
+  update) update ;;
+  bench) bench "${2:-}" ;;
+  enroll) enroll ;;
+  pull) pull "${2:-}" ;;
+  messenger) messenger ;;
+  messenger-local) messenger_local ;;
+  status) status ;;
+  ssh) shift; need; if [ $# -gt 0 ]; then on "$@"; else ssh "$HOST"; fi ;;
+  prompts) prompts "${2:?DIR}" ;;   # (the bench's prompts, for trying a model here)
+  *) sed -n '2,15p' "$0" >&2; exit 2 ;;
+esac

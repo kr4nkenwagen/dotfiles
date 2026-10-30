@@ -17,7 +17,7 @@ K4_NAME=k4-youtube K4_ID=youtube K4_TITLE=YouTube K4_KEY=Y K4_ICON=󰗃 K4_DESC=
 # Nothing searched: your YouTube home page (yt-dlp's :ytrec, signed in with the browser's session:
 # ~/.local/state/k4/youtube/browser, else the default browser), fetched in the background and
 # again after 30 minutes.
-#   k4-youtube play URL|ID          play a link (youtube.com/watch?v=…, youtu.be/…) or an id now
+#   k4-youtube play URL|ID          play a link (youtube.com/watch?v=…, youtu.be/…, or any video URL) or an id now
 #   k4-youtube toggle               hide or show the player (Super+Alt+Y); nothing playing: the window
 #   k4-youtube close                stop it
 #   k4-youtube find                 what you watched and the channels you subscribe to (subs.tsv, fetched
@@ -205,7 +205,12 @@ subs_maybe() {  # in the background when older than 6 hours (once at a time)
   setsid -f bash -c '"$0" subs-fetch; rm -f "$1"' "$SELF" "$C/subs.lock" >/dev/null 2>&1 </dev/null; }
 count_short() { awk -v n="${1:-0}" 'BEGIN { if (n >= 1e6) printf "%.1fM", n / 1e6; else if (n >= 1e3) printf "%dK", n / 1e3; else printf "%d", n }' | sed 's/\.0M/M/'; }
 
-versions() { printf '%s\t%s' "$(yt-dlp --version 2>/dev/null)" "$(mpv --version 2>/dev/null | awk 'NR == 1 { print $2 }')"; }
+versions() {  # yt-dlp's and mpv's versions, asked again only when either binary changed
+  local key; key=$(stat -Lc %Y "$(command -v yt-dlp)" "$(command -v mpv)" 2>/dev/null | tr '\n' ' ')
+  if [ "$(head -1 "$C/versions" 2>/dev/null)" != "$key" ]; then
+    printf '%s\n%s\t%s' "$key" "$(yt-dlp --version 2>/dev/null)" "$(mpv --version 2>/dev/null | awk 'NR == 1 { print $2 }')" > "$C/versions"
+  fi
+  sed -n 2p "$C/versions" | tr -d '\n'; }
 data() {
   local ok=ok note="" v
   if [ -e "$C/installing" ]; then ok=installing
@@ -214,7 +219,7 @@ data() {
   v=$(versions)
   printf 'S\t%s\t%s\t%s\n' "$ok" "$note" "$v"
   local vk vid vname   # the view: a search, or a channel's videos (opened from it)
-  IFS=$'\t' read -r vk vid vname < "$C/view" 2>/dev/null
+  IFS=$'\t' read -r vk vid vname 2>/dev/null < "$C/view"
   [ -s "$C/query" ] && printf 'Q\t%s\t%s\t%s\t%s\t%s\n' "$(clean "$(cat "$C/query")")" "$(wc -l < "$C/results.tsv" 2>/dev/null || echo 0)" "$(cat "$C/took" 2>/dev/null)" "${vk:-search}" "$vname"
   if [ -s "$C/query" ] && [ "${vk:-search}" = search ] && [ -s "$C/channel.tsv" ]; then   # the search was a channel's name: it, first
     local cid cname chandle cfol; IFS=$'\t' read -r cid cname chandle cfol _ < "$C/channel.tsv"
@@ -328,6 +333,12 @@ channel() {  # channel ID: its newest 30 videos in place of the search (back: th
   echo "$name · $(wc -l < "$C/results.tsv") newest videos · Esc goes back"; }
 
 play() {  # play ID [resume]: now, from where it stopped when asked; the player started when it is not running
+  case "$1" in   # a plain video link (a Steam trailer's mp4): played as it is, no history
+    http*://*youtube.com/*|http*://youtu.be/*) ;;
+    http://*|https://*)
+      if running; then cmd loadfile "$1" replace; else start "$1" ""; fi
+      echo "Playing in the corner player"; return ;;
+  esac
   local id at=""; id=$(id_of "$1")
   [ -n "$id" ] || { echo "Not a YouTube link"; echo k4:tone red; return; }
   [ "${2:-}" = resume ] && at=$(resume_at "$id")

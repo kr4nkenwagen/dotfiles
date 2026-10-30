@@ -12,6 +12,8 @@
                              starting: set up, the keyring not open yet after a reboot)
       data                   the k4 --messenger window's data (S, E the encrypted chats still waiting
                              for a message, C per conversation, O and M for the open one, R and L)
+      recent SINCE           T ROOM NAME TIME SENDER MINE TEXT: the last 30 messages of each conversation
+                             with one after SINCE (unix; k4-events looks for plans in them)
       rooms                  C lines only: C ROOM NAME UNREAD TIME SENDER LAST GROUP MINE TITLED MEMBERS
                              (TITLED 1: the chat has a name of its own; MEMBERS: the others, | between)
       check                  ask the bridge again now (the window's Retry); the state after
@@ -55,12 +57,14 @@ SELF = os.path.abspath(sys.argv[0])
 GHOST = re.compile(r"^@meta_(\d+):" + re.escape(SERVER) + "$")
 BOT = "@metabot:" + SERVER
 
-# The pinned releases (sha256 of the static amd64 builds; continuwuity publishes none, so ours)
+# The pinned releases (sha256 of the static builds; continuwuity publishes none, so ours), for this
+# machine: amd64 (the desktop) or arm64 (the Raspberry Pi, k4-pi)
+_ARM = os.uname().machine in ("aarch64", "arm64")
 BINS = {
-    "mautrix-meta": ("v0.2610.0", "https://github.com/mautrix/meta/releases/download/v0.2610.0/mautrix-meta-amd64",
-                     "17b8fd89ee8bb71796b9406aad37fd871110efbb22ace26801034dab9c5a3843"),
-    "conduwuit": ("v26.9.1", "https://forgejo.ellis.link/continuwuation/continuwuity/releases/download/v26.9.1/conduwuit-linux-static-amd64",
-                  "7beff208482cf9c7bb35c4a393cb7a7b2f241d2e2c0c7fe3c0b6a8d4add6b2d7"),
+    "mautrix-meta": ("v0.2610.0", "https://github.com/mautrix/meta/releases/download/v0.2610.0/mautrix-meta-" + ("arm64" if _ARM else "amd64"),
+                     "150f9d012576b69afc88edc8571d3a2752aa07753039aa8b0503d9ba56b62f4e" if _ARM else "17b8fd89ee8bb71796b9406aad37fd871110efbb22ace26801034dab9c5a3843"),
+    "conduwuit": ("v26.9.1", "https://forgejo.ellis.link/continuwuation/continuwuity/releases/download/v26.9.1/conduwuit-linux-static-" + ("arm64" if _ARM else "amd64"),
+                  "f70e20f17a3032b37db3f00eee3814b125dd0f9ab8c5dc72812c8264dc2548c5" if _ARM else "7beff208482cf9c7bb35c4a393cb7a7b2f241d2e2c0c7fe3c0b6a8d4add6b2d7"),
 }
 
 
@@ -665,6 +669,13 @@ class Service:
         c, args = p[0], p[1:]
         if c == "status": return "\t".join(map(field, ["S", self.state, self.unread(), self.account, self.note])) + "\n"
         if c == "rooms": return "\n".join(self.room_lines()) + "\n"
+        if c == "recent":   # recent SINCE: the conversations with a message after SINCE (unix), their last 30 (k4-events)
+            since = float(args[0]) if args else time.time() - 86400
+            with self.lock: rids = [(rid, r["name"]) for rid, r in self.rooms.items() if r.get("ts", 0) > since]
+            out = []
+            for rid, name in rids[:40]:
+                for m in self.messages(rid, 30): out.append("\t".join(map(field, ["T", rid, name, m[2], m[3], m[4], m[6]])))
+            return "\n".join(out) + "\n"
         if c == "check":
             if self.token: self.check_login()
             return "\t".join(map(field, [self.state, self.note])) + "\n"

@@ -181,6 +181,10 @@ o.bind("SUPER + RIGHT", "Focus on right window · or the next notification", "k4
 o.bind("SUPER + ALT + M", "Messenger (k4)", "k4-messenger window")
 o.bind("SUPER + ALT + E", "Mail: Gmail (k4)", "k4-mail window")
 o.bind("SUPER + ALT + W", "World of Warcraft: characters (k4)", "k4-wow window")
+o.bind("SUPER + ALT + D", "Discord: voice, mentions, servers (k4)", "sway-menu discord")
+o.bind("SUPER + ALT + SHIFT + D", "Discord: mute / unmute (k4)", "k4-discord mute")
+o.bind("SUPER + ALT + R", "Releases: upcoming movies, TV, games, books (k4)", "k4-releases window")
+o.bind("SUPER + ALT + T", "Todo: Google Tasks (k4)", "sway-menu todo")
 o.bind("SUPER + ALT + C", "Clock: world, timers, alarms, stopwatch (k4)", "k4-clock window")
 o.bind("SUPER + SHIFT + ALT + W", "World of Warcraft: play Forever (k4)", "k4-wow play")
 o.bind("SUPER + ALT + N", "Notifications: keyboard", "k4-notify focus") -- ↑↓ ↵ 1–3 Del Space r(eply) Esc on the popups

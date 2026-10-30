@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+K4_NAME=k4-todo K4_ID=todo K4_TITLE="Todo" K4_KEY=T K4_ICON=󰄱 K4_DESC="Google Tasks: your todos, on the bar beside the clock"
+# k4-todo: Google Tasks in k4 (todo.py in ~/.local/share/k4 does the work): the Apps page (type to
+# add, ↵ ticks off), the bar module beside the clock (what is due), the launcher ("todo buy milk ·
+# fri" adds one). The event finder (k4-events) adds todos it finds and ticks off its own when done.
+#   k4-todo sync | signin | add TEXT | done|undone|delete|open ID | edit ID
+#   k4-todo bar | find | done-next | card …   the bar module, the launcher's rows, the cards' buttons
+. "$HOME/.local/share/k4/lib.sh"
+launch_row() { :; }
+SELF=$(command -v k4-todo || echo "$0")
+PY="$HOME/.local/share/k4/todo.py"
+export K4_TODO_FRONT="$SELF"
+t() { python3 -I "$PY" "$@"; }
+# With a Pi (k4-pi enroll): which todos are k4's comes from the Pi (pulled), and reopening one k4 ticked
+# off runs there (it keeps that record); everything else talks to Google from here
+PI=$(cat "$HOME/.config/k4/pi" 2>/dev/null)
+[ -n "$PI" ] && export K4_TODO_MINE="$HOME/.local/state/k4/pi/todo/k4.json" K4_PI_SEEN="$HOME/.local/state/k4/pi/seen" K4_PI="$PI"
+k4s() { [ -n "$PI" ] && jq -e --arg id "$1" 'has($id)' "$K4_TODO_MINE" >/dev/null 2>&1; }
+
+timer() {  # every 5 minutes, once the page has been opened
+  local d="$HOME/.config/systemd/user"
+  [ -e "$d/k4-todo.timer" ] && return
+  mkdir -p "$d"
+  printf '[Unit]\nDescription=k4 Todo: sync Google Tasks\n\n[Service]\nType=oneshot\nExecStart=%s sync --quiet\n' "$SELF" > "$d/k4-todo.service"
+  printf '[Unit]\nDescription=k4 Todo every 5 minutes\n\n[Timer]\nOnBootSec=1min\nOnUnitActiveSec=5min\n\n[Install]\nWantedBy=timers.target\n' > "$d/k4-todo.timer"
+  systemctl --user daemon-reload && systemctl --user enable --now k4-todo.timer >/dev/null 2>&1; }
+
+available() { :; }
+summary() { local n; n=$(t find | grep -c '^A'); echo "$n open"; }
+section() { [ -z "${K4_TODO_FAKE:-}" ] && timer; t page; }
+
+if [ "${1:-}" = undone ] || { [ "${1:-}" = card ] && [ "${3:-}" = undo ]; }; then
+  id=${2:-}
+  if k4s "$id"; then
+    m=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$PI" "~/.local/bin/k4-todo undone $(printf %q "$id")" | tail -1) || m="The Pi ($PI) didn’t answer · try again"
+    k4-pi pull --quiet >/dev/null 2>&1; t sync --quiet; notify "Todo" "$m"; exit 0
+  fi
+fi
+case "${1:-}" in
+  sync) shift; if [ "${1:-}" = --quiet ]; then t sync --quiet; else m=$(t sync | head -1); notify "Todo" "$m"; fi; exit 0 ;;
+  signin) m=$(t signin | tail -1); notify "Todo" "$m"; exit 0 ;;
+  add|add-input|done|undone|delete|edit) m=$(t "$@" | tail -1); [ -n "$m" ] && notify "Todo" "$m"; exit 0 ;;
+  done-next|open|bar|find|card|page|status|edit-ask|signout) t "$@"; exit 0 ;;
+esac
+k4_dispatch "$@"

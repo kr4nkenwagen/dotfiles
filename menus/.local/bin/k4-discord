@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+K4_NAME=k4-discord K4_ID=discord K4_TITLE="Discord" K4_KEY=D K4_ICON=󰙯 K4_DESC="Voice, mentions and your servers (the Discord app's local RPC)"
+# k4-discord: k4 around the official Discord app (discord.py in ~/.local/share/k4 does the work):
+# the Apps page (voice, mentions and DMs, servers), notifications as k4 cards, the bar module, the
+# launcher's channels. It talks to the app's local RPC socket through a Discord application of
+# your own (k4-discord setup says how; once).
+#   k4-discord signin | watch                the consent (once) | while Discord runs (started at login)
+#   k4-discord mute | deafen | leave          your voice (Super+Alt+Shift+M mutes)
+#   k4-discord join CHANNEL | open G C        a voice channel | a text channel in the app
+#   k4-discord bar | find | card …            the bar module, the launcher's rows, the cards' buttons
+. "$HOME/.local/share/k4/lib.sh"
+launch_row() { :; }
+SELF=$(command -v k4-discord || echo "$0")
+PY="$HOME/.local/share/k4/discord.py"
+export K4_DISCORD_FRONT="$SELF"
+d() { python3 -I "$PY" "$@"; }
+
+available() { command -v discord >/dev/null || [ -n "${K4_DISCORD_FAKE:-}" ]; }
+summary() { local st; IFS=$'\t' read -r _ st _ < <(d info | head -1)
+  case "$st" in ok) echo "signed in" ;; nosetup) echo "not set up" ;; signin) echo "sign in once" ;; *) echo "Discord is not running" ;; esac; }
+
+ago_s() { local s=$(( $(date +%s) - ${1%.*} )); [ "$s" -lt 60 ] && echo now || { [ "$s" -lt 3600 ] && echo "$((s / 60)) min" || { [ "$s" -lt 86400 ] && echo "$((s / 3600)) h" || echo "$((s / 86400)) d"; }; }; }
+
+kbind() { printf 'KB\t%s\t%s\n' "$1" "$(k4id "$2")"; }   # kbind ^m ACTION: ⌃M on the page runs ACTION
+
+section() {  # the KDiscord board: voice panel, mentions & DMs, servers; setup and not-running states
+  local kind f1 f2 f3 f4 f5 f6 f7 f8 st me mute deaf unread vch="" vg="" vn=0
+  local -a ms=() ns=() gs=() cs=()
+  while IFS=$'\t' read -r kind f1 f2 f3 f4 f5 f6 f7 f8; do
+    case "$kind" in
+      S) st=$f1; me=${f2#-}; mute=$f3; deaf=$f4; unread=$f5 ;;
+      V) vch=$f1; vg=${f2#-}; vn=$f3 ;;
+      M) ms+=("$f1~$f2~${f3#-}~$f4") ;;
+      N) ns+=("$f1"$'\t'"$f2"$'\t'"$f3"$'\t'"$f4"$'\t'"$f5"$'\t'"$f6"$'\t'"$f7"$'\t'"$f8") ;;
+      G) gs+=("$f1"$'\t'"$f2") ;;
+      C) cs+=("$f1"$'\t'"$f2"$'\t'"$f3"$'\t'"$f4"$'\t'"$f5") ;;
+    esac
+  done < <(d info)
+  local me_q; me_q=$(printf %q "$SELF")
+  case "$st" in
+    nosetup)
+      desc "one-time setup · about 3 minutes" "not set up" "Search Discord…"
+      hints "↑↓" Step "↵" "Do it" "⌃V" Paste "⌫" Back
+      item "Open Discord" "$me_q app" "the app" "" "mark=󰙯;markc=#5865F2"
+      notice "Connect Discord once" "k4 talks to the Discord app on this computer through a developer app of your own. It sees mentions, DMs and voice; it can join and leave voice. It can’t read channels or send messages." accent
+      stay "Create an application" "bg xdg-open https://discord.com/developers/applications" "discord.com/developers › New application" "mark=1;markc=accent"
+      stay "Add yourself as an app tester" "bg xdg-open https://discord.com/developers/applications" "App Testers › your account" "mark=2;markc=accent"
+      stay "Add the redirect http://127.0.0.1" "bg xdg-open https://discord.com/developers/applications" "OAuth2 › Redirects" "mark=3;markc=accent"
+      if [ -s "$HOME/.config/k4/discord-client.json" ]; then
+        stay "Application ID saved · change it" "$me_q client-id" "↵" "mark=✓;markc=green;input=Discord application ID|General Information › Application ID (a long number)"
+        stay "Paste the client secret" "$me_q client-secret" "OAuth2 › Client Secret · ↵" "mark=5;markc=accent;input=Discord client secret|OAuth2 › Client Secret · kept in the keyring|password"
+      else
+        stay "Paste the client ID" "$me_q client-id" "General Information › Application ID · ↵" "mark=4;markc=accent;input=Discord application ID|General Information › Application ID (a long number)"
+        item "Paste the client secret" ":" "asked right after the ID · stays in the keyring" "" "mark=5;markc=dim;dim"
+      fi
+      item "Allow k4 in Discord" ":" "after that · Discord asks once" "" "mark=6;markc=dim;dim"
+      return ;;
+    notrunning)
+      desc "the Discord app isn’t running" "not running" "Search Discord…"
+      hints "↵" "Start Discord" "⌫" Back
+      notice "Discord isn’t running" "Mentions, DMs and voice show up here while the Discord app runs. The bar module hides until then." muted
+      item "Open Discord" "$me_q app" "starts the app" "" "mark=▶;markc=accent"
+      item "Start Discord in the tray" "bg discord --start-minimized" "minimised, k4 shows it" "" "mark=󰙯;markc=dim"
+      return ;;
+    signin)
+      desc "one-time setup · the last step" "sign in once" "Search Discord…"
+      notice "Allow k4 in Discord" "Discord shows its own dialog: Authorize lets k4 see your mentions, DMs and voice, and mute or move you." accent
+      stay "Allow k4 in Discord" "$me_q signin" "Discord asks once" "mark=5;markc=accent"
+      item "Open Discord" "$me_q app" "the app" "" "mark=󰙯;markc=#5865F2"
+      return ;;
+  esac
+  d page; }   # signed in: the page, built in discord.py (fast for hundreds of channels)
+
+
+client_id() {  # step 4: the typed application ID (K4_INPUT); then the launcher asks for the secret (k4:input)
+  local id; id=$(printf '%s' "${K4_INPUT:-$1}" | tr -cd 0-9)
+  if [ ${#id} -lt 15 ]; then echo "That isn’t an application ID · it’s a long number (General Information › Application ID)"; echo "k4:tone yellow"; return; fi
+  K4_INPUT= d act client "$id" >/dev/null
+  printf 'k4:input\t%s\t%s\t%s\t%s\n' "$(k4id "$(printf %q "$SELF") client-secret")" "Discord client secret" "OAuth2 › Client Secret · Reset Secret shows a new one · kept in the keyring" password
+  echo "Saved the application ID · now the client secret"; }
+
+client_secret() {  # step 5: the typed secret (K4_INPUT) into the keyring; then Discord's own consent
+  local sec=${K4_INPUT:-}
+  sec=$(printf '%s' "$sec" | tr -d '[:space:]')
+  [ -n "$sec" ] || { echo "No secret typed"; echo "k4:tone yellow"; return; }
+  if [[ $sec =~ ^[0-9]+$ ]]; then   # (the application ID still on the clipboard)
+    echo "That’s the application ID, not the secret · OAuth2 › Client Secret › Reset Secret, copy it, then ⌃V here"; echo "k4:tone yellow"
+    printf 'k4:input\t%s\t%s\t%s\t%s\n' "$(k4id "$(printf %q "$SELF") client-secret")" "Discord client secret" "OAuth2 › Client Secret · not the application ID" password
+    return
+  fi
+  K4_INPUT="$sec" d act client "$(python3 -I -c 'import json,os; print(json.load(open(os.path.expanduser("~/.config/k4/discord-client.json")))["client_id"])')" >/dev/null
+  echo "Secret saved in the keyring · next: Allow k4 in Discord"; }
+
+app() {  # the Discord app itself: its window to the front (Omarchy's helper speaks Hyprland's dispatch), or started
+  omarchy-launch-or-focus '^discord$' 'uwsm-app -- discord' >/dev/null 2>&1 </dev/null; }
+
+case "${1:-}" in
+  app) app; exit 0 ;;
+  signin) d signin | { read -r m; notify "Discord" "$m"; }; exit 0 ;;
+  watch|bar|find|info|guilds|status) d "$@"; exit 0 ;;
+  mute|deafen|leave|join) m=$(d "$@" | head -1); [ -n "$m" ] && notify "Discord" "$m"; exit 0 ;;
+  open|card) d "$@"; exit 0 ;;
+  act) shift; d act "$@"; exit 0 ;;
+  client-id) shift; client_id "${1:-}"; exit 0 ;;
+  client-secret) client_secret; exit 0 ;;
+esac
+k4_dispatch "$@"

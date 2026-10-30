@@ -10,6 +10,8 @@ o.launch_on_start("~/.local/bin/k4-notify daemon")
 o.launch_on_start("~/.local/bin/k4-share daemon")
 -- k4's Clock: timers and alarms ring through systemd user timers, made again at login
 o.exec_on_start("~/.local/bin/k4-clock resync")
+-- k4's Discord: while the app runs, its notifications as k4 cards and voice for the bar (idle otherwise)
+o.launch_on_start("~/.local/bin/k4-discord watch")
 -- The keymap's peek: a layer key on the Corne shows its layout for 5 s (when on: Apps › Keymap)
 o.launch_on_start("~/.local/bin/k4-keymap peekd")
 -- Each set of screens gets the layout it had last time (Display › Arrangement)

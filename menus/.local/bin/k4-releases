@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+K4_NAME=k4-releases K4_ID=releases K4_TITLE="Releases" K4_KEY=L K4_ICON=󰿎 K4_DESC="Upcoming movies, TV, games and books"
+# k4-releases: what is coming in movies and TV (TMDB, Swedish dates), games (Steam) and books
+# (Hardcover; games from Steam's store, no key), in k4's window (k4 --releases); trailers in the YouTube player, dates into the calendar,
+# followed titles watched daily (k4-releases.timer). releases.py in ~/.local/share/k4 does the work.
+#   k4-releases window [KIND ID]   the window (Super+Alt+R; on a title from the launcher)
+#   k4-releases data | act VERB …  its data and actions (releases.py)
+#   k4-releases tick | find | card …
+. "$HOME/.local/share/k4/lib.sh"
+launch_row() { :; }
+SELF=$(command -v k4-releases || echo "$0")
+PY="$HOME/.local/share/k4/releases.py"
+export K4_RELEASES_FRONT="$SELF"
+r() { python3 -I "$PY" "$@"; }
+
+timer() {  # the followed titles, daily
+  local d="$HOME/.config/systemd/user"
+  [ -e "$d/k4-releases.timer" ] && return
+  mkdir -p "$d"
+  printf '[Unit]\nDescription=k4 Releases: followed titles\n\n[Service]\nType=oneshot\nExecStart=%s tick\n' "$SELF" > "$d/k4-releases.service"
+  printf '[Unit]\nDescription=k4 Releases daily\n\n[Timer]\nOnCalendar=*-*-* 09:00:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' > "$d/k4-releases.timer"
+  systemctl --user daemon-reload && systemctl --user enable --now k4-releases.timer >/dev/null 2>&1; }
+
+window() {
+  pkill -f '^k4 --release[s]' && exit 0
+  timer
+  local pop=()
+  [ -n "${K4_BAR_MX:-}" ] && [ "${K4_BAR_WIDTH:-0}" -gt 0 ] && pop=(--popup "$K4_BAR_MX,$K4_BAR_MW,$K4_BAR_WIDTH,${K4_BAR_SIDE:-right},${K4_BAR_POS:-top}")
+  r data | K4_RELEASES_SELECT="${1:+$1:$2}" k4 --releases "${pop[@]}" >/dev/null; }
+
+available() { :; }
+summary() { local n; n=$(r info | grep -c '^N'); echo "$n followed"; }
+section() {  # Apps › Releases: open the window, the followed ones, the keys
+  local kind f1 f2 f3 f4 me; me=$(printf %q "$SELF")
+  local -a ks=() ns=()
+  while IFS=$'\t' read -r kind f1 f2 f3 f4; do
+    case "$kind" in K) ks+=("$f1"$'\t'"$f2"$'\t'"$f3") ;; N) ns+=("$f1"$'\t'"$f2"$'\t'"$f3"$'\t'"$f4") ;; esac
+  done < <(r info)
+  desc "Upcoming movies and TV (Swedish dates), games and books · trailers · the calendar" "${#ns[@]} followed" "Search releases…"
+  item "Open Releases" "bg $me window" "Super+Alt+R" "" "mark=▶;markc=accent"
+  [ ${#ns[@]} -gt 0 ] && hdr "Following" "${#ns[@]}"
+  local l k t d w
+  for l in "${ns[@]}"; do IFS=$'\t' read -r k t d w <<<"$l"; item "$t" "bg $me window" "$([ "$d" = - ] && echo "no date yet" || date -d "$d" '+%a %-d %b')${w:+$([ "$w" = - ] || echo " · $w")}" "" "mark=★;markc=accent"; done
+  hdr "Sources"
+  local st
+  for l in "${ks[@]}"; do
+    IFS=$'\t' read -r k st n <<<"$l"
+    case "$k:$st" in
+      movies:nokey) stay "TMDB key (movies and TV)" "$me act key tmdb" "themoviedb.org › Settings › API › API Read Access Token (the long one)" "mark=?;markc=yellow;input=TMDB API Read Access Token|themoviedb.org › Settings › API · the long token|password" ;;
+      books:nokey) stay "Hardcover key (books)" "$me act key hardcover" "hardcover.app › Settings › API" "mark=?;markc=yellow;input=Hardcover API token|hardcover.app › Settings › API|password" ;;
+      tv:*) ;;
+      *) item "${k^}" ":" "$([ "$st" = ok ] && echo "$n upcoming" || echo "fetched when the window opens")" "" "mark=✓;markc=green" ;;
+    esac
+  done; }
+
+case "${1:-}" in
+  window) shift; window "${1:-}" "${2:-}"; exit 0 ;;
+  data) r data; exit 0 ;;
+  act) shift; r act "$@"; exit 0 ;;
+  tick|find) r "$1"; exit 0 ;;
+  card) shift; r card "$@"; exit 0 ;;
+esac
+k4_dispatch "$@"

@@ -87,6 +87,16 @@ def wow_reset():
         return ""
 
 
+def events_waiting():
+    """How many events k4-events added in the last day (K4_CAL_EVENTS=n in tests)."""
+    if os.environ.get("K4_CAL_EVENTS"): return int(os.environ["K4_CAL_EVENTS"])
+    if os.environ.get("K4_CAL_DIR"): return 0
+    try:
+        r = subprocess.run([sys.executable, "-I", os.path.join(HOME, ".local/share/k4/events.py"), "count"], capture_output=True, text=True, timeout=10)
+        return int(r.stdout.strip() or 0)
+    except (OSError, ValueError, subprocess.TimeoutExpired): return 0
+
+
 def wow_calendar():
     """The id of k4-wow's raid nights calendar (it names and colours it), else ""."""
     try:
@@ -251,6 +261,8 @@ def k4():
     print("CX\t%s" % SELF)
     w = wow_reset()
     if w: print(w)
+    v = events_waiting()
+    if v: print("CV\t%d" % v)
     wc = wow_calendar()
     for c in cals:
         name, tone, acct = c["name"], c["tone"], c["acct"]

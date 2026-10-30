@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+K4_NAME=k4-events K4_ID=events K4_TITLE="Events" K4_KEY=V K4_ICON=󰃭 K4_DESC="Plans found in your mail and messages, for the calendar"
+# k4-events: a local model (Ollama) reads what is new in your mail (Gmail and IMAP), Messenger and Discord for plans
+# that belong in the calendar; Parcels' pickups and delivery windows come without it. What it
+# finds goes straight into Google Calendar (k4-cal) with a card; the Apps page lists it, Del takes it out.
+# events.py in ~/.local/share/k4 does the work, hourly (k4-events.timer).
+#   k4-events scan [--dry]         look now (--dry: counts only)
+#   k4-events add|remove|open ID   into the calendar (one that failed), out of it again, its source
+#   k4-events edit ID              ($K4_INPUT: "Title · 2026-11-05 14:30")
+#   k4-events find | card …        the launcher's rows, the card's buttons
+. "$HOME/.local/share/k4/lib.sh"
+launch_row() { :; }
+SELF=$(command -v k4-events || echo "$0")
+PY="$HOME/.local/share/k4/events.py"
+export K4_EVENTS_FRONT="$SELF"
+e() { python3 -I "$PY" "$@"; }
+# With a Pi (k4-pi enroll) the finder runs there: this page shows its state (pulled by k4-pi pull) and
+# what changes k4's records runs on the Pi over ssh
+PI=$(cat "$HOME/.config/k4/pi" 2>/dev/null)
+[ -n "$PI" ] && export K4_EVENTS_STATE="$HOME/.local/state/k4/pi/events"
+pi_note() {  # the Pi not heard from in 15 minutes: say so above what was pulled last
+  [ -n "$PI" ] || return 0
+  local seen; seen=$(cat "$HOME/.local/state/k4/pi/seen" 2>/dev/null || echo 0)
+  [ $(( $(date +%s) - seen )) -gt 900 ] && notice "The Pi ($PI) isn’t answering" "This is what it found up to $([ "$seen" -gt 0 ] && ago "$seen" || echo "its last pull"). It keeps looking on its own; the page catches up when it answers." yellow
+  return 0; }
+onpi() { ssh -o BatchMode=yes -o ConnectTimeout=5 "$PI" "K4_INPUT=$(printf %q "${K4_INPUT:-}") ~/.local/bin/k4-events $(printf '%q ' "$@")"; local rc=$?
+  k4-pi pull --quiet >/dev/null 2>&1; return $rc; }
+
+timer() {  # hourly, once the page has been opened
+  local d="$HOME/.config/systemd/user"
+  [ -e "$d/k4-events.timer" ] && return
+  mkdir -p "$d"
+  printf '[Unit]\nDescription=k4 Events: plans in new mail and messages\n\n[Service]\nType=oneshot\nExecStart=%s scan --quiet\n' "$SELF" > "$d/k4-events.service"
+  printf '[Unit]\nDescription=k4 Events every hour\n\n[Timer]\nOnBootSec=10min\nOnUnitActiveSec=1h\n\n[Install]\nWantedBy=timers.target\n' > "$d/k4-events.timer"
+  systemctl --user daemon-reload && systemctl --user enable --now k4-events.timer >/dev/null 2>&1; }
+
+available() { :; }
+summary() { local n; n=$(e count); [ "$n" -gt 0 ] && echo "$n to review" || echo "nothing to review"; }
+
+section() {
+  [ -z "${K4_EVENTS_FAKE:-}" ] && [ -z "$PI" ] && timer
+  pi_note
+  local kind f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 last=0 litems=0 lasked=0 nw=0 na=0 nc=0
+  local -a gs=()
+  while IFS=$'\t' read -r kind f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11; do
+    case "$kind" in
+      R) last=$f1; litems=$f2; lasked=$f3 ;;
+      G) gs+=("$f1"$'\t'"$f2"$'\t'"$f3"$'\t'"$f4"$'\t'"$f5"$'\t'"$f6"$'\t'"$f7"$'\t'"$f8"$'\t'"$f9"$'\t'"$f10"$'\t'"$f11")
+         case "$f1" in waiting) nw=$((nw + 1)) ;; added) na=$((na + 1)) ;; *) nc=$((nc + 1)) ;; esac ;;
+    esac
+  done < <(e info)
+  desc "A local model reads what’s new in your mail, Messenger and Discord and adds the plans to your calendar" "$([ "$na" -gt 0 ] && echo "$na added this week" || echo "nothing added this week")$([ "$nw" -gt 0 ] && echo " · $nw waiting")" "Search events…"
+  hints "↑↓" Move "Del" "Remove from calendar" "⌃O" Source "↵" "Add (waiting ones)" "⌫" Back
+  local me l st id title when date start src who why conf place srcl head=""
+  me=$(printf %q "$SELF")
+  for l in "${gs[@]}"; do
+    IFS=$'\t' read -r st id title when date start src who why conf place <<<"$l"
+    for v in start who why place; do [ "${!v}" = - ] && printf -v "$v" ''; done
+    case "$src" in mail) srcl=Mail ;; messenger) srcl=Messenger ;; discord) srcl=Discord ;; parcels) srcl=Parcels ;; *) srcl=$src ;; esac
+    if [ "$head" != "$st" ]; then head=$st
+      case "$st" in waiting) hdr "Couldn’t add · ↵ tries again" "$nw" ;; added) hdr "Added by k4 · this week" "$na" ;; *) hdr "Cancelled · taken out again · ↵ puts one back" "$nc" ;; esac; fi
+    local flags="l2=$(k4flag "from ${who:-$srcl} · $srcl${why:+ · “$why”}");l2c=dim;del=$(k4id "$me remove $id");k^o=$(k4id "$me open $id")"
+    if [ "$st" = cancelled ]; then stay "$title" "$me add $id" "$when" "mark=✕;markc=red;dim;l2=$(k4flag "called off by ${who:-$srcl} · $srcl${why:+ · “$why”}");l2c=dim;k^o=$(k4id "$me open $id")"
+    elif [ "$st" = waiting ]; then stay "$title" "$me add $id" "$when" "mark=!;markc=yellow;$flags;k^e=$(k4id "$me edit-ask $id")"
+    else stay "$title" "$me open $id" "$when" "mark=✓;markc=green;$flags$([ "$conf" = low ] && echo ";chip=MAYBE;chipc=yellow")"; fi
+  done
+  [ ${#gs[@]} -eq 0 ] && empty "Nothing added this week · plans in new mail and messages are added as they turn up"
+  hdr "More"
+  stay "Find events now" "$me scan" "$([ "${last:-0}" -gt 0 ] && echo "looked $(ago "$last") · $litems new item$([ "$litems" = 1 ] || echo s)$(case "$lasked" in local) echo " · read by ${K4_EVENTS_MODEL:-gemma4}" ;; haiku) echo " · read by Claude Haiku (a game was running)" ;; esac)" || echo "not yet")" "mark=↻;markc=accent"
+  item "Read on this machine by Ollama (${K4_EVENTS_MODEL:-gemma4}) · Claude Haiku while a game runs · hourly · Del undoes one · cancelled plans come out again · todos go to Apps › Todo" ":" "" "" "mark=ⓘ;dim"; }
+
+edit_ask() {  # ⌃E: the launcher's field for "Title · date time"; then events.py edit
+  local cur; cur=$(e info | awk -F'\t' -v id="$1" '$1=="G" && $3==id { t=$6; if ($7 != "-") t=t" "$7; print $4" · "t }')
+  printf 'k4:input\t%s\t%s\t%s\n' "$(k4id "$(printf %q "$SELF") edit $1")" "Title · YYYY-MM-DD HH:MM" "now: ${cur:-?}"; }
+
+card() { bg sway-menu events; }   # the card's Review: the page
+
+if [ -n "$PI" ]; then case "${1:-}" in
+  scan) [ "${2:-}" = --dry ] && { onpi "$@"; exit $?; }
+        setsid -f bash -c "$(declare -f onpi); PI=$(printf %q "$PI"); onpi scan --quiet" >/dev/null 2>&1 </dev/null
+        echo "Looking on the Pi · a card when it’s done (a few minutes)"; notify "Events" "Looking on the Pi · a card when it’s done"; exit 0 ;;
+  add|add-all|remove|dismiss|edit) m=$(onpi "$@" | tail -1) || m="The Pi ($PI) didn’t answer · try again"; echo "$m"; exit 0 ;;
+esac; fi
+case "${1:-}" in
+  scan) shift; if [ "${1:-}" = --quiet ] || [ "${1:-}" = --dry ]; then e scan "$@"; else m=$(e scan | tail -1); echo "$m"; notify "Events" "$m"; fi; exit 0 ;;
+  add|add-all|remove|dismiss|open|edit|info|find|count) e "$@"; exit 0 ;;
+  edit-ask) edit_ask "${2:-}"; exit 0 ;;
+  card) shift; card "$@"; exit 0 ;;
+esac
+k4_dispatch "$@"
